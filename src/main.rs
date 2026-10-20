@@ -1,5 +1,6 @@
 mod config;
 mod db;
+mod domain;
 mod error;
 mod models;
 mod services;
