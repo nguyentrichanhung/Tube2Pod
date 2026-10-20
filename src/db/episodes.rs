@@ -139,6 +139,343 @@ pub async fn recover_running(pool: &SqlitePool) -> AppResult<u64> {
     Ok(result.rows_affected())
 }
 
+pub async fn set_stage(pool: &SqlitePool, uuid: &str, new_stage: &str) -> AppResult<()> {
+    sqlx::query("UPDATE episodes SET stage = ?1, updated_at = ?2 WHERE uuid = ?3")
+        .bind(new_stage)
+        .bind(now_ts())
+        .bind(uuid)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_progress(pool: &SqlitePool, uuid: &str, json: &str) -> AppResult<()> {
+    sqlx::query("UPDATE episodes SET progress_json = ?1, updated_at = ?2 WHERE uuid = ?3")
+        .bind(json)
+        .bind(now_ts())
+        .bind(uuid)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub struct FetchedMeta<'a> {
+    pub source_title: &'a str,
+    pub source_channel: &'a str,
+    pub source_duration_s: i64,
+    pub source_thumbnail_url: Option<&'a str>,
+    pub source_upload_date: Option<&'a str>,
+    pub language: &'a str,
+    pub transcript_path: &'a str,
+    pub transcript_kind: &'a str,
+    pub transcript_chars: i64,
+    pub next_stage: &'a str,
+}
+
+pub async fn set_fetched(pool: &SqlitePool, uuid: &str, meta: FetchedMeta<'_>) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE episodes SET
+            source_title = ?1, source_channel = ?2, source_duration_s = ?3,
+            source_thumbnail_url = ?4, source_upload_date = ?5, language = ?6,
+            transcript_path = ?7, transcript_kind = ?8, transcript_chars = ?9,
+            stage = ?10, updated_at = ?11
+         WHERE uuid = ?12",
+    )
+    .bind(meta.source_title)
+    .bind(meta.source_channel)
+    .bind(meta.source_duration_s)
+    .bind(meta.source_thumbnail_url)
+    .bind(meta.source_upload_date)
+    .bind(meta.language)
+    .bind(meta.transcript_path)
+    .bind(meta.transcript_kind)
+    .bind(meta.transcript_chars)
+    .bind(meta.next_stage)
+    .bind(now_ts())
+    .bind(uuid)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_summary(pool: &SqlitePool, uuid: &str, text: &str, hash: &str) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE episodes SET summary_text = ?1, summary_hash = ?2, updated_at = ?3 WHERE uuid = ?4",
+    )
+    .bind(text)
+    .bind(hash)
+    .bind(now_ts())
+    .bind(uuid)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_summary_edit(
+    pool: &SqlitePool,
+    uuid: &str,
+    text: &str,
+    hash: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE episodes SET summary_text = ?1, summary_hash = ?2,
+            summary_edited_at = ?3, updated_at = ?3
+         WHERE uuid = ?4",
+    )
+    .bind(text)
+    .bind(hash)
+    .bind(now_ts())
+    .bind(uuid)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn queue_at_stage(pool: &SqlitePool, uuid: &str, new_stage: &str) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE episodes SET stage = ?1, status = ?2, attempts = 0,
+            next_attempt_at = NULL, error_code = NULL, error_message = NULL, updated_at = ?3
+         WHERE uuid = ?4",
+    )
+    .bind(new_stage)
+    .bind(status::QUEUED)
+    .bind(now_ts())
+    .bind(uuid)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_voice(pool: &SqlitePool, uuid: &str, voice_id: i64) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE episodes SET voice_id = ?1, voice_design_id = NULL, updated_at = ?2 WHERE uuid = ?3",
+    )
+    .bind(voice_id)
+    .bind(now_ts())
+    .bind(uuid)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_voice_design(
+    pool: &SqlitePool,
+    uuid: &str,
+    design_id: Option<i64>,
+) -> AppResult<()> {
+    sqlx::query("UPDATE episodes SET voice_design_id = ?1, updated_at = ?2 WHERE uuid = ?3")
+        .bind(design_id)
+        .bind(now_ts())
+        .bind(uuid)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_active_take(pool: &SqlitePool, uuid: &str, take_id: Option<i64>) -> AppResult<()> {
+    sqlx::query("UPDATE episodes SET active_take_id = ?1, updated_at = ?2 WHERE uuid = ?3")
+        .bind(take_id)
+        .bind(now_ts())
+        .bind(uuid)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_chunk_progress(
+    pool: &SqlitePool,
+    uuid: &str,
+    take_ids_json: &str,
+    chunk_done: i64,
+    chunk_count: i64,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE episodes SET take_ids_json = ?1, chunk_done = ?2, chunk_count = ?3,
+            updated_at = ?4
+         WHERE uuid = ?5",
+    )
+    .bind(take_ids_json)
+    .bind(chunk_done)
+    .bind(chunk_count)
+    .bind(now_ts())
+    .bind(uuid)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_chunk_count(pool: &SqlitePool, uuid: &str, chunk_count: i64) -> AppResult<()> {
+    sqlx::query("UPDATE episodes SET chunk_count = ?1, updated_at = ?2 WHERE uuid = ?3")
+        .bind(chunk_count)
+        .bind(now_ts())
+        .bind(uuid)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_audio(
+    pool: &SqlitePool,
+    uuid: &str,
+    path: &str,
+    bytes: i64,
+    duration_s: i64,
+    summary_hash: &str,
+    version: i64,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE episodes SET audio_path = ?1, audio_bytes = ?2, audio_duration_s = ?3,
+            audio_summary_hash = ?4, audio_version = ?5, updated_at = ?6
+         WHERE uuid = ?7",
+    )
+    .bind(path)
+    .bind(bytes)
+    .bind(duration_s)
+    .bind(summary_hash)
+    .bind(version)
+    .bind(now_ts())
+    .bind(uuid)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn finish(
+    pool: &SqlitePool,
+    uuid: &str,
+    final_stage: &str,
+    final_status: &str,
+    set_published_at_if_null: bool,
+) -> AppResult<()> {
+    let now = now_ts();
+    sqlx::query(
+        "UPDATE episodes SET stage = ?1, status = ?2, error_code = NULL, error_message = NULL,
+            next_attempt_at = NULL, updated_at = ?3,
+            published_at = CASE WHEN ?4 THEN COALESCE(published_at, ?3) ELSE published_at END
+         WHERE uuid = ?5",
+    )
+    .bind(final_stage)
+    .bind(final_status)
+    .bind(now)
+    .bind(set_published_at_if_null)
+    .bind(uuid)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn record_failure(
+    pool: &SqlitePool,
+    uuid: &str,
+    code: &str,
+    message: &str,
+    retry_at: Option<i64>,
+) -> AppResult<()> {
+    let retry = retry_at.is_some();
+    sqlx::query(
+        "UPDATE episodes SET status = ?1, error_code = ?2, error_message = ?3,
+            attempts = attempts + 1, next_attempt_at = ?4, updated_at = ?5
+         WHERE uuid = ?6",
+    )
+    .bind(if retry {
+        status::QUEUED
+    } else {
+        status::FAILED
+    })
+    .bind(code)
+    .bind(message)
+    .bind(retry_at)
+    .bind(now_ts())
+    .bind(uuid)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn retry(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE episodes SET status = ?1, attempts = 0, next_attempt_at = NULL,
+            error_code = NULL, error_message = NULL, updated_at = ?2
+         WHERE uuid = ?3 AND status IN (?4, ?5, ?6)",
+    )
+    .bind(status::QUEUED)
+    .bind(now_ts())
+    .bind(uuid)
+    .bind(status::QUEUED)
+    .bind(status::FAILED)
+    .bind(status::CANCELLED)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn cancel(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE episodes SET status = ?1, next_attempt_at = NULL, updated_at = ?2
+         WHERE uuid = ?3 AND status NOT IN (?4, ?5)",
+    )
+    .bind(status::CANCELLED)
+    .bind(now_ts())
+    .bind(uuid)
+    .bind(status::PUBLISHED)
+    .bind(status::READY)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn reset_for_reread(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE episodes SET stage = ?1, status = ?2, active_take_id = NULL,
+            take_ids_json = NULL, chunk_done = 0, chunk_count = NULL,
+            attempts = 0, next_attempt_at = NULL, error_code = NULL, error_message = NULL,
+            updated_at = ?3
+         WHERE uuid = ?4",
+    )
+    .bind(stage::SYNTHESIZING)
+    .bind(status::QUEUED)
+    .bind(now_ts())
+    .bind(uuid)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn publish_ready(pool: &SqlitePool, show_id: i64) -> AppResult<u64> {
+    let result = sqlx::query(
+        "UPDATE episodes SET status = ?1, stage = ?2,
+            published_at = COALESCE(published_at, ?3), updated_at = ?3
+         WHERE show_id = ?4 AND status = ?5",
+    )
+    .bind(status::PUBLISHED)
+    .bind(stage::PUBLISHED)
+    .bind(now_ts())
+    .bind(show_id)
+    .bind(status::READY)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+pub async fn list_published(pool: &SqlitePool, show_id: i64) -> AppResult<Vec<Episode>> {
+    Ok(sqlx::query_as::<_, Episode>(
+        "SELECT * FROM episodes WHERE show_id = ?1 AND status = ?2
+         ORDER BY published_at DESC, uuid DESC",
+    )
+    .bind(show_id)
+    .bind(status::PUBLISHED)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn delete(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
+    sqlx::query("DELETE FROM episodes WHERE uuid = ?1")
+        .bind(uuid)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,6 +540,92 @@ mod tests {
         let recovered = get(&pool, &claimed.uuid).await.unwrap().unwrap();
         assert_eq!(recovered.status, status::QUEUED);
         assert_eq!(recover_running(&pool).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn records_stage_progress_and_failure_retry() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
+
+        set_stage(&pool, &ep.uuid, stage::FETCHING).await.unwrap();
+        set_progress(&pool, &ep.uuid, r#"{"percent":40}"#)
+            .await
+            .unwrap();
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.stage, stage::FETCHING);
+        assert_eq!(got.progress_json.as_deref(), Some(r#"{"percent":40}"#));
+
+        record_failure(
+            &pool,
+            &ep.uuid,
+            "source_unavailable",
+            "temporary",
+            Some(now_ts() + 30),
+        )
+        .await
+        .unwrap();
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.status, status::QUEUED);
+        assert_eq!(got.attempts, 1);
+
+        retry(&pool, &ep.uuid).await.unwrap();
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.status, status::QUEUED);
+        assert_eq!(got.attempts, 0);
+        assert!(got.error_code.is_none());
+    }
+
+    #[tokio::test]
+    async fn persists_takes_audio_and_publish_state() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
+
+        set_active_take(&pool, &ep.uuid, Some(77)).await.unwrap();
+        set_chunk_progress(&pool, &ep.uuid, "[77]", 1, 3)
+            .await
+            .unwrap();
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.active_take_id, Some(77));
+        assert_eq!(got.take_ids_json.as_deref(), Some("[77]"));
+        assert_eq!(got.chunk_done, 1);
+
+        set_audio(&pool, &ep.uuid, "/data/audio/x-2.mp3", 1234, 61, "hash", 2)
+            .await
+            .unwrap();
+        finish(&pool, &ep.uuid, stage::PUBLISHED, status::PUBLISHED, true)
+            .await
+            .unwrap();
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.audio_version, 2);
+        assert_eq!(got.status, status::PUBLISHED);
+        assert!(got.published_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn reset_for_reread_keeps_old_audio_hash() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
+        set_summary(&pool, &ep.uuid, "Bản mới", "hash-new")
+            .await
+            .unwrap();
+        set_audio(
+            &pool,
+            &ep.uuid,
+            "/data/audio/x-1.mp3",
+            100,
+            10,
+            "hash-old",
+            1,
+        )
+        .await
+        .unwrap();
+        reset_for_reread(&pool, &ep.uuid).await.unwrap();
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.stage, stage::SYNTHESIZING);
+        assert_eq!(got.status, status::QUEUED);
+        assert_eq!(got.audio_summary_hash.as_deref(), Some("hash-old"));
+        assert_eq!(got.active_take_id, None);
+        assert_eq!(got.chunk_done, 0);
     }
 
     #[tokio::test]
