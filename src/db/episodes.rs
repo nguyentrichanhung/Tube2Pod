@@ -291,7 +291,7 @@ pub async fn set_chunk_progress(
 ) -> AppResult<()> {
     sqlx::query(
         "UPDATE episodes SET take_ids_json = ?1, chunk_done = ?2, chunk_count = ?3,
-            updated_at = ?4
+            active_take_id = NULL, updated_at = ?4
          WHERE uuid = ?5",
     )
     .bind(take_ids_json)
@@ -585,9 +585,10 @@ mod tests {
             .await
             .unwrap();
         let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
-        assert_eq!(got.active_take_id, Some(77));
+        assert_eq!(got.active_take_id, None);
         assert_eq!(got.take_ids_json.as_deref(), Some("[77]"));
         assert_eq!(got.chunk_done, 1);
+        assert_eq!(got.chunk_count, Some(3));
 
         set_audio(&pool, &ep.uuid, "/data/audio/x-2.mp3", 1234, 61, "hash", 2)
             .await
