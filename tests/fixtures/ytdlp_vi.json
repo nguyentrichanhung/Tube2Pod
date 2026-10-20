@@ -1,0 +1,20 @@
+{
+  "id": "dQw4w9WgXcQ",
+  "title": "Một video thử nghiệm",
+  "channel": "Kênh thử nghiệm",
+  "duration": 600,
+  "upload_date": "20261020",
+  "thumbnail": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+  "language": "vi",
+  "is_live": false,
+  "subtitles": {
+    "vi": [
+      { "ext": "json3", "url": "https://example.test/vi.json3" }
+    ]
+  },
+  "automatic_captions": {
+    "vi": [
+      { "ext": "vtt", "url": "https://example.test/vi-auto.vtt" }
+    ]
+  }
+}
