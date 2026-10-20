@@ -1,5 +1,7 @@
 mod config;
+mod db;
 mod error;
+mod models;
 
 use anyhow::Context;
 use axum::{routing::get, Router};
