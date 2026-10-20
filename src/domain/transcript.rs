@@ -273,12 +273,15 @@ fn is_abbreviation(current: &str) -> bool {
         .split_whitespace()
         .last()
         .unwrap_or(current)
-        .trim_start_matches(['"', '\'', '(', '[', '“', '‘']);
+        .trim_matches(|ch: char| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '“' | '”' | '‘' | '’'
+                )
+        });
     let lower = token.to_ascii_lowercase();
-    if ABBREVIATIONS
-        .iter()
-        .any(|abbreviation| lower.ends_with(abbreviation))
-    {
+    if ABBREVIATIONS.contains(&lower.as_str()) {
         return true;
     }
     let core = token.trim_end_matches('.');
@@ -399,6 +402,72 @@ mod tests {
         let sentences = segment(&cues, "vi");
         assert_eq!(sentences.len(), 3);
         assert_eq!(sentences[1], "Hôm nay chúng ta nói về Rust");
+    }
+
+    #[test]
+    fn words_ending_like_abbreviations_still_split() {
+        assert_eq!(
+            split_punctuation("We go up. Then we stop."),
+            vec!["We go up.".to_string(), "Then we stop.".to_string()]
+        );
+        assert_eq!(
+            split_punctuation("Do it first. Then go."),
+            vec!["Do it first.".to_string(), "Then go.".to_string()]
+        );
+        assert_eq!(
+            split_punctuation("Chúng ta tiếp. Rồi đi."),
+            vec!["Chúng ta tiếp.".to_string(), "Rồi đi.".to_string()]
+        );
+    }
+
+    #[test]
+    fn genuine_abbreviations_suppress_splits() {
+        assert_eq!(
+            split_punctuation("We met Mr. Smith today."),
+            vec!["We met Mr. Smith today.".to_string()]
+        );
+        assert_eq!(
+            split_punctuation("Dr. Smith arrived early. Then he left."),
+            vec![
+                "Dr. Smith arrived early.".to_string(),
+                "Then he left.".to_string()
+            ]
+        );
+        assert_eq!(
+            split_punctuation("Use e.g. this one. Then stop."),
+            vec!["Use e.g. this one.".to_string(), "Then stop.".to_string()]
+        );
+    }
+
+    #[test]
+    fn segmentation_splits_suffix_lookalike_words() {
+        let cases = [
+            (
+                "en",
+                "We should go up. Then we should stop.",
+                vec!["We should go up.", "Then we should stop."],
+            ),
+            (
+                "en",
+                "This is the first. The next part is later.",
+                vec!["This is the first.", "The next part is later."],
+            ),
+            (
+                "vi",
+                "Chúng ta tiếp. Rồi chúng ta nghỉ ngơi.",
+                vec!["Chúng ta tiếp.", "Rồi chúng ta nghỉ ngơi."],
+            ),
+        ];
+        for (language, text, expected) in cases {
+            let cues = vec![Cue {
+                start_ms: 0,
+                end_ms: 2000,
+                text: text.into(),
+            }];
+            let sentences = segment(&cues, language);
+            let got: Vec<&str> = sentences.iter().map(String::as_str).collect();
+            assert_eq!(got, expected, "text: {text}");
+        }
     }
 
     #[test]
