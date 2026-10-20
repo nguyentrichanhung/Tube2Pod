@@ -1,4 +1,5 @@
 use crate::db::{now_ts, AppResult};
+use crate::error::AppError;
 use crate::models::{Show, VoicePreset};
 use crate::services::tokens::new_feed_token;
 use sqlx::SqlitePool;
@@ -170,6 +171,14 @@ pub async fn set_cover(
 }
 
 pub async fn set_feed_enabled(pool: &SqlitePool, id: i64, enabled: bool) -> AppResult<Show> {
+    if enabled {
+        let show = get(pool, id).await?.ok_or(AppError::NotFound)?;
+        if !show.feed_complete() {
+            return Err(AppError::BadRequest(
+                "show is incomplete; cannot enable feed".into(),
+            ));
+        }
+    }
     let row = sqlx::query_as::<_, Show>(
         "UPDATE shows SET feed_enabled = ?1, updated_at = ?2 WHERE id = ?3 RETURNING *",
     )
@@ -261,6 +270,19 @@ mod tests {
         }
     }
 
+    fn complete_show() -> NewShow {
+        NewShow {
+            title: "Công nghệ mỗi ngày".into(),
+            author: "Tube2Pod".into(),
+            description: "Bản tin công nghệ hằng ngày.".into(),
+            category: "Technology".into(),
+            owner_name: "Người dẫn".into(),
+            owner_email: "owner@example.com".into(),
+            language: "vi".into(),
+            ..NewShow::default()
+        }
+    }
+
     #[tokio::test]
     async fn creates_lists_and_updates_shows() {
         let pool = crate::db::test_pool().await;
@@ -300,6 +322,36 @@ mod tests {
                 .id,
             show.id
         );
+    }
+
+    #[tokio::test]
+    async fn enabling_feed_requires_complete_show() {
+        let pool = crate::db::test_pool().await;
+
+        let incomplete = create(&pool, new_show()).await.unwrap();
+        let err = set_feed_enabled(&pool, incomplete.id, true)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::error::AppError::BadRequest(_)));
+        assert!(
+            !get(&pool, incomplete.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .feed_enabled
+        );
+
+        let complete = create(&pool, complete_show()).await.unwrap();
+        let complete = set_cover(&pool, complete.id, "covers/1.jpg", true, true)
+            .await
+            .unwrap();
+        assert!(complete.feed_complete());
+
+        let enabled = set_feed_enabled(&pool, complete.id, true).await.unwrap();
+        assert!(enabled.feed_enabled);
+
+        let disabled = set_feed_enabled(&pool, complete.id, false).await.unwrap();
+        assert!(!disabled.feed_enabled);
     }
 
     #[tokio::test]
