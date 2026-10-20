@@ -227,7 +227,7 @@ pub fn segment(cues: &[Cue], language: &str) -> Vec<String> {
     sentences
 }
 
-fn split_punctuation(text: &str) -> Vec<String> {
+pub(crate) fn split_punctuation(text: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut chars = text.chars().peekable();

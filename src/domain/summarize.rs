@@ -1,5 +1,7 @@
-use crate::domain::transcript::stopwords;
-use std::collections::{HashMap, HashSet};
+use crate::domain::transcript::{split_punctuation, stopwords};
+use std::collections::{BTreeSet, HashMap};
+
+const INTRO_OUTRO_RESERVE_CHARS: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct SummaryOptions {
@@ -16,6 +18,10 @@ pub struct SummaryResult {
 }
 
 pub fn summarize(sentences: &[String], options: &SummaryOptions) -> SummaryResult {
+    let char_counts: Vec<usize> = sentences
+        .iter()
+        .map(|sentence| sentence.chars().count())
+        .collect();
     let usable: Vec<(usize, &String)> = sentences
         .iter()
         .enumerate()
@@ -30,7 +36,7 @@ pub fn summarize(sentences: &[String], options: &SummaryOptions) -> SummaryResul
         };
     }
 
-    let docs: Vec<HashSet<String>> = usable
+    let docs: Vec<BTreeSet<String>> = usable
         .iter()
         .map(|(_, sentence)| tokens(sentence))
         .collect();
@@ -61,7 +67,7 @@ pub fn summarize(sentences: &[String], options: &SummaryOptions) -> SummaryResul
             if position < 0.15 || position > 0.85 {
                 score *= 1.03;
             }
-            if sentence.chars().count() < 30 {
+            if char_counts[*original] < 30 {
                 score *= 0.8;
             }
             (score, *original)
@@ -69,6 +75,9 @@ pub fn summarize(sentences: &[String], options: &SummaryOptions) -> SummaryResul
         .collect();
     scored.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
+    let budget = options
+        .target_chars
+        .saturating_sub(INTRO_OUTRO_RESERVE_CHARS);
     let mut selected: Vec<usize> = Vec::new();
     let mut used_chars = 0usize;
     let mut candidates = scored;
@@ -90,13 +99,13 @@ pub fn summarize(sentences: &[String], options: &SummaryOptions) -> SummaryResul
         }
         let (position, _) = best.unwrap();
         let (_, index) = candidates.remove(position);
-        let sentence = &sentences[index];
-        if !selected.is_empty() && used_chars + sentence.len() > options.target_chars {
+        let sentence_chars = char_counts[index];
+        if !selected.is_empty() && used_chars + sentence_chars > budget {
             break;
         }
-        used_chars += sentence.len();
+        used_chars += sentence_chars;
         selected.push(index);
-        if used_chars >= options.target_chars {
+        if used_chars >= budget {
             break;
         }
     }
@@ -108,7 +117,7 @@ pub fn summarize(sentences: &[String], options: &SummaryOptions) -> SummaryResul
         .map(|index| sentences[*index].clone())
         .collect::<Vec<_>>()
         .join("\n\n");
-    let short_source = source_text.len() < options.target_chars;
+    let short_source = source_text.chars().count() < options.target_chars;
     SummaryResult {
         selected_indices: selected,
         script,
@@ -117,9 +126,9 @@ pub fn summarize(sentences: &[String], options: &SummaryOptions) -> SummaryResul
     }
 }
 
-fn tokens(text: &str) -> HashSet<String> {
+fn tokens(text: &str) -> BTreeSet<String> {
     let stop = stopwords(detect_language(text));
-    let mut out = HashSet::new();
+    let mut out = BTreeSet::new();
     for word in text.split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '-') {
         let word = word.trim().to_lowercase();
         if word.len() < 2 || stop.contains(&word.as_str()) {
@@ -130,7 +139,7 @@ fn tokens(text: &str) -> HashSet<String> {
     out
 }
 
-fn cosine(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
+fn cosine(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }
@@ -169,60 +178,94 @@ pub fn build_script(
 }
 
 pub fn sanitize_for_tts(text: &str) -> String {
-    let mut out = String::new();
-    for line in text.lines() {
-        let mut line = line.trim().to_string();
-        if line.starts_with('#') || line.starts_with('>') {
-            continue;
-        }
-        line = line.replace("**", "").replace("__", "").replace('`', "");
-        while let Some(start) = line.find("http://").or_else(|| line.find("https://")) {
-            let end = line[start..]
-                .find(char::is_whitespace)
-                .map(|i| start + i)
-                .unwrap_or(line.len());
-            line.replace_range(start..end, "");
-        }
-        line = remove_bracketed(&line);
-        line = line
-            .split_whitespace()
-            .filter(|word| !word.starts_with('#'))
-            .collect::<Vec<_>>()
-            .join(" ");
-        line = line
-            .chars()
-            .filter(|ch| {
-                !ch.is_control()
-                    && !matches!(
-                        *ch,
-                        '😀' | '😁' | '😂' | '🤣' | '😊' | '👍' | '🔥' | '🎧' | '🎙'
-                    )
-            })
-            .collect();
-        if let Some((prefix, rest)) = line.split_once(':') {
-            if prefix.split_whitespace().count() <= 3
-                && prefix
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || c.is_whitespace())
-            {
-                line = rest.trim().to_string();
+    let mut paragraphs: Vec<String> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    for raw in text.split('\n') {
+        let line = sanitize_line(raw);
+        if line.is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(current.join(" "));
+                current.clear();
             }
-        }
-        let line = line.trim();
-        if !line.is_empty() {
-            if !out.is_empty() {
-                out.push(' ');
-            }
-            out.push_str(line);
+        } else {
+            current.push(line);
         }
     }
-    out.split_whitespace()
+    if !current.is_empty() {
+        paragraphs.push(current.join(" "));
+    }
+    paragraphs
+        .iter()
+        .map(|paragraph| {
+            paragraph
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .replace(" .", ".")
+                .replace(" ,", ",")
+                .replace(" !", "!")
+                .replace(" ?", "?")
+        })
         .collect::<Vec<_>>()
-        .join(" ")
-        .replace(" .", ".")
-        .replace(" ,", ",")
-        .replace(" !", "!")
-        .replace(" ?", "?")
+        .join("\n\n")
+}
+
+fn sanitize_line(raw: &str) -> String {
+    let mut line = raw.trim().to_string();
+    if line.starts_with('#') || line.starts_with('>') {
+        return String::new();
+    }
+    line = line.replace("**", "").replace("__", "").replace('`', "");
+    while let Some(start) = line.find("http://").or_else(|| line.find("https://")) {
+        let end = line[start..]
+            .find(char::is_whitespace)
+            .map(|i| start + i)
+            .unwrap_or(line.len());
+        line.replace_range(start..end, "");
+    }
+    line = remove_bracketed(&line);
+    line = line
+        .chars()
+        .filter(|ch| !ch.is_control() && !is_zero_width(*ch) && !is_emoji(*ch))
+        .collect();
+    line = line
+        .split_whitespace()
+        .filter(|word| !word.starts_with('#'))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if let Some((prefix, rest)) = line.split_once(':') {
+        if prefix.split_whitespace().count() <= 3
+            && prefix
+                .chars()
+                .all(|c| c.is_alphanumeric() || c.is_whitespace())
+        {
+            line = rest.trim().to_string();
+        }
+    }
+    line.trim().to_string()
+}
+
+fn is_zero_width(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x00AD | 0x034F | 0x061C | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x206F
+            | 0xFEFF
+    )
+}
+
+fn is_emoji(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x1F000..=0x1FAFF
+            | 0x2600..=0x27BF
+            | 0x2B00..=0x2BFF
+            | 0xFE00..=0xFE0F
+            | 0x20E3
+            | 0x3030
+            | 0x303D
+            | 0x3297
+            | 0x3299
+    )
 }
 
 fn remove_bracketed(text: &str) -> String {
@@ -243,18 +286,27 @@ pub fn split_chunks(text: &str, limit: usize) -> Vec<String> {
     let limit = limit.max(1);
     let mut chunks = Vec::new();
     let mut current = String::new();
-    for sentence in split_sentences(text) {
-        if sentence.len() <= limit {
-            if !current.is_empty() && current.len() + 1 + sentence.len() > limit {
+    let mut current_chars = 0usize;
+    for sentence in split_punctuation(text) {
+        let sentence_chars = sentence.chars().count();
+        if !sentence.chars().any(|ch| ch.is_alphanumeric()) {
+            continue;
+        }
+        if sentence_chars <= limit {
+            if !current.is_empty() && current_chars + 1 + sentence_chars > limit {
                 chunks.push(std::mem::take(&mut current));
+                current_chars = 0;
             }
             if !current.is_empty() {
                 current.push(' ');
+                current_chars += 1;
             }
             current.push_str(&sentence);
+            current_chars += sentence_chars;
         } else {
             if !current.is_empty() {
                 chunks.push(std::mem::take(&mut current));
+                current_chars = 0;
             }
             chunks.extend(split_long_sentence(&sentence, limit));
         }
@@ -265,37 +317,22 @@ pub fn split_chunks(text: &str, limit: usize) -> Vec<String> {
     chunks
 }
 
-fn split_sentences(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut current = String::new();
-    for ch in text.chars() {
-        current.push(ch);
-        if matches!(ch, '.' | '!' | '?' | '…') {
-            let value = current.trim();
-            if !value.is_empty() {
-                out.push(value.to_string());
-            }
-            current.clear();
-        }
-    }
-    let value = current.trim();
-    if !value.is_empty() {
-        out.push(value.to_string());
-    }
-    out
-}
-
 fn split_long_sentence(sentence: &str, limit: usize) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();
+    let mut current_chars = 0usize;
     for word in sentence.split_whitespace() {
-        if !current.is_empty() && current.len() + 1 + word.len() > limit {
+        let word_chars = word.chars().count();
+        if !current.is_empty() && current_chars + 1 + word_chars > limit {
             out.push(std::mem::take(&mut current));
+            current_chars = 0;
         }
         if !current.is_empty() {
             current.push(' ');
+            current_chars += 1;
         }
         current.push_str(word);
+        current_chars += word_chars;
     }
     if !current.is_empty() {
         out.push(current);
@@ -315,6 +352,27 @@ mod tests {
             "Ownership giúp tránh lỗi con trỏ null và data race.".into(),
             "Cuối cùng, chúng ta thảo luận về hiệu năng và công cụ.".into(),
         ]
+    }
+
+    fn char_budget_report(sentences: &[String], target: usize, title: &str) -> (usize, usize) {
+        let result = summarize(
+            sentences,
+            &SummaryOptions {
+                target_chars: target,
+                title: title.into(),
+            },
+        );
+        let chars: usize = result
+            .selected_indices
+            .iter()
+            .map(|index| sentences[*index].chars().count())
+            .sum();
+        let bytes: usize = result
+            .selected_indices
+            .iter()
+            .map(|index| sentences[*index].len())
+            .sum();
+        (chars, bytes)
     }
 
     #[test]
@@ -341,6 +399,21 @@ mod tests {
     }
 
     #[test]
+    fn repeated_summarize_calls_produce_identical_script() {
+        let input = sentences();
+        let options = SummaryOptions {
+            target_chars: 400,
+            title: "Rust".into(),
+        };
+        let baseline = summarize(&input, &options);
+        for _ in 0..32 {
+            let run = summarize(&input, &options);
+            assert_eq!(run.script, baseline.script);
+            assert_eq!(run.selected_indices, baseline.selected_indices);
+        }
+    }
+
+    #[test]
     fn short_transcript_uses_every_sentence() {
         let result = summarize(
             &["Một câu ngắn.".into(), "Một câu khác.".into()],
@@ -354,9 +427,57 @@ mod tests {
     }
 
     #[test]
+    fn target_budget_counts_characters_for_korean() {
+        let sentences: Vec<String> = (0..120)
+            .map(|i| format!("{i}번째 문장은 한국어 요약 테스트를 위한 충분히 긴 문장입니다."))
+            .collect();
+        let target = 2000;
+        let (chars, bytes) = char_budget_report(&sentences, target, "한국어");
+        let budget = target - INTRO_OUTRO_RESERVE_CHARS;
+        let longest = sentences[0].chars().count();
+        assert!(chars <= budget, "used {chars} chars over budget {budget}");
+        assert!(
+            chars >= budget - longest,
+            "underfilled: {chars} vs {budget}"
+        );
+        assert!(bytes > target, "byte budget would have been used: {bytes}");
+    }
+
+    #[test]
+    fn target_budget_counts_characters_for_vietnamese() {
+        let sentences: Vec<String> = (0..150)
+            .map(|i| {
+                format!("{i} Đây là một câu tiếng Việt đủ dài để kiểm tra ngân sách ký tự của bản tóm tắt.")
+            })
+            .collect();
+        let target = 3000;
+        let (chars, bytes) = char_budget_report(&sentences, target, "Tiếng Việt");
+        let budget = target - INTRO_OUTRO_RESERVE_CHARS;
+        let longest = sentences[0].chars().count();
+        assert!(chars <= budget, "used {chars} chars over budget {budget}");
+        assert!(
+            chars >= budget - longest,
+            "underfilled: {chars} vs {budget}"
+        );
+        assert!(bytes > chars, "expected multibyte text: {bytes} vs {chars}");
+    }
+
+    #[test]
     fn sanitizer_removes_markdown_urls_emojis_and_speaker_labels() {
         let input = "**Xin chào** https://example.com #tag 😀\nNgười nói: Nội dung [Music].";
         assert_eq!(sanitize_for_tts(input), "Xin chào Nội dung.");
+    }
+
+    #[test]
+    fn sanitizer_removes_zero_width_and_broad_emoji() {
+        let input = "Xin chào 🎬❤️ 🇻🇳 3️⃣ zero\u{200b}width";
+        assert_eq!(sanitize_for_tts(input), "Xin chào 3 zerowidth");
+    }
+
+    #[test]
+    fn sanitizer_preserves_paragraph_breaks() {
+        let input = "Đoạn một.\n\nĐoạn hai.\nDòng ba.";
+        assert_eq!(sanitize_for_tts(input), "Đoạn một.\n\nĐoạn hai. Dòng ba.");
     }
 
     #[test]
@@ -365,5 +486,25 @@ mod tests {
         let chunks = split_chunks(text, 12);
         assert!(chunks.iter().all(|chunk| chunk.chars().count() <= 12));
         assert_eq!(chunks, vec!["Câu một.", "Câu hai.", "Câu ba!", "Câu bốn?"]);
+    }
+
+    #[test]
+    fn chunker_keeps_abbreviations_whole_and_drops_punctuation_only() {
+        let text = "TP.HCM là thành phố lớn. Mr. Smith nói 3.14. Wait... what?";
+        let chunks = split_chunks(text, 200);
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.chars().any(|ch| ch.is_alphanumeric())));
+        assert!(chunks.iter().any(|chunk| chunk.contains("TP.HCM")));
+        assert!(chunks
+            .iter()
+            .any(|chunk| chunk.contains("Mr. Smith") && chunk.contains("3.14")));
+        assert_eq!(
+            chunks.join(" ").split_whitespace().collect::<Vec<_>>(),
+            text.split_whitespace().collect::<Vec<_>>()
+        );
+        assert!(split_chunks("...", 10)
+            .iter()
+            .all(|chunk| chunk.chars().any(|ch| ch.is_alphanumeric())));
     }
 }
