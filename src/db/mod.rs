@@ -1,3 +1,4 @@
+pub mod episodes;
 pub mod settings;
 pub mod shows;
 
