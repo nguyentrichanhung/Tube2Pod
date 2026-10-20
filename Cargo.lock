@@ -2677,6 +2677,7 @@ dependencies = [
  "anyhow",
  "askama",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "fs2",
  "http-body-util",

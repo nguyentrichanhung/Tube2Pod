@@ -8,6 +8,7 @@ rust-version = "1.85"
 anyhow = "1"
 askama = "0.12"
 axum = { version = "0.8", features = ["multipart"] }
+base64 = "0.22"
 chrono = { version = "0.4", features = ["clock"] }
 fs2 = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

@@ -1,4 +1,5 @@
 pub mod settings;
+pub mod shows;
 
 use crate::error::AppResult;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
