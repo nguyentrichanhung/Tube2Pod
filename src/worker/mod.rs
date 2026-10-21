@@ -1,5 +1,6 @@
 pub mod fetch;
 pub mod summarize;
+pub mod synth;
 pub mod voice;
 
 use crate::config::Config;
