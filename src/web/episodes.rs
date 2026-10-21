@@ -186,6 +186,7 @@ pub async fn cancel(
     if !matches!(episode.status.as_str(), status::QUEUED | status::RUNNING) {
         return Err(AppError::Conflict("Chỉ huỷ được tập đang xử lý.".into()));
     }
+    episodes::cancel(&state.pool, &uuid).await?;
     if let Some(take_id) = episode.active_take_id {
         let client = OmnivoiceClient::new(&state.cfg.omnivoice);
         let _ = client.delete_speech(take_id).await;
@@ -195,7 +196,6 @@ pub async fn cancel(
         let _ = client.delete_design(design_id).await;
         episodes::set_voice_design(&state.pool, &uuid, None).await?;
     }
-    episodes::cancel(&state.pool, &uuid).await?;
     state.notify.notify_one();
     Ok(redirect_response(&headers, &format!("/episodes/{uuid}")))
 }

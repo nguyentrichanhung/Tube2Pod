@@ -30,6 +30,9 @@ pub async fn resolve_voice(
     episode: &Episode,
     client: &OmnivoiceClient,
 ) -> Result<i64, PipelineError> {
+    if crate::worker::is_cancelled(pool, &episode.uuid).await {
+        return Ok(episode.voice_id.unwrap_or(0));
+    }
     let show = shows::get(pool, episode.show_id)
         .await
         .map_err(|e| PipelineError::from_app(e, "internal"))?
@@ -65,9 +68,17 @@ pub async fn resolve_voice(
     let name = format!("Tube2Pod · {} · {}", show.title, language);
     let name = name.chars().take(NAME_MAX).collect::<String>();
 
+    let existing_voice_id = episode.voice_id.unwrap_or(0);
+
     if let Some(design_id) = episode.voice_design_id {
-        match poll_design(client, design_id).await {
-            Ok(DesignPoll::Ready) => {
+        let polled =
+            crate::worker::cancellable(pool, &episode.uuid, poll_design(client, design_id)).await;
+        match polled {
+            None => {
+                discard_design_if_current(pool, client, &episode.uuid, design_id).await?;
+                return Ok(existing_voice_id);
+            }
+            Some(Ok(DesignPoll::Ready)) => {
                 return save_design_and_activate(
                     pool,
                     client,
@@ -77,20 +88,29 @@ pub async fn resolve_voice(
                     design_id,
                     &name,
                 )
-                .await;
+                .await
+                .map(|voice_id| voice_id.unwrap_or(existing_voice_id));
             }
-            Ok(DesignPoll::Failed) | Err(_) => {
+            Some(Ok(DesignPoll::Failed)) | Some(Err(_)) => {
                 let _ = client.delete_design(design_id).await;
                 clear_design(pool, &episode.uuid).await?;
             }
         }
     }
 
+    if crate::worker::is_cancelled(pool, &episode.uuid).await {
+        return Ok(existing_voice_id);
+    }
+
     let options = client.voice_options().await.map_err(tts_error)?;
     let sample = sample_text(language);
     let sample = fit_sample(&sample, options.min_chars, options.max_chars);
     let preset: VoicePreset = serde_json::from_str(&show.voice_preset_json).unwrap_or_default();
-    let design = create_design(pool, client, &episode.uuid, language, &sample, &preset).await?;
+    let Some(design) =
+        create_design(pool, client, &episode.uuid, language, &sample, &preset).await?
+    else {
+        return Ok(existing_voice_id);
+    };
 
     let voice_id = save_design_and_activate(
         pool,
@@ -101,7 +121,8 @@ pub async fn resolve_voice(
         design.id,
         &name,
     )
-    .await?;
+    .await?
+    .unwrap_or(existing_voice_id);
     let _ = cfg;
     Ok(voice_id)
 }
@@ -114,7 +135,10 @@ async fn save_design_and_activate(
     uuid: &str,
     design_id: i64,
     name: &str,
-) -> Result<i64, PipelineError> {
+) -> Result<Option<i64>, PipelineError> {
+    if crate::worker::is_cancelled(pool, uuid).await {
+        return Ok(None);
+    }
     let voice = match client.save_design(design_id, name).await {
         Ok(voice) => voice,
         Err(error) => {
@@ -130,17 +154,20 @@ async fn save_design_and_activate(
         .await
         .map_err(|e| PipelineError::from_app(e, "internal"))?;
 
-    match poll_voice(client, voice.id).await? {
-        VoicePoll::Ready => {}
-        VoicePoll::Failed => {
+    let polled = crate::worker::cancellable(pool, uuid, poll_voice(client, voice.id)).await;
+    match polled {
+        None => return Ok(None),
+        Some(Ok(VoicePoll::Ready)) => {}
+        Some(Ok(VoicePoll::Failed)) => {
             shows::delete_voice(pool, show_id, language)
                 .await
                 .map_err(|e| PipelineError::from_app(e, "internal"))?;
             return Err(design_error("Giọng đọc chưa sẵn sàng."));
         }
+        Some(Err(error)) => return Err(error),
     }
     activate_episode(pool, uuid, voice.id).await?;
-    Ok(voice.id)
+    Ok(Some(voice.id))
 }
 
 async fn activate_episode(
@@ -167,9 +194,12 @@ async fn create_design(
     language: &str,
     sample: &str,
     preset: &VoicePreset,
-) -> Result<VoiceDesign, PipelineError> {
+) -> Result<Option<VoiceDesign>, PipelineError> {
     let mut last_error = None;
     for _ in 0..DESIGN_MAX_ATTEMPTS {
+        if crate::worker::is_cancelled(pool, uuid).await {
+            return Ok(None);
+        }
         let design = match client.create_design(language, sample, preset).await {
             Ok(design) => design,
             Err(error) => {
@@ -180,13 +210,18 @@ async fn create_design(
         episodes::set_voice_design(pool, uuid, Some(design.id))
             .await
             .map_err(|e| PipelineError::from_app(e, "internal"))?;
-        match poll_design(client, design.id).await {
-            Ok(DesignPoll::Ready) => return Ok(design),
-            Ok(DesignPoll::Failed) => {
+        let polled = crate::worker::cancellable(pool, uuid, poll_design(client, design.id)).await;
+        match polled {
+            None => {
+                discard_design_if_current(pool, client, uuid, design.id).await?;
+                return Ok(None);
+            }
+            Some(Ok(DesignPoll::Ready)) => return Ok(Some(design)),
+            Some(Ok(DesignPoll::Failed)) => {
                 cleanup_design(pool, client, uuid, design.id).await?;
                 last_error = Some(design_error("Không tạo được giọng đọc."));
             }
-            Err(error) => {
+            Some(Err(error)) => {
                 cleanup_design(pool, client, uuid, design.id).await?;
                 last_error = Some(error);
             }
@@ -194,6 +229,25 @@ async fn create_design(
     }
     clear_design(pool, uuid).await?;
     Err(last_error.unwrap_or_else(|| design_error("Không tạo được giọng đọc.")))
+}
+
+async fn discard_design_if_current(
+    pool: &SqlitePool,
+    client: &OmnivoiceClient,
+    uuid: &str,
+    design_id: i64,
+) -> Result<(), PipelineError> {
+    let Some(current) = episodes::get(pool, uuid)
+        .await
+        .map_err(|e| PipelineError::from_app(e, "internal"))?
+    else {
+        return Ok(());
+    };
+    if current.voice_design_id == Some(design_id) {
+        let _ = client.delete_design(design_id).await;
+        clear_design(pool, uuid).await?;
+    }
+    Ok(())
 }
 
 async fn cleanup_design(
@@ -800,6 +854,50 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_episode_skips_design_and_save_calls() {
+        let server = MockServer::start().await;
+        for (verb, endpoint) in [
+            ("GET", "/api/voices"),
+            ("GET", "/api/voice-designs/options"),
+            ("GET", "/api/voice-designs/7"),
+            ("POST", "/api/voice-designs"),
+            ("POST", "/api/voice-designs/7/save"),
+            ("DELETE", "/api/voice-designs/7"),
+        ] {
+            Mock::given(method(verb))
+                .and(path(endpoint))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+        }
+
+        let client = OmnivoiceClient::new(&omnivoice_cfg(&server));
+        let pool = db::test_pool().await;
+        let (_, ep) = seed_episode(&pool).await;
+        db::episodes::set_voice(&pool, &ep.uuid, 42).await.unwrap();
+        db::episodes::set_voice_design(&pool, &ep.uuid, Some(7))
+            .await
+            .unwrap();
+        db::episodes::cancel(&pool, &ep.uuid).await.unwrap();
+        let ep = db::episodes::get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(ep.status, crate::models::status::CANCELLED);
+
+        let root = tempfile::tempdir().unwrap();
+        let started = std::time::Instant::now();
+        let voice = resolve_voice(&pool, &app_cfg(root.path()), &ep, &client)
+            .await
+            .unwrap();
+        assert_eq!(voice, 42);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "cancelled voicing must return promptly, took {:?}",
+            started.elapsed()
+        );
         server.verify().await;
     }
 
