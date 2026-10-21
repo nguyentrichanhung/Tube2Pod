@@ -253,7 +253,7 @@ pub async fn detail(
     let checklist = feed_checklist(&show);
     let can_enable = checklist.iter().all(|item| item.ok);
     let selected = shows::list_voices(&state.pool, id).await?;
-    let catalog = if selected.is_empty() {
+    let catalog = if tab != "voices" || selected.is_empty() {
         None
     } else {
         OmnivoiceClient::new(&state.cfg.omnivoice)
