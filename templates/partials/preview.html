@@ -8,4 +8,9 @@
   {% if has_thumbnail %}
   <a href="{{ thumbnail }}" target="_blank" rel="noopener noreferrer">Ảnh thu nhỏ</a>
   {% endif %}
+  {% if voice_missing %}
+  <div class="notice error" data-voice-missing="true">Chưa chọn giọng cho {{ language }}. Liên hệ admin.</div>
+  {% else if voice_name.is_some() %}
+  <p class="muted">Giọng đọc: {{ voice_name.as_deref().unwrap_or("") }}</p>
+  {% endif %}
 </div>
