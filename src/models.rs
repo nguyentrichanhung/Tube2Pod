@@ -140,7 +140,125 @@ pub struct Episode {
     pub updated_at: i64,
 }
 
+pub fn progress_percent_for(
+    stage: &str,
+    chunk_done: i64,
+    chunk_count: Option<i64>,
+    progress_json: Option<&str>,
+) -> u8 {
+    match stage {
+        stage::QUEUED => 0,
+        stage::FETCHING => progress_json
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|value| value.get("percent").and_then(|p| p.as_u64()))
+            .map(|percent| percent.clamp(10, 35) as u8)
+            .unwrap_or(10),
+        stage::SUMMARIZING => 45,
+        stage::VOICING => 55,
+        stage::SYNTHESIZING => {
+            let total = chunk_count.unwrap_or(0).max(0);
+            if total == 0 {
+                55
+            } else {
+                let done = chunk_done.clamp(0, total);
+                (55 + (25 * done / total) as u8).min(80)
+            }
+        }
+        stage::ASSEMBLING => 85,
+        stage::PUBLISHING => 95,
+        stage::READY | stage::PUBLISHED => 100,
+        _ => 0,
+    }
+}
+
+pub fn stage_label_for(stage: &str) -> &'static str {
+    match stage {
+        stage::QUEUED => "Đang chờ",
+        stage::FETCHING => "Đang tải nguồn",
+        stage::SUMMARIZING => "Đang tóm tắt",
+        stage::VOICING => "Đang chuẩn bị giọng đọc",
+        stage::SYNTHESIZING => "Đang tạo audio",
+        stage::ASSEMBLING => "Đang ghép audio",
+        stage::PUBLISHING => "Đang phát hành",
+        stage::READY => "Sẵn sàng",
+        stage::PUBLISHED => "Đã đăng",
+        _ => "Đang xử lý",
+    }
+}
+
+pub fn status_label_for(status: &str) -> &'static str {
+    match status {
+        status::QUEUED => "Đang chờ",
+        status::RUNNING => "Đang xử lý",
+        status::READY => "Sẵn sàng",
+        status::PUBLISHED => "Đã đăng",
+        status::FAILED => "Lỗi",
+        status::CANCELLED => "Đã huỷ",
+        _ => "Không xác định",
+    }
+}
+
+pub fn error_label_for(code: Option<&str>) -> Option<&'static str> {
+    match code? {
+        "invalid_url" => Some("Link video không hợp lệ."),
+        "source_unavailable" => Some("Không tải được video. Vui lòng thử lại sau."),
+        "source_too_long" => Some("Video quá dài để xử lý. Liên hệ admin nếu cần hỗ trợ."),
+        "source_too_short" => Some("Video quá ngắn để tạo podcast."),
+        "no_captions" => Some("Video không có phụ đề."),
+        "unsupported_language" => Some("Chỉ hỗ trợ tiếng Việt, Anh, Hàn."),
+        "transcript_too_short" => Some("Nội dung quá ngắn để tóm tắt."),
+        "transcript_invalid" => Some("Không đọc được phụ đề của video."),
+        "voice_not_selected" => Some("Chưa chọn giọng đọc cho ngôn ngữ này. Liên hệ admin."),
+        "voice_design_failed" | "tts_unavailable" => {
+            Some("Dịch vụ đọc chưa sẵn sàng. Liên hệ admin.")
+        }
+        "synthesis_failed" => Some("Không tạo được audio. Vui lòng thử lại."),
+        "assembly_failed" => Some("Không ghép được audio. Liên hệ admin."),
+        "disk_full" => Some("Hết dung lượng lưu trữ. Liên hệ admin."),
+        _ => Some("Không xử lý được tập này. Vui lòng liên hệ admin."),
+    }
+}
+
+#[allow(dead_code)]
 impl Episode {
+    pub fn progress_percent(&self) -> u8 {
+        progress_percent_for(
+            &self.stage,
+            self.chunk_done,
+            self.chunk_count,
+            self.progress_json.as_deref(),
+        )
+    }
+
+    pub fn progress_detail(&self) -> Option<String> {
+        let total = self.chunk_count?;
+        if self.stage == stage::SYNTHESIZING && total > 0 {
+            Some(format!(
+                "Chunk {}/{}",
+                self.chunk_done.clamp(0, total),
+                total
+            ))
+        } else {
+            None
+        }
+    }
+
+    pub fn stage_label(&self) -> &'static str {
+        stage_label_for(&self.stage)
+    }
+
+    pub fn status_label(&self) -> &'static str {
+        status_label_for(&self.status)
+    }
+
+    pub fn error_label(&self) -> Option<&'static str> {
+        error_label_for(self.error_code.as_deref())
+    }
+
+    pub fn is_active(&self) -> bool {
+        matches!(self.status.as_str(), status::QUEUED | status::RUNNING)
+    }
+
     pub fn is_terminal(&self) -> bool {
         matches!(
             self.status.as_str(),
@@ -261,5 +379,38 @@ mod tests {
             sha256_hex("abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn maps_stage_and_chunk_progress_to_percent() {
+        assert_eq!(progress_percent_for("queued", 0, None, None), 0);
+        assert_eq!(
+            progress_percent_for("fetching", 0, None, Some(r#"{"percent":22}"#)),
+            22
+        );
+        assert_eq!(progress_percent_for("summarizing", 0, None, None), 45);
+        assert_eq!(progress_percent_for("voicing", 0, None, None), 55);
+        assert_eq!(progress_percent_for("synthesizing", 2, Some(4), None), 67);
+        assert_eq!(progress_percent_for("synthesizing", 4, Some(4), None), 80);
+        assert_eq!(progress_percent_for("assembling", 0, None, None), 85);
+        assert_eq!(progress_percent_for("publishing", 0, None, None), 95);
+        assert_eq!(progress_percent_for("published", 0, None, None), 100);
+        assert_eq!(progress_percent_for("ready", 0, None, None), 100);
+    }
+
+    #[test]
+    fn labels_and_errors_are_user_facing() {
+        assert_eq!(stage_label_for("synthesizing"), "Đang tạo audio");
+        assert_eq!(status_label_for("ready"), "Sẵn sàng");
+        assert_eq!(status_label_for("cancelled"), "Đã huỷ");
+        assert_eq!(
+            error_label_for(Some("voice_not_selected")),
+            Some("Chưa chọn giọng đọc cho ngôn ngữ này. Liên hệ admin.")
+        );
+        assert_eq!(
+            error_label_for(Some("internal")),
+            Some("Không xử lý được tập này. Vui lòng liên hệ admin.")
+        );
+        assert_eq!(error_label_for(None), None);
     }
 }
