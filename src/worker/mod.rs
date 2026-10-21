@@ -1,4 +1,6 @@
 pub mod fetch;
+pub mod summarize;
+pub mod voice;
 
 use crate::config::Config;
 use crate::error::AppError;
