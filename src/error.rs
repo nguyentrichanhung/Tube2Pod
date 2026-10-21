@@ -38,6 +38,12 @@ impl From<std::io::Error> for AppError {
     }
 }
 
+impl From<askama::Error> for AppError {
+    fn from(value: askama::Error) -> Self {
+        AppError::Internal(anyhow::anyhow!(value))
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = match &self {
