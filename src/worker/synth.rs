@@ -49,6 +49,10 @@ pub async fn synthesize_episode(
         .voice_id
         .ok_or_else(|| PipelineError::new("tts_unavailable", "Chưa có giọng đọc.", true))?;
 
+    if done == 0 && take_ids.is_empty() && episode.active_take_id.is_none() {
+        remove_parts(&dir).await?;
+    }
+
     if let Some(active_id) = episode.active_take_id {
         let part = dir.join(format!("part-{done:03}.mp3"));
         if part.exists() && looks_nonempty(&part).await {
@@ -138,6 +142,24 @@ async fn save_progress(
     episodes::set_chunk_progress(pool, uuid, &take_ids, done as i64, count as i64)
         .await
         .map_err(|e| PipelineError::from_app(e, "internal"))
+}
+
+async fn remove_parts(dir: &Path) -> Result<(), PipelineError> {
+    let mut entries = tokio::fs::read_dir(dir)
+        .await
+        .map_err(|e| PipelineError::from_app(e.into(), "disk_full"))?;
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| PipelineError::from_app(e.into(), "disk_full"))?
+    {
+        if entry.file_name().to_string_lossy().starts_with("part-") {
+            tokio::fs::remove_file(entry.path())
+                .await
+                .map_err(|e| PipelineError::from_app(e.into(), "disk_full"))?;
+        }
+    }
+    Ok(())
 }
 
 async fn looks_nonempty(path: &Path) -> bool {
@@ -382,6 +404,33 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("part-003.mp3")).unwrap(), b"new");
         let takes: Vec<i64> = serde_json::from_str(got.take_ids_json.as_deref().unwrap()).unwrap();
         assert_eq!(takes.len(), 4);
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn reread_discards_parts_from_a_previous_summary() {
+        let server = MockServer::start().await;
+        mount_finished_take(&server, 31, b"fresh", 4, 4).await;
+        let root = tempfile::tempdir().unwrap();
+        let cfg = app_cfg(root.path(), 10);
+        let client = crate::services::omnivoice::OmnivoiceClient::new(&omni_cfg(&server));
+        let pool = db::test_pool().await;
+        let ep = seed_episode(&pool, "Câu một. Câu hai. Câu ba. Câu bốn.").await;
+        let dir = parts_dir(&cfg, &ep.uuid);
+        std::fs::create_dir_all(&dir).unwrap();
+        for index in 0..4 {
+            std::fs::write(dir.join(format!("part-{index:03}.mp3")), b"stale").unwrap();
+        }
+
+        synthesize_episode(&pool, &cfg, &ep, &client).await.unwrap();
+        let got = db::episodes::get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.chunk_done, 4);
+        for index in 0..4 {
+            assert_eq!(
+                std::fs::read(dir.join(format!("part-{index:03}.mp3"))).unwrap(),
+                b"fresh"
+            );
+        }
         server.verify().await;
     }
 
