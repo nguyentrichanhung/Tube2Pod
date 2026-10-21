@@ -248,8 +248,31 @@ fn sanitize_line(raw: &str) -> String {
 fn is_zero_width(ch: char) -> bool {
     matches!(
         ch as u32,
-        0x00AD | 0x034F | 0x061C | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x206F
+        0x00AD
+            | 0x034F
+            | 0x0600..=0x0605
+            | 0x061C
+            | 0x06DD
+            | 0x070F
+            | 0x0890..=0x0891
+            | 0x08E2
+            | 0x17B4..=0x17B5
+            | 0x180E
+            | 0x200B..=0x200F
+            | 0x202A..=0x202E
+            | 0x2060..=0x2064
+            | 0x2066..=0x206F
+            | 0xFE00..=0xFE0F
             | 0xFEFF
+            | 0xFFF9..=0xFFFB
+            | 0x110BD
+            | 0x110CD
+            | 0x13430..=0x1343F
+            | 0x1BCA0..=0x1BCA3
+            | 0x1D173..=0x1D17A
+            | 0xE0001
+            | 0xE0020..=0xE007F
+            | 0xE0100..=0xE01EF
     )
 }
 
@@ -259,8 +282,17 @@ fn is_emoji(ch: char) -> bool {
         0x1F000..=0x1FAFF
             | 0x2600..=0x27BF
             | 0x2B00..=0x2BFF
+            | 0x2300..=0x23FF
+            | 0x2190..=0x21FF
+            | 0x25A0..=0x25FF
+            | 0x2934..=0x2935
             | 0xFE00..=0xFE0F
             | 0x20E3
+            | 0x2049
+            | 0x203C
+            | 0x2122
+            | 0x2139
+            | 0x24C2
             | 0x3030
             | 0x303D
             | 0x3297
@@ -478,6 +510,43 @@ mod tests {
     fn sanitizer_preserves_paragraph_breaks() {
         let input = "Đoạn một.\n\nĐoạn hai.\nDòng ba.";
         assert_eq!(sanitize_for_tts(input), "Đoạn một.\n\nĐoạn hai. Dòng ba.");
+    }
+
+    #[test]
+    fn sanitizer_removes_bmp_emoji_and_format_codepoints() {
+        let removed = [
+            '\u{23F0}',
+            '\u{2194}',
+            '\u{25AA}',
+            '\u{2934}',
+            '\u{2935}',
+            '\u{2049}',
+            '\u{203C}',
+            '\u{2122}',
+            '\u{2139}',
+            '\u{24C2}',
+            '\u{FFF9}',
+            '\u{FFFA}',
+            '\u{FFFB}',
+            '\u{E0020}',
+            '\u{17B4}',
+            '\u{17B5}',
+        ];
+        for ch in removed {
+            let input = format!("trước{ch}sau");
+            assert_eq!(
+                sanitize_for_tts(&input),
+                "trướcsau",
+                "not removed: U+{:04X}",
+                ch as u32
+            );
+        }
+    }
+
+    #[test]
+    fn sanitizer_removes_extended_symbols_and_keeps_paragraphs() {
+        let input = "Trước ⏰ ↔ ▪ ⁉ ‼ ™ ℹ Ⓜ ⤴ \u{fff9}\u{fffa}\u{fffb}\u{e0020}\u{17b4}\u{17b5} sau.\n\nĐoạn hai.";
+        assert_eq!(sanitize_for_tts(input), "Trước sau.\n\nĐoạn hai.");
     }
 
     #[test]
