@@ -4,6 +4,7 @@ mod domain;
 mod error;
 mod models;
 mod services;
+mod worker;
 
 use anyhow::Context;
 use axum::{routing::get, Router};
