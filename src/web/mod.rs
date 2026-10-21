@@ -1,6 +1,7 @@
 pub mod csrf;
 pub mod episodes;
 pub mod library;
+pub mod settings;
 pub mod shows;
 pub mod studio;
 
@@ -70,6 +71,7 @@ pub fn admin_router(state: AppState) -> Router {
         .route("/shows/{id}/feed/toggle", post(shows::toggle_feed))
         .route("/shows/{id}/feed/rotate", post(shows::rotate_feed))
         .route("/shows/{id}/publish-ready", post(shows::publish_ready))
+        .route("/settings", get(settings::index).post(settings::save))
         .layer(middleware::from_fn(csrf::csrf_middleware));
     let assets = Router::new().route("/assets/{*path}", get(asset));
     pages.merge(assets).with_state(state)

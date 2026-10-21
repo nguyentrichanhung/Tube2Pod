@@ -7,8 +7,6 @@ use crate::services::ytdlp;
 use crate::worker::PipelineError;
 use sqlx::SqlitePool;
 
-const MAX_SOURCE_MINUTES: i64 = 360;
-const MIN_SOURCE_SECONDS: i64 = 60;
 const MAX_TRANSCRIPT_CHARS: usize = 500_000;
 
 pub async fn fetch_episode(
@@ -42,15 +40,21 @@ pub async fn fetch_episode(
         let code = ytdlp::classify_source_error(&e);
         PipelineError::from_app(e, code)
     })?;
+    let max_source_minutes = crate::db::settings::read_i64(pool, "max_source_minutes", 360)
+        .await
+        .map_err(|e| PipelineError::from_app(e, "internal"))?;
+    let min_source_seconds = crate::db::settings::read_i64(pool, "min_source_seconds", 60)
+        .await
+        .map_err(|e| PipelineError::from_app(e, "internal"))?;
     let duration = meta.duration.unwrap_or(0);
-    if duration > MAX_SOURCE_MINUTES * 60 {
+    if duration > max_source_minutes.saturating_mul(60) {
         return Err(PipelineError::new(
             "source_too_long",
             "Video dài hơn giới hạn.",
             false,
         ));
     }
-    if duration < MIN_SOURCE_SECONDS {
+    if duration < min_source_seconds {
         return Err(PipelineError::new(
             "source_too_short",
             "Video quá ngắn để làm podcast.",
@@ -162,6 +166,15 @@ mod tests {
         .unwrap()
     }
 
+    fn duration_config(data_dir: &std::path::Path, duration: i64) -> Config {
+        config_with_script(
+            data_dir,
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--dump-single-json\" ]; then printf '%s' '{{\"id\":\"dQw4w9WgXcQ\",\"title\":\"Test\",\"duration\":{duration},\"language\":\"vi\",\"subtitles\":{{\"vi\":[{{\"ext\":\"json3\",\"url\":\"https://example.test/vi.json3\"}}]}}}}'; exit 0; fi\nexit 1\n"
+            ),
+        )
+    }
+
     fn fixture_config(data_dir: &std::path::Path) -> Config {
         let fixture =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ytdlp_vi.json");
@@ -223,6 +236,31 @@ mod tests {
         assert_eq!(got.stage, stage::SUMMARIZING);
         let text = std::fs::read_to_string(got.transcript_path.unwrap()).unwrap();
         assert!(text.contains("Xin chào các bạn."));
+    }
+
+    #[tokio::test]
+    async fn source_limits_are_read_from_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = duration_config(dir.path(), 120);
+        let pool = db::test_pool().await;
+        let ep = seed_episode(&pool).await;
+
+        db::settings::set(&pool, "max_source_minutes", "1")
+            .await
+            .unwrap();
+        let error = fetch_episode(&pool, &cfg, &ep).await.unwrap_err();
+        assert_eq!(error.code, "source_too_long");
+        assert!(!error.retryable);
+
+        db::settings::set(&pool, "max_source_minutes", "10")
+            .await
+            .unwrap();
+        db::settings::set(&pool, "min_source_seconds", "180")
+            .await
+            .unwrap();
+        let error = fetch_episode(&pool, &cfg, &ep).await.unwrap_err();
+        assert_eq!(error.code, "source_too_short");
+        assert!(!error.retryable);
     }
 
     #[tokio::test]

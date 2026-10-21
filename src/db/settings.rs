@@ -13,6 +13,13 @@ pub async fn get_or(pool: &SqlitePool, key: &str, fallback: &str) -> AppResult<S
     Ok(get(pool, key).await?.unwrap_or_else(|| fallback.to_string()))
 }
 
+pub async fn read_i64(pool: &SqlitePool, key: &str, default: i64) -> AppResult<i64> {
+    Ok(get_or(pool, key, &default.to_string())
+        .await?
+        .parse()
+        .unwrap_or(default))
+}
+
 pub async fn set(pool: &SqlitePool, key: &str, value: &str) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
