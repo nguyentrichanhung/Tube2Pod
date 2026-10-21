@@ -501,7 +501,7 @@ pub async fn list_feed(pool: &SqlitePool, show_id: i64) -> AppResult<Vec<Episode
     Ok(sqlx::query_as::<_, Episode>(
         "SELECT * FROM episodes
          WHERE show_id = ?1 AND published_at IS NOT NULL AND audio_path IS NOT NULL
-         ORDER BY published_at DESC, uuid DESC",
+         ORDER BY published_at DESC, uuid ASC",
     )
     .bind(show_id)
     .fetch_all(pool)

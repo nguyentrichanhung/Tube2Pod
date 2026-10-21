@@ -10,8 +10,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use std::path::PathBuf;
+use std::time::UNIX_EPOCH;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
+
+const FEED_CACHE: &str = "public, max-age=300";
+const AUDIO_CACHE: &str = "public, max-age=31536000, immutable";
+const COVER_CACHE: &str = "public, max-age=31536000, immutable";
 
 pub fn public_router(state: AppState) -> Router {
     Router::new()
@@ -52,12 +57,16 @@ pub async fn feed_xml(
         .map(|episode| episode.updated_at)
         .fold(show.updated_at, i64::max);
     let etag = feed::etag(&show, &feed_episodes, last_build);
-    if headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        == Some(etag.as_str())
-    {
-        return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response());
+    if if_none_match(&headers, &etag) {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static(FEED_CACHE));
+        response.headers_mut().insert(
+            header::ETAG,
+            HeaderValue::from_str(&etag).map_err(|e| AppError::Internal(e.into()))?,
+        );
+        return Ok(response);
     }
 
     let xml = feed::render(
@@ -69,7 +78,7 @@ pub async fn feed_xml(
     Ok((
         [
             (header::CONTENT_TYPE, "application/rss+xml; charset=utf-8"),
-            (header::CACHE_CONTROL, "public, max-age=60"),
+            (header::CACHE_CONTROL, FEED_CACHE),
             (header::ETAG, etag.as_str()),
         ],
         xml,
@@ -100,11 +109,12 @@ pub async fn audio(
     }
 
     let path = state.cfg.data_dir.join("audio").join(&file);
-    let mut response = serve_file(path, request).await?;
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=31536000, immutable"),
-    );
+    let mut response = serve_contained(&state, path, request).await?;
+    if cacheable(response.status()) {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static(AUDIO_CACHE));
+    }
     Ok(response)
 }
 
@@ -123,12 +133,52 @@ pub async fn cover(
         .join("shows")
         .join(show.id.to_string())
         .join("cover.jpg");
-    let mut response = serve_file(path, request).await?;
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=86400"),
-    );
+    let target = resolve_contained(&state, path).await?;
+    let metadata = tokio::fs::metadata(&target)
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    let etag = file_etag(&metadata);
+    let etag_value = HeaderValue::from_str(&etag).map_err(|e| AppError::Internal(e.into()))?;
+
+    if if_none_match(request.headers(), &etag) {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        response.headers_mut().insert(header::ETAG, etag_value);
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static(COVER_CACHE));
+        return Ok(response);
+    }
+
+    let mut response = serve_file(target, request).await?;
+    if cacheable(response.status()) {
+        response.headers_mut().insert(header::ETAG, etag_value);
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static(COVER_CACHE));
+    }
     Ok(response)
+}
+
+pub(crate) async fn serve_contained(
+    state: &AppState,
+    path: PathBuf,
+    request: Request<Body>,
+) -> AppResult<Response> {
+    let target = resolve_contained(state, path).await?;
+    serve_file(target, request).await
+}
+
+pub(crate) async fn resolve_contained(state: &AppState, path: PathBuf) -> AppResult<PathBuf> {
+    let target = tokio::fs::canonicalize(&path)
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    let root = tokio::fs::canonicalize(&state.cfg.data_dir)
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    if !target.starts_with(&root) {
+        return Err(AppError::NotFound);
+    }
+    Ok(target)
 }
 
 async fn serve_file(path: PathBuf, request: Request<Body>) -> AppResult<Response> {
@@ -137,6 +187,35 @@ async fn serve_file(path: PathBuf, request: Request<Body>) -> AppResult<Response
         .await
         .map_err(|e| AppError::Internal(e.into()))?;
     Ok(response.map(Body::new))
+}
+
+fn cacheable(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::OK | StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED
+    )
+}
+
+fn if_none_match(headers: &HeaderMap, etag: &str) -> bool {
+    headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.split(',').any(|candidate| {
+                let candidate = candidate.trim();
+                candidate == "*" || candidate == etag || candidate.strip_prefix("W/") == Some(etag)
+            })
+        })
+}
+
+fn file_etag(metadata: &std::fs::Metadata) -> String {
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("\"{modified:x}-{:x}\"", metadata.len())
 }
 
 fn to_feed_episode(show: &crate::models::Show, episode: &Episode, base_url: &str) -> FeedEpisode {
@@ -381,6 +460,15 @@ mod tests {
                 .unwrap(),
             "application/rss+xml; charset=utf-8"
         );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "public, max-age=300"
+        );
         let xml = text(response).await;
         assert!(xml.contains(&format!("tube2pod:{}", fx.uuid)));
         assert!(xml.contains(&format!("{BASE}/audio/{}/{}-1.mp3", fx.token, fx.uuid)));
@@ -525,6 +613,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn feed_breaks_published_at_ties_by_uuid_ascending() {
+        let fx = fixture().await;
+        let second = add_episode(&fx.state, fx.show_id, "v2").await;
+        install_audio(&fx.state, &second).await;
+        episodes::finish(
+            &fx.state.pool,
+            &second.uuid,
+            stage::PUBLISHED,
+            status::PUBLISHED,
+            true,
+        )
+        .await
+        .unwrap();
+
+        let low = "00000000-0000-4000-8000-000000000001";
+        let high = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+        for (old, new) in [(&fx.uuid, high), (&second.uuid, low)] {
+            sqlx::query("UPDATE episodes SET uuid = ?1, published_at = ?2 WHERE uuid = ?3")
+                .bind(new)
+                .bind(100_i64)
+                .bind(old)
+                .execute(&fx.state.pool)
+                .await
+                .unwrap();
+        }
+
+        let xml = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
+        let low_position = xml.find(&format!("tube2pod:{low}")).unwrap();
+        let high_position = xml.find(&format!("tube2pod:{high}")).unwrap();
+        assert!(low_position < high_position, "{xml}");
+    }
+
+    #[tokio::test]
     async fn feed_etag_returns_304_and_tracks_show_edits() {
         let fx = fixture().await;
         let uri = format!("/feed/{}.xml", fx.token);
@@ -553,6 +674,15 @@ mod tests {
                 .to_str()
                 .unwrap(),
             etag
+        );
+        assert_eq!(
+            cached
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "public, max-age=300"
         );
         assert!(empty(cached).await);
 
@@ -627,8 +757,27 @@ mod tests {
                 .unwrap(),
             format!("bytes 0-3/{}", AUDIO.len())
         );
+        assert_eq!(
+            ranged
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "public, max-age=31536000, immutable"
+        );
         let body = ranged.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(&body[..], &AUDIO[..4]);
+
+        let unsatisfiable = request(
+            &fx.state,
+            Request::builder()
+                .uri(&uri)
+                .header(header::RANGE, "bytes=99-100"),
+        )
+        .await;
+        assert_eq!(unsatisfiable.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert!(unsatisfiable.headers().get(header::CACHE_CONTROL).is_none());
 
         let head = request(&fx.state, Request::builder().method("HEAD").uri(&uri)).await;
         assert_eq!(head.status(), StatusCode::OK);
@@ -669,10 +818,9 @@ mod tests {
         }
 
         let wrong_version = format!("/audio/{}/{}-2.mp3", fx.token, fx.uuid);
-        assert_eq!(
-            get(&fx.state, &wrong_version).await.status(),
-            StatusCode::NOT_FOUND
-        );
+        let missing = get(&fx.state, &wrong_version).await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert!(missing.headers().get(header::CACHE_CONTROL).is_none());
 
         let other = shows::create(
             &fx.state.pool,
@@ -713,7 +861,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn serves_cover_with_cache_headers_and_rejects_bad_names() {
+    async fn serves_cover_with_etag_cache_and_rejects_bad_names() {
         let fx = fixture().await;
         let uri = format!("/cover/{}-1.jpg", fx.token);
         let response = get(&fx.state, &uri).await;
@@ -734,14 +882,75 @@ mod tests {
                 .unwrap()
                 .to_str()
                 .unwrap(),
-            "public, max-age=86400"
+            "public, max-age=31536000, immutable"
         );
+        let etag = response
+            .headers()
+            .get(header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(!etag.is_empty());
         let body = response.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(&body[..3], &[0xff, 0xd8, 0xff]);
 
         let head = request(&fx.state, Request::builder().method("HEAD").uri(&uri)).await;
         assert_eq!(head.status(), StatusCode::OK);
+        assert_eq!(
+            head.headers().get(header::ETAG).unwrap().to_str().unwrap(),
+            etag
+        );
         assert!(empty(head).await);
+
+        let cached = request(
+            &fx.state,
+            Request::builder()
+                .uri(&uri)
+                .header(header::IF_NONE_MATCH, &etag),
+        )
+        .await;
+        assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            cached
+                .headers()
+                .get(header::ETAG)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            etag
+        );
+        assert_eq!(
+            cached
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "public, max-age=31536000, immutable"
+        );
+        assert!(empty(cached).await);
+
+        let cover_path = fx
+            .state
+            .cfg
+            .data_dir
+            .join("shows")
+            .join(fx.show_id.to_string())
+            .join("cover.jpg");
+        tokio::fs::write(&cover_path, b"\xff\xd8\xff\xe0a-larger-cover")
+            .await
+            .unwrap();
+        let changed = get(&fx.state, &uri).await;
+        assert_ne!(
+            changed
+                .headers()
+                .get(header::ETAG)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            etag
+        );
 
         for path in [
             "/cover/nope-1.jpg".to_string(),
@@ -750,12 +959,56 @@ mod tests {
             format!("/cover/{}-abc.jpg", fx.token),
             "/cover/../tube2pod.db".to_string(),
         ] {
-            let status = get(&fx.state, &path).await.status();
+            let response = get(&fx.state, &path).await;
             assert!(
-                matches!(status, StatusCode::NOT_FOUND | StatusCode::BAD_REQUEST),
-                "{path} returned {status}"
+                matches!(
+                    response.status(),
+                    StatusCode::NOT_FOUND | StatusCode::BAD_REQUEST
+                ),
+                "{path} returned {}",
+                response.status()
+            );
+            assert!(
+                response.headers().get(header::CACHE_CONTROL).is_none(),
+                "{path} cached an error"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rejects_symlinks_that_escape_data_dir() {
+        use std::os::unix::fs::symlink;
+
+        let fx = fixture().await;
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.bin");
+        tokio::fs::write(&secret, b"secret").await.unwrap();
+
+        let audio = fx
+            .state
+            .cfg
+            .data_dir
+            .join("audio")
+            .join(format!("{}-1.mp3", fx.uuid));
+        tokio::fs::remove_file(&audio).await.unwrap();
+        symlink(&secret, &audio).unwrap();
+        let response = get(&fx.state, &format!("/audio/{}/{}-1.mp3", fx.token, fx.uuid)).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(response.headers().get(header::CACHE_CONTROL).is_none());
+
+        let cover = fx
+            .state
+            .cfg
+            .data_dir
+            .join("shows")
+            .join(fx.show_id.to_string())
+            .join("cover.jpg");
+        tokio::fs::remove_file(&cover).await.unwrap();
+        symlink(&secret, &cover).unwrap();
+        let response = get(&fx.state, &format!("/cover/{}-1.jpg", fx.token)).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(response.headers().get(header::CACHE_CONTROL).is_none());
     }
 
     #[tokio::test]

@@ -28,7 +28,7 @@
   <section class="stack">
     <div class="card">
       {% if audio_url.is_some() %}
-      <audio controls preload="metadata" src="{{ audio_url.as_deref().unwrap_or_default() }}" style="width:100%" aria-label="Audio tập {{ episode.source_title }}"></audio>
+      <audio controls preload="metadata" src="/episodes/{{ episode.uuid }}/audio" style="width:100%" aria-label="Audio tập {{ episode.source_title }}"></audio>
       {% else %}
       <div class="empty">Audio chưa sẵn sàng.</div>
       {% endif %}

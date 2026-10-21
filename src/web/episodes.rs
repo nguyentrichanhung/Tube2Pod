@@ -6,14 +6,15 @@ use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
 use crate::web::shows::purge_episode_files;
 use askama::Template;
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
 use axum::response::{Html, IntoResponse, Json, Redirect, Response};
 use axum::Extension;
 use axum::Form;
 use serde::Deserialize;
 use serde_json::json;
+use std::path::PathBuf;
 
 #[derive(Template)]
 #[template(path = "episode.html")]
@@ -80,6 +81,28 @@ pub async fn detail(
         }
         .render()?,
     ))
+}
+
+pub async fn audio(
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+    request: Request<Body>,
+) -> AppResult<Response> {
+    let episode = episodes::get(&state.pool, &uuid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let path = episode.audio_path.ok_or(AppError::NotFound)?;
+    let mut response =
+        crate::web::public::serve_contained(&state, PathBuf::from(path), request).await?;
+    if matches!(
+        response.status(),
+        StatusCode::OK | StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED
+    ) {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    Ok(response)
 }
 
 pub async fn update_summary(
@@ -464,6 +487,112 @@ mod tests {
 
         let missing = get(&context, "/episodes/does-not-exist").await;
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn admin_audio_serves_ready_audio_even_when_the_feed_is_disabled() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        set_status(&context, &episode.uuid, status::READY, stage::READY).await;
+
+        let audio_dir = context.state.cfg.data_dir.join("audio");
+        tokio::fs::create_dir_all(&audio_dir).await.unwrap();
+        let audio_path = audio_dir.join(format!("{}-1.mp3", episode.uuid));
+        tokio::fs::write(&audio_path, b"ID3fake-mp3").await.unwrap();
+        episodes::set_audio(
+            &context.state.pool,
+            &episode.uuid,
+            &audio_path.display().to_string(),
+            11,
+            600,
+            "hash",
+            1,
+        )
+        .await
+        .unwrap();
+
+        let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
+        assert!(html.contains(&format!("src=\"/episodes/{}/audio\"", episode.uuid)));
+        assert!(html.contains(&format!(
+            "https://pod.example.ts.net:8443/feed/{}.xml",
+            show.feed_token
+        )));
+        assert!(!show.feed_enabled);
+
+        let response = get(&context, &format!("/episodes/{}/audio", episode.uuid)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "audio/mpeg"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "no-store"
+        );
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(&bytes[..], b"ID3fake-mp3");
+
+        let ranged = send(
+            &context,
+            Method::GET,
+            &format!("/episodes/{}/audio", episode.uuid),
+            None,
+            &[("range", "bytes=0-3")],
+        )
+        .await;
+        assert_eq!(ranged.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            ranged
+                .headers()
+                .get(header::CONTENT_RANGE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "bytes 0-3/11"
+        );
+        let bytes = to_bytes(ranged.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(&bytes[..], b"ID3f");
+
+        let head = send(
+            &context,
+            Method::HEAD,
+            &format!("/episodes/{}/audio", episode.uuid),
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(head.status(), StatusCode::OK);
+        assert_eq!(
+            head.headers()
+                .get(header::CONTENT_LENGTH)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "11"
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_audio_unknown_episode_or_missing_audio_is_404() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let no_audio = create_episode(&context, show.id, "Chưa có audio").await;
+
+        for uuid in [&no_audio.uuid, "does-not-exist"] {
+            let response = get(&context, &format!("/episodes/{uuid}/audio")).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
     }
 
     #[tokio::test]
