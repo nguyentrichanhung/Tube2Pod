@@ -1279,7 +1279,8 @@ mod tests {
         let html = body(active).await;
         assert!(html.contains("Đang tạo audio"));
         assert!(html.contains("67%"));
-        assert!(html.contains("hx-trigger=\"load, every 2s\""));
+        assert!(html.contains("hx-trigger=\"every 2s\""));
+        assert!(html.contains("aria-live=\"polite\""));
 
         crate::db::episodes::finish(&context.state.pool, &episode.uuid, "ready", "ready", false)
             .await

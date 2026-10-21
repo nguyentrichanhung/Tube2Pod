@@ -1,5 +1,5 @@
-<div id="progress-card" class="card stack"
-     {% if progress_active %}hx-get="/episodes/{{ episode.uuid }}/progress" hx-trigger="load, every 2s" hx-swap="outerHTML"{% endif %}>
+<div id="progress-card" class="card stack" aria-live="polite"
+     {% if progress_active %}hx-get="/episodes/{{ episode.uuid }}/progress" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
   <h2>Tiến trình</h2>
   {% include "partials/progress.html" %}
 </div>

@@ -10,7 +10,8 @@
     {% if episode.status == "published" %}<span class="pill ok">Đã đăng</span>
     {% else if episode.status == "ready" %}<span class="pill">Sẵn sàng</span>
     {% else if episode.status == "failed" %}<span class="pill err">Lỗi</span>
-    {% else %}<span class="pill">{{ episode.stage }}</span>{% endif %}
+    {% else if episode.is_active() %}<span class="pill">{{ episode.stage_label() }}</span>
+    {% else %}<span class="pill">{{ episode.status_label() }}</span>{% endif %}
   </div>
 </div>
 
