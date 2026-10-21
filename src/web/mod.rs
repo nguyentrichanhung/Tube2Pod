@@ -47,6 +47,8 @@ pub fn admin_router(state: AppState) -> Router {
                 .patch(shows::update)
                 .delete(shows::delete),
         )
+        .route("/shows/{id}/edit", post(shows::update))
+        .route("/shows/{id}/delete", post(shows::delete))
         .route(
             "/shows/{id}/cover",
             post(shows::upload_cover)

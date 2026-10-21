@@ -22,7 +22,7 @@
 <div class="grid two">
   <section class="card">
     <h2>Thông tin show</h2>
-    <form method="post" action="/shows/{{ show.id }}" hx-patch="/shows/{{ show.id }}" class="stack">
+    <form method="post" action="/shows/{{ show.id }}/edit" hx-patch="/shows/{{ show.id }}" class="stack">
       <input type="hidden" name="_csrf" value="{{ csrf }}">
       <label>Tên show<input name="title" value="{{ show.title }}" required></label>
       <label>Tác giả<input name="author" value="{{ show.author }}"></label>
@@ -65,7 +65,7 @@
     <section class="card">
       <h2 style="color:var(--danger)">Xoá show</h2>
       <p class="muted">Xoá vĩnh viễn show, tập và audio. Gõ đúng tên show để xác nhận.</p>
-      <form method="post" action="/shows/{{ show.id }}" hx-delete="/shows/{{ show.id }}" class="stack"
+      <form method="post" action="/shows/{{ show.id }}/delete" hx-delete="/shows/{{ show.id }}" class="stack"
             hx-confirm="Xoá show này và toàn bộ tập?">
         <input type="hidden" name="_csrf" value="{{ csrf }}">
         <input name="confirm_title" placeholder="{{ show.title }}" required>
@@ -108,7 +108,7 @@
     </form>
     <h2 style="color:var(--danger)">Đổi feed token</h2>
     <p class="muted">Token cũ mất hiệu lực ngay. Người đăng ký phải thêm lại feed URL mới.</p>
-    <form method="post" action="/shows/{{ show.id }}/feed/rotate" class="stack" hx-confirm="Đổi token sẽ làm hỏng feed cũ. Tiếp tục?">
+    <form method="post" action="/shows/{{ show.id }}/feed/rotate" hx-post="/shows/{{ show.id }}/feed/rotate" class="stack" hx-confirm="Đổi token sẽ làm hỏng feed cũ. Tiếp tục?">
       <input type="hidden" name="_csrf" value="{{ csrf }}">
       <input name="confirm_title" placeholder="{{ show.title }}" required>
       <button class="danger" type="submit">Đổi token</button>

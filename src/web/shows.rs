@@ -7,8 +7,8 @@ use crate::web::csrf::{self, CsrfToken};
 use crate::web::library::LibraryRow;
 use askama::Template;
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::HeaderMap;
-use axum::response::{Html, Redirect};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::Extension;
 use axum::Form;
 use serde::Deserialize;
@@ -157,9 +157,10 @@ pub async fn index(
 pub async fn create(
     State(state): State<AppState>,
     Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
     Form(form): Form<CreateShowForm>,
-) -> AppResult<Redirect> {
-    csrf::verify(&token, &Default::default(), &form._csrf)?;
+) -> AppResult<Response> {
+    csrf::verify(&token, &headers, &form._csrf)?;
     validate_language(&form.language)?;
     if form.title.trim().is_empty() {
         return Err(AppError::BadRequest("Tên show là bắt buộc.".into()));
@@ -202,7 +203,10 @@ pub async fn create(
         false,
     )
     .await?;
-    Ok(Redirect::to(&format!("/shows/{id}", id = show.id)))
+    Ok(redirect_response(
+        &headers,
+        &format!("/shows/{id}", id = show.id),
+    ))
 }
 
 pub async fn detail(
@@ -251,16 +255,20 @@ pub async fn detail(
 pub async fn update(
     State(state): State<AppState>,
     Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<ShowEditForm>,
-) -> AppResult<Redirect> {
-    csrf::verify(&token, &Default::default(), &form._csrf)?;
+) -> AppResult<Response> {
+    csrf::verify(&token, &headers, &form._csrf)?;
     validate_language(&form.language)?;
+    if form.title.trim().is_empty() {
+        return Err(AppError::BadRequest("Tên show là bắt buộc.".into()));
+    }
     let current = shows::get(&state.pool, id)
         .await?
         .ok_or(AppError::NotFound)?;
     let title_changed = current.title != form.title.trim();
-    let updated = shows::update(
+    let mut updated = shows::update(
         &state.pool,
         id,
         shows::ShowPatch {
@@ -289,7 +297,7 @@ pub async fn update(
             .join("cover.jpg");
         tokio::fs::create_dir_all(path.parent().unwrap()).await?;
         tokio::fs::write(&path, bytes).await?;
-        shows::set_cover(
+        updated = shows::set_cover(
             &state.pool,
             updated.id,
             &path.display().to_string(),
@@ -298,7 +306,13 @@ pub async fn update(
         )
         .await?;
     }
-    Ok(Redirect::to(&format!("/shows/{id}?tab=info")))
+    if updated.feed_enabled && !updated.feed_complete() {
+        shows::set_feed_enabled(&state.pool, updated.id, false).await?;
+    }
+    Ok(redirect_response(
+        &headers,
+        &format!("/shows/{id}?tab=info"),
+    ))
 }
 
 pub async fn upload_cover(
@@ -307,7 +321,7 @@ pub async fn upload_cover(
     headers: HeaderMap,
     Path(id): Path<i64>,
     mut multipart: Multipart,
-) -> AppResult<Redirect> {
+) -> AppResult<Response> {
     let show = shows::get(&state.pool, id)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -356,16 +370,20 @@ pub async fn upload_cover(
         true,
     )
     .await?;
-    Ok(Redirect::to(&format!("/shows/{id}?tab=info")))
+    Ok(redirect_response(
+        &headers,
+        &format!("/shows/{id}?tab=info"),
+    ))
 }
 
 pub async fn toggle_feed(
     State(state): State<AppState>,
     Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<FeedToggleForm>,
-) -> AppResult<Redirect> {
-    csrf::verify(&token, &Default::default(), &form._csrf)?;
+) -> AppResult<Response> {
+    csrf::verify(&token, &headers, &form._csrf)?;
     let show = shows::get(&state.pool, id)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -376,16 +394,20 @@ pub async fn toggle_feed(
         ));
     }
     shows::set_feed_enabled(&state.pool, show.id, enabled).await?;
-    Ok(Redirect::to(&format!("/shows/{id}?tab=feed")))
+    Ok(redirect_response(
+        &headers,
+        &format!("/shows/{id}?tab=feed"),
+    ))
 }
 
 pub async fn rotate_feed(
     State(state): State<AppState>,
     Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<ConfirmForm>,
-) -> AppResult<Redirect> {
-    csrf::verify(&token, &Default::default(), &form._csrf)?;
+) -> AppResult<Response> {
+    csrf::verify(&token, &headers, &form._csrf)?;
     let show = shows::get(&state.pool, id)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -393,28 +415,36 @@ pub async fn rotate_feed(
         return Err(AppError::BadRequest("Tên show xác nhận không khớp.".into()));
     }
     shows::rotate_feed_token(&state.pool, id).await?;
-    Ok(Redirect::to(&format!("/shows/{id}?tab=feed")))
+    Ok(redirect_response(
+        &headers,
+        &format!("/shows/{id}?tab=feed"),
+    ))
 }
 
 pub async fn publish_ready(
     State(state): State<AppState>,
     Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<ConfirmForm>,
-) -> AppResult<Redirect> {
-    csrf::verify(&token, &Default::default(), &form._csrf)?;
+) -> AppResult<Response> {
+    csrf::verify(&token, &headers, &form._csrf)?;
     episodes::publish_ready(&state.pool, id).await?;
     state.notify.notify_one();
-    Ok(Redirect::to(&format!("/shows/{id}?tab=feed")))
+    Ok(redirect_response(
+        &headers,
+        &format!("/shows/{id}?tab=feed"),
+    ))
 }
 
 pub async fn delete(
     State(state): State<AppState>,
     Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<ConfirmForm>,
-) -> AppResult<Redirect> {
-    csrf::verify(&token, &Default::default(), &form._csrf)?;
+) -> AppResult<Response> {
+    csrf::verify(&token, &headers, &form._csrf)?;
     let show = shows::get(&state.pool, id)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -448,7 +478,7 @@ pub async fn delete(
     }
     shows::delete(&state.pool, id).await?;
     let _ = tokio::fs::remove_dir_all(state.cfg.data_dir.join("shows").join(id.to_string())).await;
-    Ok(Redirect::to("/shows"))
+    Ok(redirect_response(&headers, "/shows"))
 }
 
 pub async fn purge_episode_files(data_dir: &std::path::Path, episode: &Episode) {
@@ -470,6 +500,25 @@ pub async fn purge_episode_files(data_dir: &std::path::Path, episode: &Episode) 
                 let _ = tokio::fs::remove_file(entry.path()).await;
             }
         }
+    }
+}
+
+fn is_htmx(headers: &HeaderMap) -> bool {
+    headers
+        .get("hx-request")
+        .and_then(|value| value.to_str().ok())
+        == Some("true")
+}
+
+fn redirect_response(headers: &HeaderMap, location: &str) -> Response {
+    if is_htmx(headers) {
+        let mut response = StatusCode::OK.into_response();
+        let value =
+            HeaderValue::from_str(location).unwrap_or_else(|_| HeaderValue::from_static("/"));
+        response.headers_mut().insert("hx-redirect", value);
+        response
+    } else {
+        Redirect::to(location).into_response()
     }
 }
 
@@ -580,11 +629,25 @@ mod tests {
         content_type: &str,
         body: Vec<u8>,
     ) -> axum::response::Response {
-        let request = Request::builder()
+        send_with_headers(context, method, path, content_type, body, &[]).await
+    }
+
+    async fn send_with_headers(
+        context: &Ctx,
+        method: Method,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+        extra_headers: &[(&str, &str)],
+    ) -> axum::response::Response {
+        let mut request = Request::builder()
             .method(method)
             .uri(path)
             .header(header::CONTENT_TYPE, content_type)
             .header(header::COOKIE, format!("t2p_csrf={TOKEN}"));
+        for (key, value) in extra_headers {
+            request = request.header(*key, *value);
+        }
         crate::web::admin_router(context.state.clone())
             .oneshot(request.body(Body::from(body)).unwrap())
             .await
@@ -603,18 +666,38 @@ mod tests {
     }
 
     fn edit_form(title: &str) -> String {
+        edit_form_with(title, "Mô tả", "Technology", "Owner", "owner@example.com")
+    }
+
+    fn edit_form_with(
+        title: &str,
+        description: &str,
+        category: &str,
+        owner_name: &str,
+        owner_email: &str,
+    ) -> String {
         form(&[
             ("_csrf", TOKEN),
             ("title", title),
             ("author", "Author"),
-            ("description", "Mô tả"),
+            ("description", description),
             ("language", "vi"),
             ("website_url", ""),
-            ("category", "Technology"),
-            ("owner_name", "Owner"),
-            ("owner_email", "owner@example.com"),
+            ("category", category),
+            ("owner_name", owner_name),
+            ("owner_email", owner_email),
             ("default_minutes", "10"),
         ])
+    }
+
+    fn multipart_cover_body(boundary: &str, token: &str, file: &[u8]) -> Vec<u8> {
+        let mut body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"_csrf\"\r\n\r\n{token}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"cover\"; filename=\"cover.png\"\r\nContent-Type: image/png\r\n\r\n"
+        )
+        .into_bytes();
+        body.extend_from_slice(file);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        body
     }
 
     #[test]
@@ -925,6 +1008,212 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn htmx_writes_return_hx_redirect_without_swapping_the_page() {
+        let context = ctx().await;
+        let show = complete_show(&context, "Tên cũ").await;
+
+        let updated = send_with_headers(
+            &context,
+            Method::PATCH,
+            &format!("/shows/{}", show.id),
+            "application/x-www-form-urlencoded",
+            edit_form("Tên mới").into_bytes(),
+            &[("hx-request", "true")],
+        )
+        .await;
+        assert_eq!(updated.status(), StatusCode::OK);
+        assert!(updated.headers().get(header::LOCATION).is_none());
+        assert_eq!(
+            updated
+                .headers()
+                .get("hx-redirect")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            format!("/shows/{}?tab=info", show.id)
+        );
+        assert_eq!(
+            shows::get(&context.state.pool, show.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .title,
+            "Tên mới"
+        );
+
+        let deleted = send_with_headers(
+            &context,
+            Method::DELETE,
+            &format!("/shows/{}", show.id),
+            "application/x-www-form-urlencoded",
+            form(&[("_csrf", TOKEN), ("confirm_title", "Tên mới")]).into_bytes(),
+            &[("hx-request", "true")],
+        )
+        .await;
+        assert_eq!(deleted.status(), StatusCode::OK);
+        assert_eq!(
+            deleted
+                .headers()
+                .get("hx-redirect")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/shows"
+        );
+        assert!(shows::get(&context.state.pool, show.id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn post_fallback_routes_edit_and_delete_shows() {
+        let context = ctx().await;
+        let show = complete_show(&context, "Tên cũ").await;
+
+        let edited = post_form(
+            &context,
+            &format!("/shows/{}/edit", show.id),
+            edit_form("Tên mới"),
+        )
+        .await;
+        assert_eq!(edited.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            shows::get(&context.state.pool, show.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .title,
+            "Tên mới"
+        );
+
+        let deleted = post_form(
+            &context,
+            &format!("/shows/{}/delete", show.id),
+            form(&[("_csrf", TOKEN), ("confirm_title", "Tên mới")]),
+        )
+        .await;
+        assert_eq!(deleted.status(), StatusCode::SEE_OTHER);
+        assert!(shows::get(&context.state.pool, show.id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn editing_incomplete_fields_disables_an_enabled_feed() {
+        let context = ctx().await;
+        let show = complete_show(&context, "Show").await;
+        shows::set_feed_enabled(&context.state.pool, show.id, true)
+            .await
+            .unwrap();
+        shows::set_cover(&context.state.pool, show.id, "", false, false)
+            .await
+            .unwrap();
+
+        let response = send(
+            &context,
+            Method::PATCH,
+            &format!("/shows/{}", show.id),
+            "application/x-www-form-urlencoded",
+            edit_form_with("Show", "", "", "", "").into_bytes(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let updated = shows::get(&context.state.pool, show.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!updated.feed_complete());
+        assert!(!updated.feed_enabled);
+    }
+
+    #[tokio::test]
+    async fn update_rejects_a_blank_title() {
+        let context = ctx().await;
+        let show = complete_show(&context, "Tên gốc").await;
+
+        let response = send(
+            &context,
+            Method::PATCH,
+            &format!("/shows/{}", show.id),
+            "application/x-www-form-urlencoded",
+            edit_form("   ").into_bytes(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            shows::get(&context.state.pool, show.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .title,
+            "Tên gốc"
+        );
+    }
+
+    #[tokio::test]
+    async fn form_writes_reject_cross_site_requests() {
+        let context = ctx().await;
+        let show = complete_show(&context, "Tên gốc").await;
+
+        let response = send_with_headers(
+            &context,
+            Method::PATCH,
+            &format!("/shows/{}", show.id),
+            "application/x-www-form-urlencoded",
+            edit_form("Tên bị đổi").into_bytes(),
+            &[("sec-fetch-site", "cross-site")],
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            shows::get(&context.state.pool, show.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .title,
+            "Tên gốc"
+        );
+    }
+
+    #[tokio::test]
+    async fn cover_upload_rejects_a_bad_csrf_token() {
+        let context = ctx().await;
+        let show = shows::create(
+            &context.state.pool,
+            shows::NewShow {
+                title: "Show".into(),
+                ..shows::NewShow::default()
+            },
+        )
+        .await
+        .unwrap();
+        let boundary = "t2p-boundary";
+        let body = multipart_cover_body(boundary, "deadbeef", b"not an image");
+
+        let response = send(
+            &context,
+            Method::POST,
+            &format!("/shows/{}/cover", show.id),
+            &format!("multipart/form-data; boundary={boundary}"),
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let show = shows::get(&context.state.pool, show.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!show.cover_custom);
+        assert!(show.cover_path.is_none());
+    }
+
+    #[tokio::test]
     async fn cover_upload_normalizes_the_image_and_marks_it_custom() {
         let context = ctx().await;
         let show = shows::create(
@@ -942,12 +1231,7 @@ mod tests {
         image::DynamicImage::ImageRgb8(image)
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
-        let mut body = format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"_csrf\"\r\n\r\n{TOKEN}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"cover\"; filename=\"cover.png\"\r\nContent-Type: image/png\r\n\r\n"
-        )
-        .into_bytes();
-        body.extend_from_slice(&png);
-        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let body = multipart_cover_body(boundary, TOKEN, &png);
 
         let response = send(
             &context,
@@ -1038,6 +1322,22 @@ mod tests {
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("Email chủ sở hữu"));
         assert!(html.contains("Feed URL"));
+        assert!(html.contains(&format!("hx-post=\"/shows/{}/feed/rotate\"", show.id)));
+
+        let info = crate::web::admin_router(context.state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/shows/{}?tab=info", show.id))
+                    .header(header::COOKIE, format!("t2p_csrf={TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(info.into_body(), 1024 * 1024).await.unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains(&format!("action=\"/shows/{}/edit\"", show.id)));
+        assert!(html.contains(&format!("action=\"/shows/{}/delete\"", show.id)));
 
         let missing = crate::web::admin_router(context.state.clone())
             .oneshot(
