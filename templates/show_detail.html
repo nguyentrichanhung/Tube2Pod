@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row between">
+  <div>
+    <h1>{{ show.title }}</h1>
+    <div class="muted">{{ show.language }} · {{ show.category }} · {{ episode_count }} tập</div>
+  </div>
+  <a class="button" href="/?show={{ show.id }}">Tạo tập</a>
+</div>
+<nav class="tabs">
+  <a class="{% if tab == "episodes" %}active{% endif %}" href="/shows/{{ show.id }}?tab=episodes">Tập</a>
+  <a class="{% if tab == "info" %}active{% endif %}" href="/shows/{{ show.id }}?tab=info">Thông tin show</a>
+  <a class="{% if tab == "feed" %}active{% endif %}" href="/shows/{{ show.id }}?tab=feed">Feed &amp; Apple Podcasts</a>
+</nav>
+
+{% if tab == "episodes" %}
+<section class="card">
+  {% include "partials/episode_rows.html" %}
+  <p><a href="/library?show_id={{ show.id }}">Xem trong Thư viện</a></p>
+</section>
+{% else if tab == "info" %}
+<div class="grid two">
+  <section class="card">
+    <h2>Thông tin show</h2>
+    <form method="post" action="/shows/{{ show.id }}/edit" hx-patch="/shows/{{ show.id }}" class="stack">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <label>Tên show<input name="title" value="{{ show.title }}" required></label>
+      <label>Tác giả<input name="author" value="{{ show.author }}"></label>
+      <label>Mô tả<textarea name="description">{{ show.description }}</textarea></label>
+      <label>Ngôn ngữ
+        <select name="language">
+          <option value="vi" {% if show.language == "vi" %}selected{% endif %}>Tiếng Việt</option>
+          <option value="en" {% if show.language == "en" %}selected{% endif %}>English</option>
+          <option value="ko" {% if show.language == "ko" %}selected{% endif %}>한국어</option>
+        </select>
+      </label>
+      <label>Website<input name="website_url" value="{{ show.website_url }}" placeholder="https://..."></label>
+      <label>Danh mục<input name="category" value="{{ show.category }}"></label>
+      <label>Tên chủ sở hữu<input name="owner_name" value="{{ show.owner_name }}"></label>
+      <label>Email chủ sở hữu<input type="email" name="owner_email" value="{{ show.owner_email }}"></label>
+      <label>Thời lượng mặc định
+        <select name="default_minutes">
+          <option value="5" {% if show.default_minutes == 5 %}selected{% endif %}>5</option>
+          <option value="10" {% if show.default_minutes == 10 %}selected{% endif %}>10</option>
+          <option value="15" {% if show.default_minutes == 15 %}selected{% endif %}>15</option>
+          <option value="20" {% if show.default_minutes == 20 %}selected{% endif %}>20</option>
+        </select>
+      </label>
+      <label class="row"><input type="checkbox" name="explicit" value="on" {% if show.explicit %}checked{% endif %} style="width:auto"> Nội dung explicit</label>
+      <label class="row"><input type="checkbox" name="auto_publish" value="on" {% if show.auto_publish %}checked{% endif %} style="width:auto"> Tự phát hành khi feed bật</label>
+      <button type="submit">Lưu thông tin</button>
+    </form>
+  </section>
+  <aside class="stack">
+    <section class="card">
+      <h2>Ảnh bìa</h2>
+      <img class="cover" src="{{ cover_url }}" alt="Bìa {{ show.title }}">
+      <form method="post" action="/shows/{{ show.id }}/cover" enctype="multipart/form-data" class="stack" hx-headers='{"X-CSRF-Token":"{{ csrf }}"}'>
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <input type="file" name="cover" accept="image/jpeg,image/png,image/webp" required>
+        <button type="submit">Tải ảnh bìa</button>
+      </form>
+      <p class="muted">Ảnh vuông 1400–3000 px, tối đa 10 MB; ảnh được chuyển thành JPEG 3000×3000.</p>
+    </section>
+    <section class="card">
+      <h2 style="color:var(--danger)">Xoá show</h2>
+      <p class="muted">Xoá vĩnh viễn show, tập và audio. Gõ đúng tên show để xác nhận.</p>
+      <form method="post" action="/shows/{{ show.id }}/delete" hx-post="/shows/{{ show.id }}/delete" class="stack"
+            hx-confirm="Xoá show này và toàn bộ tập?">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <input name="confirm_title" placeholder="{{ show.title }}" required>
+        <button class="danger" type="submit">Xoá show</button>
+      </form>
+    </section>
+  </aside>
+</div>
+{% else %}
+<div class="grid two">
+  <section class="card stack">
+    <h2>Feed URL</h2>
+    <input readonly value="{{ feed_url }}" aria-label="Feed URL">
+    <div class="row">
+      <button type="button" onclick="navigator.clipboard.writeText('{{ feed_url }}')">Copy feed URL</button>
+      {% if show.feed_enabled %}
+      <form method="post" action="/shows/{{ show.id }}/feed/toggle">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <button class="secondary" type="submit">Tắt feed</button>
+      </form>
+      {% else %}
+      <form method="post" action="/shows/{{ show.id }}/feed/toggle">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <input type="hidden" name="enabled" value="on">
+        <button type="submit" {% if !can_enable %}disabled{% endif %}>Bật feed</button>
+      </form>
+      {% endif %}
+    </div>
+    <h2>Checklist</h2>
+    <div class="stack">
+      {% for item in checklist %}
+      <div class="row between"><span>{{ item.label }}</span>{% if item.ok %}<span class="pill ok">Đủ</span>{% else %}<span class="pill err">Thiếu</span>{% endif %}</div>
+      {% endfor %}
+    </div>
+    <p class="muted">Feed chỉ trả về 200 khi đã bật và checklist đầy đủ. Tập đang “Sẵn sàng” có thể phát hành thủ công.</p>
+    <form method="post" action="/shows/{{ show.id }}/publish-ready">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <input type="hidden" name="confirm_title" value="{{ show.title }}">
+      <button class="secondary" type="submit">Phát hành tất cả tập đang sẵn sàng</button>
+    </form>
+    <h2 style="color:var(--danger)">Đổi feed token</h2>
+    <p class="muted">Token cũ mất hiệu lực ngay. Người đăng ký phải thêm lại feed URL mới.</p>
+    <form method="post" action="/shows/{{ show.id }}/feed/rotate" hx-post="/shows/{{ show.id }}/feed/rotate" class="stack" hx-confirm="Đổi token sẽ làm hỏng feed cũ. Tiếp tục?">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <input name="confirm_title" placeholder="{{ show.title }}" required>
+      <button class="danger" type="submit">Đổi token</button>
+    </form>
+  </section>
+  <aside class="card stack">
+    <h2>Apple Podcasts</h2>
+    <ol>
+      <li>Mở Apple Podcasts Connect.</li>
+      <li>Chọn “Add Show” → “Add by URL”.</li>
+      <li>Dán feed URL ở trên.</li>
+    </ol>
+    <p class="muted">Apple không có API công khai để submit feed. Apple có thể mất vài giờ hoặc vài ngày để làm mới. Đổi token sẽ làm hỏng subscription hiện có.</p>
+    <p class="muted">Tube2Pod không gửi feed đến Apple và không tạo deep link giả.</p>
+  </aside>
+</div>
+{% endif %}
+{% endblock %}

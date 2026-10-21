@@ -1,0 +1,9 @@
+{
+  "events": [
+    { "tStartMs": 0, "dDurationMs": 2000, "segs": [{ "utf8": "Xin chào các bạn." }] },
+    { "tStartMs": 2000, "dDurationMs": 1000, "segs": [{ "utf8": "Xin chào các bạn.", "aAppend": 1 }] },
+    { "tStartMs": 3000, "dDurationMs": 2500, "segs": [{ "utf8": "Hôm nay chúng ta nói về Rust." }] },
+    { "tStartMs": 5500, "dDurationMs": 2000, "segs": [{ "utf8": "Chúng ta sẽ xem ví dụ." }] },
+    { "tStartMs": 7500, "dDurationMs": 2000, "segs": [{ "utf8": "[Music]" }] }
+  ]
+}

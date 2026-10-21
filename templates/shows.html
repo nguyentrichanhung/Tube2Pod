@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row between">
+  <div><h1>Show</h1><p class="muted">Mỗi show có một feed podcast riêng.</p></div>
+</div>
+<div class="grid two">
+  <section class="stack">
+    {% if cards.is_empty() %}
+    <div class="card empty">Tạo show đầu tiên để bắt đầu.</div>
+    {% else %}
+    <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));">
+      {% for card in cards %}
+      <article class="card stack">
+        <div class="cover" aria-label="Bìa {{ card.show.title }}" style="display:grid;place-items:center;background:#e9d8c3;font:700 3rem Georgia,serif;">{{ card.show.title }}</div>
+        <div class="row between">
+          <h2 style="margin:0"><a href="/shows/{{ card.show.id }}">{{ card.show.title }}</a></h2>
+          {% if card.show.feed_enabled %}<span class="pill ok">Feed bật</span>{% else %}<span class="pill">Feed tắt</span>{% endif %}
+        </div>
+        <div class="muted">{{ card.episode_count }} tập · {{ card.show.language }}</div>
+        {% if card.last_episode.is_some() %}<div class="muted">Mới nhất: {{ card.last_episode.as_deref().unwrap_or_default() }}</div>{% endif %}
+        <div class="row">
+          <a class="button secondary" href="/?show={{ card.show.id }}">Tạo tập</a>
+          <a class="button secondary" href="/shows/{{ card.show.id }}?tab=feed">Feed</a>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+  <aside class="card">
+    <h2>Tạo show mới</h2>
+    <form method="post" action="/shows" class="stack">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <label>Tên show<input name="title" required></label>
+      <label>Mô tả<textarea name="description" required></textarea></label>
+      <label>Ngôn ngữ
+        <select name="language"><option value="vi">Tiếng Việt</option><option value="en">English</option><option value="ko">한국어</option></select>
+      </label>
+      <label>Danh mục
+        <select name="category">
+          <option>Technology</option><option>Business</option><option>Education</option><option>News</option><option>Society &amp; Culture</option><option>Science</option><option>Arts</option><option>Health &amp; Fitness</option>
+        </select>
+      </label>
+      <label>Thời lượng mặc định
+        <select name="default_minutes"><option>5</option><option selected>10</option><option>15</option><option>20</option></select>
+      </label>
+      <button type="submit">Tạo show</button>
+    </form>
+  </aside>
+</div>
+{% endblock %}

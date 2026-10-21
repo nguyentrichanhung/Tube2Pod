@@ -1,0 +1,11 @@
+<div class="card">
+  <h3>{{ title }}</h3>
+  {% if !channel.is_empty() %}
+  <p class="muted">{{ channel }}</p>
+  {% endif %}
+  <p class="muted">Thời lượng: {{ duration }} · Ngôn ngữ: {{ language }}</p>
+  <p class="muted">{% if has_captions %}Có phụ đề{% else %}Không có phụ đề{% endif %}</p>
+  {% if has_thumbnail %}
+  <a href="{{ thumbnail }}" target="_blank" rel="noopener noreferrer">Ảnh thu nhỏ</a>
+  {% endif %}
+</div>

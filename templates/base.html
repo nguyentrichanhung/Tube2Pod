@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf }}">
+  <title>Tube2Pod</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body hx-headers='{"X-CSRF-Token":"{{ csrf }}"}'>
+  <header class="topbar">
+    <a class="brand" href="/">Tube2Pod</a>
+    <nav aria-label="Điều hướng chính">
+      <a href="/">Tạo tập</a>
+      <a href="/library">Thư viện</a>
+      <a href="/shows">Show</a>
+      <a href="/settings">Cài đặt</a>
+    </nav>
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="foot">
+    <span>Bạn chịu trách nhiệm về quyền sử dụng nội dung nguồn.</span>
+    <span>Tube2Pod</span>
+  </footer>
+  <script src="/assets/htmx.min.js" defer></script>
+</body>
+</html>

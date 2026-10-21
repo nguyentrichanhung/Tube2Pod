@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row between">
+  <div>
+    <h1>Tạo tập mới</h1>
+    <p class="muted">Dán link YouTube, chọn show và thời lượng. Tube2Pod sẽ tải phụ đề, tóm tắt và đọc thành podcast.</p>
+  </div>
+</div>
+<div class="grid two">
+  <section class="card">
+    <form method="post" action="/episodes" class="stack" hx-boost="false">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <label>Link YouTube
+        <input name="url" type="url" required placeholder="https://www.youtube.com/watch?v=..."
+               hx-post="/api/preview" hx-target="#preview" hx-trigger="keyup changed delay:600ms"
+               hx-include="closest form">
+      </label>
+      <div id="preview" class="notice">Preview sẽ xuất hiện sau khi dán link.</div>
+      <label>Show
+        <select name="show_id" required>
+          {% for show in shows %}
+          <option value="{{ show.id }}" {% if selected_show == Some(show.id.clone()) %}selected{% endif %}>{{ show.title }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% if shows.is_empty() %}
+      <p class="error">Chưa có show. <a href="/shows">Tạo show đầu tiên</a>.</p>
+      {% endif %}
+      <fieldset>
+        <legend>Thời lượng</legend>
+        <div class="row">
+          {% for minutes in [5, 10, 15, 20] %}
+          <label class="pill"><input type="radio" name="minutes" value="{{ minutes }}" {% if minutes.clone() == 10 %}checked{% endif %}> {{ minutes }} phút</label>
+          {% endfor %}
+        </div>
+      </fieldset>
+      <button type="submit" {% if shows.is_empty() %}disabled{% endif %}>Tạo tập</button>
+    </form>
+  </section>
+  <aside class="stack">
+    <section class="card">
+      <div class="row between"><h2>Hàng đợi</h2><span class="muted">tự cập nhật</span></div>
+      <div hx-get="/api/queue" hx-trigger="load, every 2s" hx-swap="innerHTML">
+        <div class="empty">Đang tải…</div>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Tập gần đây</h2>
+      {% if recent.is_empty() %}
+      <div class="empty">Dán link YouTube để bắt đầu.</div>
+      {% else %}
+      <div class="stack">
+        {% for episode in recent %}
+        <a href="/episodes/{{ episode.uuid }}">{{ episode.source_title }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </section>
+  </aside>
+</div>
+{% endblock %}

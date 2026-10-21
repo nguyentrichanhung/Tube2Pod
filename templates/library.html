@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row between">
+  <div><h1>Thư viện</h1><p class="muted">Tất cả tập từ mọi show, mới nhất trước.</p></div>
+  <a class="button" href="/">Tạo tập</a>
+</div>
+<form class="card row" method="get" action="/library"
+      hx-get="/api/library/rows" hx-target="#rows" hx-trigger="change, keyup changed delay:400ms" hx-include="closest form">
+  <label>Show
+    <select name="show_id">
+      <option value="">Tất cả show</option>
+      {% for show in shows %}
+      <option value="{{ show.id }}" {% if selected_show == Some(show.id.clone()) %}selected{% endif %}>{{ show.title }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Trạng thái
+    <select name="status">
+      <option value="">Tất cả</option>
+      {% for status in ["queued", "running", "ready", "published", "failed", "cancelled"] %}
+      <option value="{{ status }}" {% if self.status_selected(status) %}selected{% endif %}>{{ status }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Tìm kiếm
+    <input name="q" value="{{ query }}" placeholder="Tên video hoặc kênh">
+  </label>
+</form>
+<section class="card" id="rows">
+  {% include "partials/episode_rows.html" %}
+</section>
+{% endblock %}
