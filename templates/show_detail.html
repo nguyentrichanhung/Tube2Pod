@@ -10,6 +10,7 @@
 <nav class="tabs">
   <a class="{% if tab == "episodes" %}active{% endif %}" href="/shows/{{ show.id }}?tab=episodes">Tập</a>
   <a class="{% if tab == "info" %}active{% endif %}" href="/shows/{{ show.id }}?tab=info">Thông tin show</a>
+  <a class="{% if tab == "voices" %}active{% endif %}" href="/shows/{{ show.id }}?tab=voices">Giọng đọc</a>
   <a class="{% if tab == "feed" %}active{% endif %}" href="/shows/{{ show.id }}?tab=feed">Feed &amp; Apple Podcasts</a>
 </nav>
 
@@ -72,6 +73,17 @@
     </section>
   </aside>
 </div>
+{% else if tab == "voices" %}
+<section class="card stack">
+  <h2>Giọng đọc theo ngôn ngữ</h2>
+  {% for row in voice_rows %}
+  <div class="voice-row">
+    <div><strong>{{ row.language_label }}</strong><div class="muted">{{ row.voice_name.as_deref().unwrap_or("Chưa chọn giọng") }}</div></div>
+    <button class="secondary" hx-get="/shows/{{ show.id }}/voices/{{ row.language }}" hx-target="#voice-picker" hx-swap="innerHTML">Chọn giọng</button>
+  </div>
+  {% endfor %}
+  <div id="voice-picker"></div>
+</section>
 {% else %}
 <div class="grid two">
   <section class="card stack">

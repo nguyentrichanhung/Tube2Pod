@@ -255,6 +255,16 @@ pub async fn get_voice(
     .await?)
 }
 
+pub async fn list_voices(pool: &SqlitePool, show_id: i64) -> AppResult<Vec<(String, i64, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT language, omnivoice_voice_id, voice_name
+         FROM show_voices WHERE show_id = ?1 ORDER BY language",
+    )
+    .bind(show_id)
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn delete_voice(pool: &SqlitePool, show_id: i64, language: &str) -> AppResult<()> {
     sqlx::query("DELETE FROM show_voices WHERE show_id = ?1 AND language = ?2")
         .bind(show_id)

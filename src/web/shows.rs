@@ -67,6 +67,12 @@ pub struct ShowsTemplate {
     cards: Vec<ShowCard>,
 }
 
+pub struct VoiceRow {
+    pub language: &'static str,
+    pub language_label: &'static str,
+    pub voice_name: Option<String>,
+}
+
 #[derive(Template)]
 #[template(path = "show_detail.html")]
 pub struct ShowDetailTemplate {
@@ -79,6 +85,7 @@ pub struct ShowDetailTemplate {
     can_enable: bool,
     feed_url: String,
     cover_url: String,
+    voice_rows: Vec<VoiceRow>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -228,6 +235,7 @@ pub async fn detail(
     let tab = match query.tab.as_deref() {
         Some("info") => "info",
         Some("feed") => "feed",
+        Some("voices") => "voices",
         _ => "episodes",
     };
     let episodes = episodes::list_for_show(&state.pool, id, 200).await?;
@@ -243,6 +251,18 @@ pub async fn detail(
     let cover_url = format!("/shows/{}/cover", show.id);
     let checklist = feed_checklist(&show);
     let can_enable = checklist.iter().all(|item| item.ok);
+    let selected = shows::list_voices(&state.pool, id).await?;
+    let voice_rows = [("vi", "Tiếng Việt"), ("en", "English"), ("ko", "한국어")]
+        .into_iter()
+        .map(|(language, language_label)| VoiceRow {
+            language,
+            language_label,
+            voice_name: selected
+                .iter()
+                .find(|(lang, _, _)| lang == language)
+                .map(|(_, _, name)| name.clone()),
+        })
+        .collect();
     Ok(Html(
         ShowDetailTemplate {
             csrf: token.0,
@@ -254,6 +274,7 @@ pub async fn detail(
             can_enable,
             feed_url,
             cover_url,
+            voice_rows,
         }
         .render()?,
     ))
@@ -576,7 +597,7 @@ fn is_htmx(headers: &HeaderMap) -> bool {
         == Some("true")
 }
 
-fn redirect_response(headers: &HeaderMap, location: &str) -> Response {
+pub(crate) fn redirect_response(headers: &HeaderMap, location: &str) -> Response {
     if is_htmx(headers) {
         let mut response = StatusCode::OK.into_response();
         let value =
