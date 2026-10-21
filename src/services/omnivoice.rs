@@ -244,22 +244,34 @@ impl OmnivoiceClient {
     }
 
     pub async fn download_mp3(&self, id: i64) -> AppResult<Vec<u8>> {
-        let response = self
-            .request(Method::GET, &format!("/api/speech/{id}/audio?format=mp3"))
-            .send()
-            .await
-            .map_err(|e| AppError::Upstream(e.to_string()))?;
-        if !response.status().is_success() {
-            return Err(AppError::Upstream(format!(
-                "Omnivoice audio HTTP {}",
-                response.status()
-            )));
+        let path = format!("/api/speech/{id}/audio?format=mp3");
+        let mut retried = false;
+        loop {
+            let response = self
+                .request(Method::GET, &path)
+                .send()
+                .await
+                .map_err(|e| AppError::Upstream(e.to_string()))?;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED
+                && !retried
+                && matches!(self.auth_mode, AuthMode::Password { .. })
+            {
+                self.login().await?;
+                retried = true;
+                continue;
+            }
+            if !response.status().is_success() {
+                return Err(AppError::Upstream(format!(
+                    "Omnivoice audio HTTP {}",
+                    response.status()
+                )));
+            }
+            return Ok(response
+                .bytes()
+                .await
+                .map_err(|e| AppError::Upstream(e.to_string()))?
+                .to_vec());
         }
-        Ok(response
-            .bytes()
-            .await
-            .map_err(|e| AppError::Upstream(e.to_string()))?
-            .to_vec())
     }
 
     pub async fn delete_speech(&self, id: i64) -> AppResult<()> {
@@ -277,7 +289,7 @@ impl OmnivoiceClient {
 mod tests {
     use super::*;
     use crate::config::{AuthMode, OmnivoiceConfig};
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{body_partial_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn cfg(base: &str) -> OmnivoiceConfig {
@@ -373,6 +385,123 @@ mod tests {
         let client = OmnivoiceClient::new(&cfg(&server.uri()));
         let error = client.list_voices().await.unwrap_err();
         assert!(error.to_string().contains("model is not loaded"));
+    }
+
+    fn password_cfg(base: &str) -> OmnivoiceConfig {
+        OmnivoiceConfig {
+            auth_mode: AuthMode::Password {
+                password: "s3cret".into(),
+            },
+            ..cfg(base)
+        }
+    }
+
+    #[tokio::test]
+    async fn password_login_posts_password_and_injects_cookie() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/auth/login"))
+            .and(header("x-requested-with", "omnivoice"))
+            .and(body_partial_json(serde_json::json!({"password": "s3cret"})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("set-cookie", "session=abc123; Path=/; HttpOnly"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/voices"))
+            .and(header("cookie", "session=abc123"))
+            .and(header("x-requested-with", "omnivoice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": [{"id": 7, "name": "Giọng vi", "status": "ready", "language": "vi"}],
+                "error": null
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = OmnivoiceClient::new(&password_cfg(&server.uri()));
+        client.login().await.unwrap();
+        let voices = client.list_voices().await.unwrap();
+        assert_eq!(voices[0].id, 7);
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn password_mode_retries_once_after_401() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/auth/login"))
+            .and(body_partial_json(serde_json::json!({"password": "s3cret"})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("set-cookie", "session=abc123; Path=/; HttpOnly"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/voices"))
+            .and(header("cookie", "session=abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": [{"id": 7, "name": "Giọng vi", "status": "ready", "language": "vi"}],
+                "error": null
+            })))
+            .with_priority(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/voices"))
+            .respond_with(ResponseTemplate::new(401))
+            .with_priority(5)
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = OmnivoiceClient::new(&password_cfg(&server.uri()));
+        let voices = client.list_voices().await.unwrap();
+        assert_eq!(voices[0].status, "ready");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn download_mp3_retries_once_after_401() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/auth/login"))
+            .and(body_partial_json(serde_json::json!({"password": "s3cret"})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("set-cookie", "session=abc123; Path=/; HttpOnly"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/speech/91/audio"))
+            .and(header("cookie", "session=abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"mp3-bytes".to_vec()))
+            .with_priority(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/speech/91/audio"))
+            .respond_with(ResponseTemplate::new(401))
+            .with_priority(5)
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = OmnivoiceClient::new(&password_cfg(&server.uri()));
+        let bytes = client.download_mp3(91).await.unwrap();
+        assert_eq!(bytes, b"mp3-bytes".to_vec());
+        server.verify().await;
     }
 
     #[tokio::test]
