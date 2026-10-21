@@ -1023,6 +1023,38 @@ mod tests {
         assert!(empty(head).await);
     }
 
+    #[tokio::test]
+    async fn public_router_does_not_expose_admin_routes() {
+        let fx = fixture().await;
+        for uri in ["/", "/settings", "/library", "/api/queue"] {
+            assert_eq!(
+                get(&fx.state, uri).await.status(),
+                StatusCode::NOT_FOUND,
+                "{uri} leaked onto the public listener"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_router_does_not_expose_public_routes() {
+        let fx = fixture().await;
+        for uri in [
+            format!("/feed/{}.xml", fx.token),
+            format!("/audio/{}/{}-1.mp3", fx.token, fx.uuid),
+            format!("/cover/{}-1.jpg", fx.token),
+        ] {
+            let response = crate::web::admin_router(fx.state.clone())
+                .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "{uri} leaked onto the admin listener"
+            );
+        }
+    }
+
     #[test]
     fn audio_name_parser_is_strict() {
         let uuid = "0f8fad5b-d9cb-469f-a165-70867728950e";

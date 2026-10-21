@@ -74,6 +74,7 @@ pub fn admin_router(state: AppState) -> Router {
         .route("/shows/{id}/feed/rotate", post(shows::rotate_feed))
         .route("/shows/{id}/publish-ready", post(shows::publish_ready))
         .route("/settings", get(settings::index).post(settings::save))
+        .route("/healthz", get(crate::health::healthz))
         .layer(middleware::from_fn(csrf::csrf_middleware));
     let assets = Router::new().route("/assets/{*path}", get(asset));
     pages.merge(assets).with_state(state)
@@ -184,6 +185,33 @@ mod tests {
         let response = get("/", Some(&cookie)).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response.headers().get(header::SET_COOKIE).is_none());
+    }
+
+    #[tokio::test]
+    async fn admin_healthz_reports_database_status() {
+        let state = test_state().await;
+        let response = admin_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        state.pool.close().await;
+        let response = admin_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
