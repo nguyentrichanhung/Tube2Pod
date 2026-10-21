@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::db::episodes::{self, FetchedMeta};
 use crate::domain::transcript;
+use crate::error::AppError;
 use crate::models::{stage, Episode};
 use crate::services::ytdlp;
 use crate::worker::PipelineError;
@@ -37,9 +38,10 @@ pub async fn fetch_episode(
         }
     }
 
-    let meta = ytdlp::probe(cfg, &video)
-        .await
-        .map_err(|e| PipelineError::new(ytdlp::classify_source_error(&e), e.to_string(), true))?;
+    let meta = ytdlp::probe(cfg, &video).await.map_err(|e| {
+        let code = ytdlp::classify_source_error(&e);
+        PipelineError::from_app(e, code)
+    })?;
     let duration = meta.duration.unwrap_or(0);
     if duration > MAX_SOURCE_MINUTES * 60 {
         return Err(PipelineError::new(
@@ -79,8 +81,14 @@ pub async fn fetch_episode(
             false,
         ));
     }
-    let cues = transcript::parse_by_kind(&raw, &caption.ext)
-        .map_err(|e| PipelineError::from_app(e, "transcript_too_short"))?;
+    let cues = transcript::parse_by_kind(&raw, &caption.ext).map_err(|e| match e {
+        AppError::Internal(_) => PipelineError::new(
+            "transcript_invalid",
+            "Transcript không hợp lệ; không tự tạo transcript.",
+            false,
+        ),
+        other => PipelineError::from_app(other, "transcript_too_short"),
+    })?;
     let sentences = transcript::segment(&cues, language);
     if sentences.len() < 3 {
         return Err(PipelineError::new(
@@ -140,21 +148,9 @@ mod tests {
     use crate::models::stage;
     use std::os::unix::fs::PermissionsExt;
 
-    async fn fixture_config(data_dir: &std::path::Path) -> Config {
-        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/ytdlp_vi.json");
-        let caption = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/captions_vi.json3");
+    fn config_with_script(data_dir: &std::path::Path, script_body: &str) -> Config {
         let script = data_dir.join("fake-ytdlp.sh");
-        std::fs::write(
-            &script,
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--dump-single-json\" ]; then cat '{}'; exit 0; fi\nout=''\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"-o\" ]; then out=\"$2\"; shift; fi\n  shift\ndone\ncp '{}' \"${{out%.*}}.json3\"\n",
-                fixture.display(),
-                caption.display()
-            ),
-        )
-        .unwrap();
+        std::fs::write(&script, script_body).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
@@ -166,13 +162,24 @@ mod tests {
         .unwrap()
     }
 
-    #[tokio::test]
-    async fn fetches_metadata_and_transcript() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = fixture_config(dir.path()).await;
-        let pool = db::test_pool().await;
+    fn fixture_config(data_dir: &std::path::Path) -> Config {
+        let fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ytdlp_vi.json");
+        let caption = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/captions_vi.json3");
+        config_with_script(
+            data_dir,
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--dump-single-json\" ]; then cat '{}'; exit 0; fi\nout=''\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"-o\" ]; then out=\"$2\"; shift; fi\n  shift\ndone\ncp '{}' \"${{out%.*}}.json3\"\n",
+                fixture.display(),
+                caption.display()
+            ),
+        )
+    }
+
+    async fn seed_episode(pool: &sqlx::SqlitePool) -> Episode {
         let show = shows::create(
-            &pool,
+            pool,
             NewShow {
                 title: "Show".into(),
                 ..NewShow::default()
@@ -180,8 +187,8 @@ mod tests {
         )
         .await
         .unwrap();
-        let ep = crate::db::episodes::create(
-            &pool,
+        crate::db::episodes::create(
+            pool,
             crate::db::episodes::NewEpisode {
                 show_id: show.id,
                 video_id: "dQw4w9WgXcQ".into(),
@@ -196,7 +203,15 @@ mod tests {
             },
         )
         .await
-        .unwrap();
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn fetches_metadata_and_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = fixture_config(dir.path());
+        let pool = db::test_pool().await;
+        let ep = seed_episode(&pool).await;
 
         fetch_episode(&pool, &cfg, &ep).await.unwrap();
         let got = crate::db::episodes::get(&pool, &ep.uuid)
@@ -208,5 +223,58 @@ mod tests {
         assert_eq!(got.stage, stage::SUMMARIZING);
         let text = std::fs::read_to_string(got.transcript_path.unwrap()).unwrap();
         assert!(text.contains("Xin chào các bạn."));
+    }
+
+    #[tokio::test]
+    async fn live_video_probe_error_is_not_retryable() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config_with_script(
+            dir.path(),
+            "#!/bin/sh\nif [ \"$1\" = \"--dump-single-json\" ]; then printf '%s' '{\"id\":\"dQw4w9WgXcQ\",\"title\":\"Live\",\"is_live\":true}'; exit 0; fi\nexit 1\n",
+        );
+        let pool = db::test_pool().await;
+        let ep = seed_episode(&pool).await;
+
+        let error = fetch_episode(&pool, &cfg, &ep).await.unwrap_err();
+        assert_eq!(error.code, "live_not_supported");
+        assert!(
+            !error.retryable,
+            "live videos must not be retried: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upstream_probe_error_is_retryable() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config_with_script(dir.path(), "#!/bin/sh\necho 'network down' >&2\nexit 1\n");
+        let pool = db::test_pool().await;
+        let ep = seed_episode(&pool).await;
+
+        let error = fetch_episode(&pool, &cfg, &ep).await.unwrap_err();
+        assert_eq!(error.code, "source_unavailable");
+        assert!(error.retryable, "upstream failures should retry: {error:?}");
+    }
+
+    #[tokio::test]
+    async fn malformed_transcript_is_not_retryable() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ytdlp_vi.json");
+        let cfg = config_with_script(
+            dir.path(),
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--dump-single-json\" ]; then cat '{}'; exit 0; fi\nout=''\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"-o\" ]; then out=\"$2\"; shift; fi\n  shift\ndone\nprintf 'not json' > \"${{out%.*}}.json3\"\n",
+                fixture.display()
+            ),
+        );
+        let pool = db::test_pool().await;
+        let ep = seed_episode(&pool).await;
+
+        let error = fetch_episode(&pool, &cfg, &ep).await.unwrap_err();
+        assert_eq!(error.code, "transcript_invalid");
+        assert!(
+            !error.retryable,
+            "malformed transcripts must not be retried: {error:?}"
+        );
     }
 }
