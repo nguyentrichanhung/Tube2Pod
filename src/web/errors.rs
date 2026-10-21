@@ -12,11 +12,15 @@ pub async fn html_errors(request: Request, next: Next) -> Response {
     let is_htmx = request.headers().contains_key("hx-request");
     let is_api = request.uri().path().starts_with("/api/");
     let response = next.run(request).await;
-    if !wants_html || is_htmx || is_api || response.status().is_success() {
+    if !wants_html
+        || is_htmx
+        || is_api
+        || !(response.status().is_client_error() || response.status().is_server_error())
+    {
         return response;
     }
-    let status = response.status();
-    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+    let (parts, body) = response.into_parts();
+    let body = axum::body::to_bytes(body, 1024 * 1024)
         .await
         .unwrap_or_default();
     let json_message = serde_json::from_slice::<serde_json::Value>(&body)
@@ -27,14 +31,23 @@ pub async fn html_errors(request: Request, next: Next) -> Response {
                 .and_then(|error| error.as_str())
                 .map(str::to_string)
         });
-    let message = html_escape(&friendly_message(status, json_message));
-    (
-        status,
+    let message = html_escape(&friendly_message(parts.status, json_message));
+    let mut rendered = (
+        parts.status,
         Html(format!(
             "<!doctype html><html lang=\"vi\"><head><meta charset=\"utf-8\"><link rel=\"stylesheet\" href=\"/assets/app.css\"><title>Lỗi</title></head><body><main class=\"page\"><div class=\"card stack\" role=\"alert\"><h1>Yêu cầu không hợp lệ</h1><p>{message}</p><p><a class=\"btn\" href=\"/\">Về trang chủ</a></p></div></main></body></html>"
         )),
     )
-        .into_response()
+        .into_response();
+    for (name, value) in parts.headers.iter() {
+        if name != header::CONTENT_TYPE
+            && name != header::CONTENT_LENGTH
+            && name != header::TRANSFER_ENCODING
+        {
+            rendered.headers_mut().insert(name.clone(), value.clone());
+        }
+    }
+    rendered
 }
 
 fn friendly_message(status: StatusCode, json_message: Option<String>) -> String {

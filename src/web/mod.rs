@@ -232,6 +232,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn browser_form_redirect_is_not_rewritten_as_html_error() {
+        let body = format!(
+            "_csrf={VALID}&owner_name=Owner&owner_email=owner@example.com&auto_publish_default=on&max_source_minutes=120&min_source_seconds=30&retention_old_audio_days=7&retention_tmp_hours=24"
+        );
+        let response = admin_router(test_state().await)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/settings")
+                    .header(header::ACCEPT, "text/html")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::COOKIE, format!("t2p_csrf={VALID}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("/settings")
+        );
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(!html.contains("Yêu cầu không hợp lệ"));
+    }
+
+    #[tokio::test]
     async fn admin_healthz_reports_database_status() {
         let state = test_state().await;
         let response = admin_router(state.clone())
