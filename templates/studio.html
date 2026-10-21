@@ -30,7 +30,7 @@
         <legend>Thời lượng</legend>
         <div class="row">
           {% for minutes in [5, 10, 15, 20] %}
-          <label class="pill"><input type="radio" name="minutes" value="{{ minutes }}" {% if loop.index == 2 %}checked{% endif %}> {{ minutes }} phút</label>
+          <label class="pill"><input type="radio" name="minutes" value="{{ minutes }}" {% if minutes.clone() == 10 %}checked{% endif %}> {{ minutes }} phút</label>
           {% endfor %}
         </div>
       </fieldset>
