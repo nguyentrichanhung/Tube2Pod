@@ -13,7 +13,7 @@ base64 = "0.22"
 chrono = { version = "0.4", features = ["clock"] }
 fs2 = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-imageproc = "0.25"
+imageproc = { version = "0.25", default-features = false }
 mime_guess = "2"
 quick-xml = "0.37"
 rand = "0.8"
