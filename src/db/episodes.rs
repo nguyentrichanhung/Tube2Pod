@@ -200,7 +200,9 @@ pub async fn set_fetched(pool: &SqlitePool, uuid: &str, meta: FetchedMeta<'_>) -
 
 pub async fn set_summary(pool: &SqlitePool, uuid: &str, text: &str, hash: &str) -> AppResult<()> {
     sqlx::query(
-        "UPDATE episodes SET summary_text = ?1, summary_hash = ?2, updated_at = ?3 WHERE uuid = ?4",
+        "UPDATE episodes SET summary_text = ?1, summary_hash = ?2, summary_edited_at = NULL,
+            updated_at = ?3
+         WHERE uuid = ?4",
     )
     .bind(text)
     .bind(hash)
@@ -600,6 +602,24 @@ mod tests {
         assert_eq!(got.audio_version, 2);
         assert_eq!(got.status, status::PUBLISHED);
         assert!(got.published_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn generated_summary_clears_manual_edit_timestamp() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
+        set_summary_edit(&pool, &ep.uuid, "Bản đã sửa", "hash-edit")
+            .await
+            .unwrap();
+        let edited = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert!(edited.summary_edited_at.is_some());
+
+        set_summary(&pool, &ep.uuid, "Bản tạo mới", "hash-new")
+            .await
+            .unwrap();
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.summary_text.as_deref(), Some("Bản tạo mới"));
+        assert_eq!(got.summary_edited_at, None);
     }
 
     #[tokio::test]
