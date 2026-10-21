@@ -11,7 +11,7 @@
     <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));">
       {% for card in cards %}
       <article class="card stack">
-        <div class="cover" aria-label="Bìa {{ card.show.title }}" style="display:grid;place-items:center;background:#e9d8c3;font:700 3rem Georgia,serif;">{{ card.show.title }}</div>
+        <img class="cover" src="/shows/{{ card.show.id }}/cover" alt="Bìa {{ card.show.title }}">
         <div class="row between">
           <h2 style="margin:0"><a href="/shows/{{ card.show.id }}">{{ card.show.title }}</a></h2>
           {% if card.show.feed_enabled %}<span class="pill ok">Feed bật</span>{% else %}<span class="pill">Feed tắt</span>{% endif %}
@@ -19,8 +19,8 @@
         <div class="muted">{{ card.episode_count }} tập · {{ card.show.language }}</div>
         {% if card.last_episode.is_some() %}<div class="muted">Mới nhất: {{ card.last_episode.as_deref().unwrap_or_default() }}</div>{% endif %}
         <div class="row">
-          <a class="button secondary" href="/?show={{ card.show.id }}">Tạo tập</a>
-          <a class="button secondary" href="/shows/{{ card.show.id }}?tab=feed">Feed</a>
+          <a class="btn btn-secondary" href="/?show={{ card.show.id }}">Tạo tập</a>
+          <a class="btn btn-secondary" href="/shows/{{ card.show.id }}?tab=feed">Feed</a>
         </div>
       </article>
       {% endfor %}
@@ -44,7 +44,7 @@
       <label>Thời lượng mặc định
         <select name="default_minutes"><option>5</option><option selected>10</option><option>15</option><option>20</option></select>
       </label>
-      <button type="submit">Tạo show</button>
+      <button class="btn" type="submit">Tạo show</button>
     </form>
   </aside>
 </div>

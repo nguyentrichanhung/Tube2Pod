@@ -5,7 +5,7 @@
     <h1>{{ show.title }}</h1>
     <div class="muted">{{ show.language }} · {{ show.category }} · {{ episode_count }} tập</div>
   </div>
-  <a class="button" href="/?show={{ show.id }}">Tạo tập</a>
+  <a class="btn" href="/?show={{ show.id }}">Tạo tập</a>
 </div>
 <nav class="tabs">
   <a class="{% if tab == "episodes" %}active{% endif %}" href="/shows/{{ show.id }}?tab=episodes">Tập</a>
@@ -47,7 +47,7 @@
       </label>
       <label class="row"><input type="checkbox" name="explicit" value="on" {% if show.explicit %}checked{% endif %} style="width:auto"> Nội dung explicit</label>
       <label class="row"><input type="checkbox" name="auto_publish" value="on" {% if show.auto_publish %}checked{% endif %} style="width:auto"> Tự phát hành khi feed bật</label>
-      <button type="submit">Lưu thông tin</button>
+      <button class="btn" type="submit">Lưu thông tin</button>
     </form>
   </section>
   <aside class="stack">
@@ -57,7 +57,7 @@
       <form method="post" action="/shows/{{ show.id }}/cover" enctype="multipart/form-data" class="stack" hx-headers='{"X-CSRF-Token":"{{ csrf }}"}'>
         <input type="hidden" name="_csrf" value="{{ csrf }}">
         <input type="file" name="cover" accept="image/jpeg,image/png,image/webp" required>
-        <button type="submit">Tải ảnh bìa</button>
+        <button class="btn" type="submit">Tải ảnh bìa</button>
       </form>
       <p class="muted">Ảnh vuông 1400–3000 px, tối đa 10 MB; ảnh được chuyển thành JPEG 3000×3000.</p>
     </section>
@@ -68,7 +68,7 @@
             hx-confirm="Xoá show này và toàn bộ tập?">
         <input type="hidden" name="_csrf" value="{{ csrf }}">
         <input name="confirm_title" placeholder="{{ show.title }}" required>
-        <button class="danger" type="submit">Xoá show</button>
+        <button class="btn btn-danger" type="submit">Xoá show</button>
       </form>
     </section>
   </aside>
@@ -79,7 +79,7 @@
   {% for row in voice_rows %}
   <div class="voice-row">
     <div><strong>{{ row.language_label }}</strong><div class="muted">{{ row.voice_name.as_deref().unwrap_or("Chưa chọn giọng") }}</div></div>
-    <button class="secondary" hx-get="/shows/{{ show.id }}/voices/{{ row.language }}" hx-target="#voice-picker" hx-swap="innerHTML">Chọn giọng</button>
+    <button class="btn btn-secondary" hx-get="/shows/{{ show.id }}/voices/{{ row.language }}" hx-target="#voice-picker" hx-swap="innerHTML">Chọn giọng</button>
   </div>
   {% endfor %}
   <div id="voice-picker"></div>
@@ -90,38 +90,38 @@
     <h2>Feed URL</h2>
     <input readonly value="{{ feed_url }}" aria-label="Feed URL">
     <div class="row">
-      <button type="button" onclick="navigator.clipboard.writeText('{{ feed_url }}')">Copy feed URL</button>
+      <button class="btn" type="button" onclick="navigator.clipboard.writeText('{{ feed_url }}')">Copy feed URL</button>
       {% if show.feed_enabled %}
       <form method="post" action="/shows/{{ show.id }}/feed/toggle">
         <input type="hidden" name="_csrf" value="{{ csrf }}">
-        <button class="secondary" type="submit">Tắt feed</button>
+        <button class="btn btn-secondary" type="submit">Tắt feed</button>
       </form>
       {% else %}
       <form method="post" action="/shows/{{ show.id }}/feed/toggle">
         <input type="hidden" name="_csrf" value="{{ csrf }}">
         <input type="hidden" name="enabled" value="on">
-        <button type="submit" {% if !can_enable %}disabled{% endif %}>Bật feed</button>
+        <button class="btn" type="submit" {% if !can_enable %}disabled{% endif %}>Bật feed</button>
       </form>
       {% endif %}
     </div>
     <h2>Checklist</h2>
     <div class="stack">
       {% for item in checklist %}
-      <div class="row between"><span>{{ item.label }}</span>{% if item.ok %}<span class="pill ok">Đủ</span>{% else %}<span class="pill err">Thiếu</span>{% endif %}</div>
+      <div class="row between"><span>{{ item.label }}</span>{% if item.ok %}<span class="badge badge-ok">Đủ</span>{% else %}<span class="badge badge-err">Thiếu</span>{% endif %}</div>
       {% endfor %}
     </div>
     <p class="muted">Feed chỉ trả về 200 khi đã bật và checklist đầy đủ. Tập đang “Sẵn sàng” có thể phát hành thủ công.</p>
     <form method="post" action="/shows/{{ show.id }}/publish-ready">
       <input type="hidden" name="_csrf" value="{{ csrf }}">
       <input type="hidden" name="confirm_title" value="{{ show.title }}">
-      <button class="secondary" type="submit">Phát hành tất cả tập đang sẵn sàng</button>
+      <button class="btn btn-secondary" type="submit">Phát hành tất cả tập đang sẵn sàng</button>
     </form>
     <h2 style="color:var(--danger)">Đổi feed token</h2>
     <p class="muted">Token cũ mất hiệu lực ngay. Người đăng ký phải thêm lại feed URL mới.</p>
     <form method="post" action="/shows/{{ show.id }}/feed/rotate" hx-post="/shows/{{ show.id }}/feed/rotate" class="stack" hx-confirm="Đổi token sẽ làm hỏng feed cũ. Tiếp tục?">
       <input type="hidden" name="_csrf" value="{{ csrf }}">
       <input name="confirm_title" placeholder="{{ show.title }}" required>
-      <button class="danger" type="submit">Đổi token</button>
+      <button class="btn btn-danger" type="submit">Đổi token</button>
     </form>
   </section>
   <aside class="card stack">

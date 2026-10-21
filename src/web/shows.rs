@@ -1524,6 +1524,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn show_forms_do_not_render_owner_fields() {
+        let context = ctx().await;
+        let response = send(&context, Method::GET, "/shows", "", Vec::new()).await;
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(!html.contains("name=\"owner_name\""));
+        assert!(!html.contains("name=\"owner_email\""));
+    }
+
+    #[tokio::test]
+    async fn show_cards_use_real_cover_images() {
+        let context = ctx().await;
+        let show = complete_show(&context, "Show bìa").await;
+        let response = send(&context, Method::GET, "/shows", "", Vec::new()).await;
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains(&format!(
+            "<img class=\"cover\" src=\"/shows/{}/cover\"",
+            show.id
+        )));
+        assert!(!html.contains("aria-label=\"Bìa Show bìa\""));
+    }
+
+    #[tokio::test]
     async fn detail_renders_checklist_and_refuses_missing_shows() {
         let context = ctx().await;
         let show = complete_show(&context, "Show").await;

@@ -38,6 +38,7 @@ pub struct StorageUsage {
     pub total_human: String,
     pub audio_human: String,
     pub tmp_human: String,
+    pub audio_percent: u8,
 }
 
 #[derive(Template)]
@@ -204,10 +205,16 @@ async fn storage_usage(data_dir: &Path) -> StorageUsage {
     let total = dir_size(data_dir).await;
     let audio = dir_size(&data_dir.join("audio")).await;
     let tmp = dir_size(&data_dir.join("tmp")).await;
+    let audio_percent = if total == 0 {
+        0
+    } else {
+        (audio.saturating_mul(100) / total).min(100) as u8
+    };
     StorageUsage {
         total_human: format_bytes(total),
         audio_human: format_bytes(audio),
         tmp_human: format_bytes(tmp),
+        audio_percent,
     }
 }
 
@@ -429,6 +436,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn settings_page_explains_global_owner() {
+        let context = ctx().await;
+        let response = send(&context, "GET", "/settings", "", Vec::new(), &[]).await;
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains("Áp dụng cho mọi show và feed"));
+    }
+
+    #[tokio::test]
     async fn saves_valid_settings_and_redirects() {
         let context = ctx().await;
         let response = send(
@@ -571,5 +592,6 @@ mod tests {
         assert_eq!(usage.audio_human, "1.5 KB");
         assert_eq!(usage.tmp_human, "256 B");
         assert_eq!(usage.total_human, "1.8 KB");
+        assert_eq!(usage.audio_percent, 85);
     }
 }
