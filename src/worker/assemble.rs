@@ -195,6 +195,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retries_assembly_when_the_stage_advance_was_lost() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = test_config(root.path());
+        fake_binary(
+            root.path(),
+            "ffmpeg",
+            "#!/bin/sh\nout=\nfor a in \"$@\"; do out=\"$a\"; done\nprintf 'audio' > \"$out\"\n",
+        );
+        fake_binary(root.path(), "ffprobe", "#!/bin/sh\nprintf '12.5\\n'\n");
+
+        let pool = db::test_pool().await;
+        let show = shows::create(
+            &pool,
+            NewShow {
+                title: "Show".into(),
+                ..NewShow::default()
+            },
+        )
+        .await
+        .unwrap();
+        let ep = db::episodes::create(
+            &pool,
+            db::episodes::NewEpisode {
+                show_id: show.id,
+                video_id: "v1".into(),
+                source_url: "https://www.youtube.com/watch?v=v1".into(),
+                source_title: "Video".into(),
+                source_channel: "".into(),
+                source_duration_s: Some(600),
+                source_thumbnail_url: None,
+                source_upload_date: None,
+                language: "vi".into(),
+                target_minutes: 10,
+            },
+        )
+        .await
+        .unwrap();
+
+        let dir = crate::worker::synth::parts_dir(&cfg, &ep.uuid);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("part-000.mp3"), b"part").unwrap();
+        std::fs::write(dir.join("summary_hash.txt"), "hash-new").unwrap();
+        db::episodes::set_chunk_count(&pool, &ep.uuid, 1)
+            .await
+            .unwrap();
+
+        let audio_dir = cfg.data_dir.join("audio");
+        std::fs::create_dir_all(&audio_dir).unwrap();
+        let installed_path = audio_dir.join(format!("{}-1.mp3", ep.uuid));
+        std::fs::write(&installed_path, b"audio").unwrap();
+        db::episodes::set_audio(
+            &pool,
+            &ep.uuid,
+            &installed_path.display().to_string(),
+            5,
+            13,
+            "hash-new",
+            1,
+        )
+        .await
+        .unwrap();
+
+        let ep = db::episodes::get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(ep.chunk_count, Some(1));
+        assert_eq!(ep.stage, stage::QUEUED);
+
+        assemble_episode(&pool, &cfg, &ep).await.unwrap();
+
+        let got = db::episodes::get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.stage, stage::PUBLISHING);
+        assert_eq!(got.chunk_count, None);
+        assert_eq!(got.audio_version, 2);
+        assert_eq!(std::fs::read(&installed_path).unwrap(), b"audio");
+    }
+
+    #[tokio::test]
     async fn assembles_a_new_version_and_preserves_the_previous_audio() {
         let root = tempfile::tempdir().unwrap();
         let cfg = test_config(root.path());

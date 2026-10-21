@@ -154,12 +154,17 @@ pub async fn set_stage(pool: &SqlitePool, uuid: &str, new_stage: &str) -> AppRes
     sqlx::query(
         "UPDATE episodes SET stage = ?1,
             attempts = CASE WHEN stage != ?1 THEN 0 ELSE attempts END,
+            active_take_id = CASE WHEN ?1 = ?4 THEN NULL ELSE active_take_id END,
+            take_ids_json = CASE WHEN ?1 = ?4 THEN NULL ELSE take_ids_json END,
+            chunk_done = CASE WHEN ?1 = ?4 THEN 0 ELSE chunk_done END,
+            chunk_count = CASE WHEN ?1 = ?4 THEN NULL ELSE chunk_count END,
             updated_at = ?2
          WHERE uuid = ?3",
     )
     .bind(new_stage)
     .bind(now_ts())
     .bind(uuid)
+    .bind(stage::PUBLISHING)
     .execute(pool)
     .await?;
     Ok(())
@@ -194,7 +199,9 @@ pub async fn set_fetched(pool: &SqlitePool, uuid: &str, meta: FetchedMeta<'_>) -
             source_title = ?1, source_channel = ?2, source_duration_s = ?3,
             source_thumbnail_url = ?4, source_upload_date = ?5, language = ?6,
             transcript_path = ?7, transcript_kind = ?8, transcript_chars = ?9,
-            stage = ?10, updated_at = ?11
+            stage = ?10,
+            attempts = CASE WHEN stage != ?10 THEN 0 ELSE attempts END,
+            updated_at = ?11
          WHERE uuid = ?12",
     )
     .bind(meta.source_title)
@@ -344,7 +351,7 @@ pub async fn set_audio(
     let result = sqlx::query(
         "UPDATE episodes SET audio_path = ?1, audio_bytes = ?2, audio_duration_s = ?3,
             audio_summary_hash = ?4, audio_version = ?5, active_take_id = NULL,
-            take_ids_json = NULL, chunk_done = 0, chunk_count = NULL, updated_at = ?6
+            take_ids_json = NULL, chunk_done = 0, updated_at = ?6
          WHERE uuid = ?7 AND status != ?8",
     )
     .bind(path)
@@ -666,7 +673,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_audio_clears_chunk_state_and_ignores_cancelled_episodes() {
+    async fn set_audio_clears_active_state_and_keeps_chunk_count() {
         let (pool, show_id) = setup().await;
         let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
         set_active_take(&pool, &ep.uuid, Some(77)).await.unwrap();
@@ -682,6 +689,12 @@ mod tests {
         assert_eq!(got.active_take_id, None);
         assert_eq!(got.take_ids_json, None);
         assert_eq!(got.chunk_done, 0);
+        assert_eq!(got.chunk_count, Some(3));
+
+        set_stage(&pool, &ep.uuid, stage::PUBLISHING).await.unwrap();
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.stage, stage::PUBLISHING);
+        assert_eq!(got.chunk_done, 0);
         assert_eq!(got.chunk_count, None);
 
         cancel(&pool, &ep.uuid).await.unwrap();
@@ -692,6 +705,65 @@ mod tests {
         let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
         assert_eq!(got.status, status::CANCELLED);
         assert_eq!(got.audio_path.as_deref(), Some("/data/audio/x-1.mp3"));
+    }
+
+    #[tokio::test]
+    async fn set_fetched_resets_attempts_only_when_advancing_stage() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
+        set_stage(&pool, &ep.uuid, stage::FETCHING).await.unwrap();
+        record_failure(
+            &pool,
+            &ep.uuid,
+            "source_unavailable",
+            "boom",
+            Some(now_ts() + 30),
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&pool, &ep.uuid).await.unwrap().unwrap().attempts, 1);
+
+        set_fetched(
+            &pool,
+            &ep.uuid,
+            FetchedMeta {
+                source_title: "Video",
+                source_channel: "Channel",
+                source_duration_s: 600,
+                source_thumbnail_url: None,
+                source_upload_date: None,
+                language: "vi",
+                transcript_path: "/tmp/transcript.txt",
+                transcript_kind: "auto",
+                transcript_chars: 100,
+                next_stage: stage::FETCHING,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&pool, &ep.uuid).await.unwrap().unwrap().attempts, 1);
+
+        set_fetched(
+            &pool,
+            &ep.uuid,
+            FetchedMeta {
+                source_title: "Video",
+                source_channel: "Channel",
+                source_duration_s: 600,
+                source_thumbnail_url: None,
+                source_upload_date: None,
+                language: "vi",
+                transcript_path: "/tmp/transcript.txt",
+                transcript_kind: "auto",
+                transcript_chars: 100,
+                next_stage: stage::SUMMARIZING,
+            },
+        )
+        .await
+        .unwrap();
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.stage, stage::SUMMARIZING);
+        assert_eq!(got.attempts, 0);
     }
 
     #[tokio::test]
