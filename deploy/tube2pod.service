@@ -1,0 +1,28 @@
+[Unit]
+Description=Tube2Pod podcast generator
+Documentation=https://github.com/your-user/tube2pod
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tube2pod
+Group=tube2pod
+WorkingDirectory=/var/lib/tube2pod
+EnvironmentFile=/etc/tube2pod/tube2pod.env
+ExecStart=/opt/tube2pod/tube2pod
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/tube2pod
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
