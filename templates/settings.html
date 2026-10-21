@@ -9,7 +9,7 @@
     <h2>Chủ sở hữu mặc định</h2>
     <label>Tên chủ sở hữu<input name="owner_name" value="{{ settings.owner_name }}"></label>
     <label>Email chủ sở hữu<input type="email" name="owner_email" value="{{ settings.owner_email }}"></label>
-    <p class="muted">Show mới lấy hai giá trị này; có thể sửa riêng trong tab Thông tin show.</p>
+    <p class="muted">Áp dụng cho mọi show và feed. Không cần nhập lại cho từng show.</p>
 
     <h2>Mặc định phát hành</h2>
     <label class="row"><input type="checkbox" name="auto_publish_default" value="on" {% if settings.auto_publish_default %}checked{% endif %} style="width:auto"> Tự phát hành khi feed bật</label>

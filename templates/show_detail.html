@@ -36,8 +36,6 @@
       </label>
       <label>Website<input name="website_url" value="{{ show.website_url }}" placeholder="https://..."></label>
       <label>Danh mục<input name="category" value="{{ show.category }}"></label>
-      <label>Tên chủ sở hữu<input name="owner_name" value="{{ show.owner_name }}"></label>
-      <label>Email chủ sở hữu<input type="email" name="owner_email" value="{{ show.owner_email }}"></label>
       <label>Thời lượng mặc định
         <select name="default_minutes">
           <option value="5" {% if show.default_minutes == 5 %}selected{% endif %}>5</option>

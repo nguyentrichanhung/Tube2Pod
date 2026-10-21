@@ -1,4 +1,5 @@
 use crate::db::settings;
+use crate::db::shows;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
@@ -113,34 +114,34 @@ pub async fn save(
     let min_source_seconds = values.min_source_seconds.to_string();
     let retention_old_audio_days = values.retention_old_audio_days.to_string();
     let retention_tmp_hours = values.retention_tmp_hours.to_string();
-    settings::set_many(
-        &state.pool,
-        &[
-            (OWNER_NAME, values.owner_name.as_str()),
-            (OWNER_EMAIL, values.owner_email.as_str()),
-            (
-                AUTO_PUBLISH,
-                if values.auto_publish_default {
-                    "true"
-                } else {
-                    "false"
-                },
-            ),
-            (
-                DEFAULT_EXPLICIT,
-                if values.default_explicit {
-                    "true"
-                } else {
-                    "false"
-                },
-            ),
-            (MAX_SOURCE_MINUTES, max_source_minutes.as_str()),
-            (MIN_SOURCE_SECONDS, min_source_seconds.as_str()),
-            (RETENTION_OLD_AUDIO_DAYS, retention_old_audio_days.as_str()),
-            (RETENTION_TMP_HOURS, retention_tmp_hours.as_str()),
-        ],
-    )
-    .await?;
+    let pairs = [
+        (OWNER_NAME, values.owner_name.as_str()),
+        (OWNER_EMAIL, values.owner_email.as_str()),
+        (
+            AUTO_PUBLISH,
+            if values.auto_publish_default {
+                "true"
+            } else {
+                "false"
+            },
+        ),
+        (
+            DEFAULT_EXPLICIT,
+            if values.default_explicit {
+                "true"
+            } else {
+                "false"
+            },
+        ),
+        (MAX_SOURCE_MINUTES, max_source_minutes.as_str()),
+        (MIN_SOURCE_SECONDS, min_source_seconds.as_str()),
+        (RETENTION_OLD_AUDIO_DAYS, retention_old_audio_days.as_str()),
+        (RETENTION_TMP_HOURS, retention_tmp_hours.as_str()),
+    ];
+    let mut tx = state.pool.begin().await?;
+    settings::set_many_in_tx(&mut tx, &pairs).await?;
+    shows::sync_owner_in_tx(&mut tx, &values.owner_name, &values.owner_email).await?;
+    tx.commit().await?;
     Ok(Redirect::to("/settings"))
 }
 
@@ -507,6 +508,42 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn saving_settings_syncs_owner_to_every_show() {
+        let context = ctx().await;
+        for title in ["Alpha", "Beta"] {
+            crate::db::shows::create(
+                &context.state.pool,
+                crate::db::shows::NewShow {
+                    title: title.into(),
+                    owner_name: "Old".into(),
+                    owner_email: "old@example.com".into(),
+                    ..crate::db::shows::NewShow::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let response = send(
+            &context,
+            "POST",
+            "/settings",
+            "application/x-www-form-urlencoded",
+            form(&valid_pairs()).into_bytes(),
+            &[],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let shows = crate::db::shows::list(&context.state.pool).await.unwrap();
+        assert_eq!(shows.len(), 2);
+        for show in shows {
+            assert_eq!(show.owner_name, "Chủ Podcast");
+            assert_eq!(show.owner_email, "owner@example.com");
+        }
     }
 
     #[tokio::test]
