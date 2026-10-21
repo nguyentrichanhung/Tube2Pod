@@ -12,9 +12,6 @@ pub struct SummaryOptions {
 #[derive(Debug, Clone)]
 pub struct SummaryResult {
     pub selected_indices: Vec<usize>,
-    pub script: String,
-    pub source_text: String,
-    pub short_source: bool,
 }
 
 pub fn summarize(sentences: &[String], options: &SummaryOptions) -> SummaryResult {
@@ -30,9 +27,6 @@ pub fn summarize(sentences: &[String], options: &SummaryOptions) -> SummaryResul
     if usable.is_empty() {
         return SummaryResult {
             selected_indices: Vec::new(),
-            script: String::new(),
-            source_text: sentences.join("\n"),
-            short_source: true,
         };
     }
 
@@ -51,7 +45,7 @@ pub fn summarize(sentences: &[String], options: &SummaryOptions) -> SummaryResul
     let mut scored: Vec<(f64, usize)> = usable
         .iter()
         .enumerate()
-        .map(|(i, (original, sentence))| {
+        .map(|(i, (original, _sentence))| {
             let doc = &docs[i];
             let mut score = 0.0;
             for token in doc {
@@ -111,18 +105,8 @@ pub fn summarize(sentences: &[String], options: &SummaryOptions) -> SummaryResul
     }
     selected.sort_unstable();
 
-    let source_text = sentences.join("\n");
-    let script = selected
-        .iter()
-        .map(|index| sentences[*index].clone())
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let short_source = source_text.chars().count() < options.target_chars;
     SummaryResult {
         selected_indices: selected,
-        script,
-        source_text,
-        short_source,
     }
 }
 
@@ -423,7 +407,7 @@ mod tests {
                 title: "Rust".into(),
             },
         );
-        assert_eq!(first.script, second.script);
+        assert_eq!(first.selected_indices, second.selected_indices);
         assert!(first
             .selected_indices
             .windows(2)
@@ -440,7 +424,6 @@ mod tests {
         let baseline = summarize(&input, &options);
         for _ in 0..32 {
             let run = summarize(&input, &options);
-            assert_eq!(run.script, baseline.script);
             assert_eq!(run.selected_indices, baseline.selected_indices);
         }
     }
@@ -454,8 +437,7 @@ mod tests {
                 title: "Ngắn".into(),
             },
         );
-        assert_eq!(result.selected_indices.len(), 2);
-        assert!(result.short_source);
+        assert_eq!(result.selected_indices, vec![0, 1]);
     }
 
     #[test]

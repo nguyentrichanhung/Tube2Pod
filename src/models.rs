@@ -57,11 +57,17 @@ impl Show {
             && !self.category.trim().is_empty()
             && !self.owner_name.trim().is_empty()
             && !self.owner_email.trim().is_empty()
-            && self.cover_path.as_deref().is_some_and(|p| !p.trim().is_empty())
+            && self
+                .cover_path
+                .as_deref()
+                .is_some_and(|p| !p.trim().is_empty())
     }
 
     pub fn cover_url(&self, base: &str) -> String {
-        format!("{base}/cover/{}-{}.jpg", self.feed_token, self.cover_version)
+        format!(
+            "{base}/cover/{}-{}.jpg",
+            self.feed_token, self.cover_version
+        )
     }
 }
 

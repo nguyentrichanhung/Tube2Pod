@@ -1,14 +1,48 @@
 use crate::config::Config;
 use crate::error::{AppError, AppResult};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Output, Stdio};
 use std::time::Duration;
 use tokio::process::Command;
+
+const EXEC_RETRIES: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct Probe {
     pub bytes: u64,
     pub duration_s: f64,
+}
+
+async fn run_with_exec_retry<F>(
+    build: F,
+    timeout: Duration,
+    timeout_message: &str,
+) -> AppResult<Output>
+where
+    F: Fn() -> Command,
+{
+    let mut delay = Duration::from_millis(10);
+    for attempt in 0..=EXEC_RETRIES {
+        let mut command = build();
+        command.kill_on_drop(true).stdin(Stdio::null());
+        match tokio::time::timeout(timeout, command.output()).await {
+            Err(_) => return Err(AppError::Upstream(timeout_message.into())),
+            Ok(Ok(output)) => return Ok(output),
+            Ok(Err(error))
+                if error.kind() == ErrorKind::ExecutableFileBusy && attempt < EXEC_RETRIES =>
+            {
+                tokio::time::sleep(delay).await;
+                delay *= 2;
+            }
+            Ok(Err(error)) => {
+                return Err(AppError::Internal(anyhow::anyhow!(
+                    "failed to start command: {error}"
+                )));
+            }
+        }
+    }
+    unreachable!()
 }
 
 pub fn concat_line(path: &str) -> String {
@@ -34,49 +68,57 @@ pub async fn concat_audio(
     }
     tokio::fs::write(&list_path, list).await?;
 
-    let output = tokio::time::timeout(
+    let output = run_with_exec_retry(
+        || {
+            let mut command = Command::new(&cfg.ffmpeg_path);
+            command
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                ])
+                .arg(&list_path)
+                .args([
+                    "-ar",
+                    "44100",
+                    "-ac",
+                    "1",
+                    "-c:a",
+                    "libmp3lame",
+                    "-b:a",
+                    "128k",
+                    "-af",
+                    "loudnorm=I=-16:TP=-1.5:LRA=11",
+                    "-f",
+                    "mp3",
+                ])
+                .arg(out);
+            command
+        },
         Duration::from_secs(900),
-        Command::new(&cfg.ffmpeg_path)
-            .args([
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-            ])
-            .arg(&list_path)
-            .args([
-                "-ar",
-                "44100",
-                "-ac",
-                "1",
-                "-c:a",
-                "libmp3lame",
-                "-b:a",
-                "128k",
-                "-af",
-                "loudnorm=I=-16:TP=-1.5:LRA=11",
-                "-f",
-                "mp3",
-            ])
-            .arg(out)
-            .kill_on_drop(true)
-            .stdin(Stdio::null())
-            .output(),
+        "ffmpeg timed out",
     )
-    .await
-    .map_err(|_| AppError::Upstream("ffmpeg timed out".into()))?
-    .map_err(|e| AppError::Internal(e.into()))?;
+    .await?;
 
     if !output.status.success() {
         let tail = String::from_utf8_lossy(&output.stderr);
         return Err(AppError::Upstream(format!("ffmpeg failed: {tail}")));
     }
-    let bytes = tokio::fs::metadata(out).await?.len();
+    let bytes = tokio::fs::metadata(out)
+        .await
+        .map_err(|e| {
+            AppError::Internal(anyhow::anyhow!(
+                "metadata for {} failed: {e}",
+                out.display()
+            ))
+        })?
+        .len();
     if bytes == 0 {
         return Err(AppError::Upstream("assembled audio is empty".into()));
     }
@@ -88,24 +130,25 @@ pub async fn concat_audio(
 }
 
 pub async fn probe(cfg: &Config, path: &Path) -> AppResult<f64> {
-    let output = tokio::time::timeout(
+    let output = run_with_exec_retry(
+        || {
+            let mut command = Command::new(&cfg.ffprobe_path);
+            command
+                .args([
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=nw=1:nk=1",
+                ])
+                .arg(path);
+            command
+        },
         Duration::from_secs(30),
-        Command::new(&cfg.ffprobe_path)
-            .args([
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=nw=1:nk=1",
-            ])
-            .arg(path)
-            .kill_on_drop(true)
-            .output(),
+        "ffprobe timed out",
     )
-    .await
-    .map_err(|_| AppError::Upstream("ffprobe timed out".into()))?
-    .map_err(|e| AppError::Internal(e.into()))?;
+    .await?;
     if !output.status.success() {
         return Err(AppError::Upstream("ffprobe failed".into()));
     }
@@ -337,6 +380,9 @@ mod tests {
         let err = probe(&cfg, &dir.path().join("audio.mp3"))
             .await
             .unwrap_err();
-        assert!(matches!(err, AppError::Upstream(_)));
+        assert!(
+            matches!(err, AppError::Upstream(_)),
+            "unexpected error: {err:?}"
+        );
     }
 }

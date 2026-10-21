@@ -31,15 +31,12 @@ pub struct SpeechTake {
 pub struct VoiceOptions {
     pub min_chars: usize,
     pub max_chars: usize,
-    pub sample_text: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct VoiceDesign {
     pub id: i64,
     pub status: String,
-    #[serde(default)]
-    pub voice_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -278,10 +275,6 @@ impl OmnivoiceClient {
         self.send::<Value>(Method::DELETE, &format!("/api/speech/{id}"), None)
             .await
             .map(|_| ())
-    }
-
-    pub async fn health(&self) -> AppResult<()> {
-        self.list_voices().await.map(|_| ())
     }
 }
 
@@ -560,7 +553,7 @@ mod tests {
             .unwrap();
         assert_eq!(design.id, 3);
         let ready = client.design_status(design.id).await.unwrap();
-        assert_eq!(ready.voice_id, Some(11));
+        assert_eq!(ready.status, "ready");
         let voice = client.save_design(design.id, "Giọng mới").await.unwrap();
         assert_eq!(voice.id, 11);
         client.delete_design(design.id).await.unwrap();

@@ -498,17 +498,6 @@ pub async fn publish_ready(pool: &SqlitePool, show_id: i64) -> AppResult<u64> {
     Ok(result.rows_affected())
 }
 
-pub async fn list_published(pool: &SqlitePool, show_id: i64) -> AppResult<Vec<Episode>> {
-    Ok(sqlx::query_as::<_, Episode>(
-        "SELECT * FROM episodes WHERE show_id = ?1 AND status = ?2
-         ORDER BY published_at DESC, uuid DESC",
-    )
-    .bind(show_id)
-    .bind(status::PUBLISHED)
-    .fetch_all(pool)
-    .await?)
-}
-
 pub async fn list_feed(pool: &SqlitePool, show_id: i64) -> AppResult<Vec<Episode>> {
     Ok(sqlx::query_as::<_, Episode>(
         "SELECT * FROM episodes

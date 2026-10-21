@@ -34,9 +34,6 @@ pub struct AppSettings {
 
 #[derive(Debug, Clone)]
 pub struct StorageUsage {
-    pub total_bytes: u64,
-    pub audio_bytes: u64,
-    pub tmp_bytes: u64,
     pub total_human: String,
     pub audio_human: String,
     pub tmp_human: String,
@@ -207,9 +204,6 @@ async fn storage_usage(data_dir: &Path) -> StorageUsage {
     let audio = dir_size(&data_dir.join("audio")).await;
     let tmp = dir_size(&data_dir.join("tmp")).await;
     StorageUsage {
-        total_bytes: total,
-        audio_bytes: audio,
-        tmp_bytes: tmp,
         total_human: format_bytes(total),
         audio_human: format_bytes(audio),
         tmp_human: format_bytes(tmp),
@@ -535,10 +529,10 @@ mod tests {
             .unwrap();
 
         let usage = storage_usage(dir.path()).await;
-        assert_eq!(usage.audio_bytes, 1536);
-        assert_eq!(usage.tmp_bytes, 256);
-        assert_eq!(usage.total_bytes, 1792);
+        assert_eq!(dir_size(dir.path()).await, 1792);
+        assert_eq!(dir_size(&dir.path().join("audio")).await, 1536);
         assert_eq!(usage.audio_human, "1.5 KB");
         assert_eq!(usage.tmp_human, "256 B");
+        assert_eq!(usage.total_human, "1.8 KB");
     }
 }

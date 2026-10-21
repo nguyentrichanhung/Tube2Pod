@@ -16,12 +16,10 @@ pub struct VideoId {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CaptionTrack {
     pub ext: String,
-    pub url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Metadata {
-    pub id: String,
     pub title: String,
     pub channel: Option<String>,
     pub duration: Option<i64>,
@@ -41,7 +39,6 @@ pub struct Metadata {
 pub struct Caption {
     pub lang: String,
     pub ext: String,
-    pub url: String,
     pub automatic: bool,
 }
 
@@ -191,7 +188,6 @@ pub fn choose_caption(meta: &Metadata, language: &str) -> Option<Caption> {
             let caption = Caption {
                 lang: key.clone(),
                 ext: track.ext.clone(),
-                url: track.url.clone(),
                 automatic: false,
             };
             let score =
@@ -212,7 +208,6 @@ pub fn choose_caption(meta: &Metadata, language: &str) -> Option<Caption> {
             let caption = Caption {
                 lang: key.clone(),
                 ext: track.ext.clone(),
-                url: track.url.clone(),
                 automatic: true,
             };
             let score = score_track(language, key, true) + if track.ext == "json3" { 1 } else { 0 };

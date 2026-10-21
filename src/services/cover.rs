@@ -1,6 +1,6 @@
 use crate::error::{AppError, AppResult};
 use ab_glyph::{FontRef, PxScale};
-use image::{imageops, GenericImageView, ImageFormat, ImageReader, Limits, Rgb, RgbImage};
+use image::{imageops, ImageFormat, ImageReader, Limits, Rgb, RgbImage};
 use imageproc::drawing::{draw_text_mut, text_size};
 use std::io::Cursor;
 
