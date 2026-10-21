@@ -1,0 +1,24 @@
+{% if rows.is_empty() %}
+<div class="empty">Không có tập phù hợp.</div>
+{% else %}
+<table>
+  <thead><tr><th>Tập</th><th>Show</th><th>Trạng thái</th><th>Thời lượng</th><th>Tạo lúc</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td><a href="/episodes/{{ row.episode.uuid }}">{{ row.episode.source_title }}</a></td>
+      <td>{{ row.show_title }}</td>
+      <td>
+        {% if row.episode.status == "published" %}<span class="pill ok">Đã đăng</span>
+        {% else if row.episode.status == "ready" %}<span class="pill">Sẵn sàng</span>
+        {% else if row.episode.status == "failed" %}<span class="pill err">Lỗi</span>
+        {% else %}<span class="pill">{{ row.episode.status }}</span>{% endif %}
+        {% if row.episode.error_code.is_some() %}<div class="error">{{ row.episode.error_code.as_deref().unwrap_or_default() }}</div>{% endif %}
+      </td>
+      <td>{{ row.episode.target_minutes }} phút</td>
+      <td>{{ row.episode.created_at }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}

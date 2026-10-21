@@ -1,4 +1,5 @@
 pub mod csrf;
+pub mod library;
 pub mod studio;
 
 use crate::state::AppState;
@@ -35,6 +36,8 @@ pub fn admin_router(state: AppState) -> Router {
         .route("/api/preview", post(studio::preview))
         .route("/episodes", post(studio::create))
         .route("/api/queue", get(studio::queue))
+        .route("/library", get(library::index))
+        .route("/api/library/rows", get(library::rows))
         .layer(middleware::from_fn(csrf::csrf_middleware));
     let assets = Router::new().route("/assets/{*path}", get(asset));
     pages.merge(assets).with_state(state)
