@@ -1,6 +1,7 @@
 pub mod csrf;
 pub mod episodes;
 pub mod library;
+pub mod public;
 pub mod settings;
 pub mod shows;
 pub mod studio;

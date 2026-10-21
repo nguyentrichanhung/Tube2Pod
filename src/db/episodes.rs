@@ -497,6 +497,17 @@ pub async fn list_published(pool: &SqlitePool, show_id: i64) -> AppResult<Vec<Ep
     .await?)
 }
 
+pub async fn list_feed(pool: &SqlitePool, show_id: i64) -> AppResult<Vec<Episode>> {
+    Ok(sqlx::query_as::<_, Episode>(
+        "SELECT * FROM episodes
+         WHERE show_id = ?1 AND published_at IS NOT NULL AND audio_path IS NOT NULL
+         ORDER BY published_at DESC, uuid DESC",
+    )
+    .bind(show_id)
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn delete(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
     sqlx::query("DELETE FROM episodes WHERE uuid = ?1")
         .bind(uuid)
