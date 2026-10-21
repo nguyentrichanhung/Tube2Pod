@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row between">
+  <div>
+    <p class="muted"><a href="/shows/{{ show.id }}">{{ show.title }}</a></p>
+    <h1>{{ episode.source_title }}</h1>
+    <div class="muted">{{ episode.source_channel }} · {{ episode.target_minutes }} phút · {{ episode.language }}</div>
+  </div>
+  <div class="row">
+    {% if episode.status == "published" %}<span class="pill ok">Đã đăng</span>
+    {% else if episode.status == "ready" %}<span class="pill">Sẵn sàng</span>
+    {% else if episode.status == "failed" %}<span class="pill err">Lỗi</span>
+    {% else %}<span class="pill">{{ episode.stage }}</span>{% endif %}
+  </div>
+</div>
+
+{% if duplicate %}
+<div class="notice" role="status">Tập này đã có trong thư viện; không tạo thêm bản sao.</div>
+{% endif %}
+{% if episode.error_code.is_some() %}
+<div class="notice error" role="alert">{{ episode.error_code.as_deref().unwrap_or_default() }}: {{ episode.error_message.as_deref().unwrap_or_default() }}</div>
+{% endif %}
+{% if episode.language != show.language %}
+<div class="notice">Tập này đọc tiếng {{ episode.language }}; feed đang khai báo tiếng {{ show.language }}.</div>
+{% endif %}
+
+<div class="grid two">
+  <section class="stack">
+    <div class="card">
+      {% if audio_url.is_some() %}
+      <audio controls preload="metadata" src="{{ audio_url.as_deref().unwrap_or_default() }}" style="width:100%" aria-label="Audio tập {{ episode.source_title }}"></audio>
+      {% else %}
+      <div class="empty">Audio chưa sẵn sàng.</div>
+      {% endif %}
+      <div class="row between" style="margin-top:.75rem">
+        <a href="{{ feed_url }}" target="_blank" rel="noreferrer">Feed URL</a>
+        <a href="{{ episode.source_url }}" target="_blank" rel="noreferrer">Video nguồn</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row between">
+        <h2>Bản tóm tắt</h2>
+        {% if episode.audio_needs_reread() %}<span class="pill err">Cần đọc lại</span>{% else if audio_url.is_some() %}<span class="pill ok">Audio khớp</span>{% endif %}
+      </div>
+      <form hx-patch="/episodes/{{ episode.uuid }}" class="stack">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <textarea name="summary_text" aria-label="Bản tóm tắt">{{ episode.summary_text.as_deref().unwrap_or_default() }}</textarea>
+        <button type="submit">Lưu bản tóm tắt</button>
+      </form>
+      <p class="muted">Lưu bản tóm tắt cập nhật mô tả feed ngay; audio cũ vẫn phát đến khi bấm “Đọc lại”.</p>
+    </div>
+
+    <div class="card">
+      <h2>Hành động</h2>
+      <div class="row">
+        {% if episode.status == "failed" || episode.status == "cancelled" %}
+        <form method="post" action="/episodes/{{ episode.uuid }}/retry"><input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">Thử lại</button></form>
+        {% endif %}
+        {% if episode.status == "published" || episode.status == "ready" || episode.status == "failed" %}
+        <form method="post" action="/episodes/{{ episode.uuid }}/reread" hx-confirm="Bắt đầu tạo audio mới từ bản tóm tắt hiện tại?"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="secondary" type="submit">Đọc lại từ bản sửa</button></form>
+        {% endif %}
+        {% if episode.status == "ready" %}
+        <form method="post" action="/episodes/{{ episode.uuid }}/publish"><input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">Phát hành</button></form>
+        {% endif %}
+        {% if episode.status == "queued" || episode.status == "running" %}
+        <form method="post" action="/episodes/{{ episode.uuid }}/cancel"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="danger" type="submit">Huỷ</button></form>
+        {% endif %}
+      </div>
+      <form method="post" action="/episodes/{{ episode.uuid }}" hx-delete="/episodes/{{ episode.uuid }}" hx-confirm="Xoá vĩnh viễn tập này, transcript và mọi bản audio?" class="stack" style="margin-top:1rem">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <button class="danger" type="submit">Xoá tập</button>
+      </form>
+    </div>
+  </section>
+
+  <aside class="stack">
+    <div class="card">
+      <h2>Tiến trình</h2>
+      <div class="stack" aria-live="polite">
+        <div><strong>{{ episode.stage }}</strong></div>
+        <div class="muted">{{ episode.status }}</div>
+        <pre style="white-space:pre-wrap">{{ episode.progress_json.as_deref().unwrap_or("") }}</pre>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Transcript</h2>
+      {% if transcript.is_empty() %}
+      <div class="empty">Chưa có transcript.</div>
+      {% else %}
+      <details><summary>Xem transcript</summary><pre style="white-space:pre-wrap">{{ transcript }}</pre></details>
+      {% endif %}
+    </div>
+  </aside>
+</div>
+{% endblock %}

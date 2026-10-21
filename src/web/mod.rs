@@ -1,4 +1,5 @@
 pub mod csrf;
+pub mod episodes;
 pub mod library;
 pub mod shows;
 pub mod studio;
@@ -37,6 +38,17 @@ pub fn admin_router(state: AppState) -> Router {
         .route("/", get(studio::index))
         .route("/api/preview", post(studio::preview))
         .route("/episodes", post(studio::create))
+        .route(
+            "/episodes/{uuid}",
+            get(episodes::detail)
+                .patch(episodes::update_summary)
+                .delete(episodes::delete),
+        )
+        .route("/episodes/{uuid}/retry", post(episodes::retry))
+        .route("/episodes/{uuid}/cancel", post(episodes::cancel))
+        .route("/episodes/{uuid}/reread", post(episodes::reread))
+        .route("/episodes/{uuid}/publish", post(episodes::publish))
+        .route("/api/episodes/{uuid}/status", get(episodes::status))
         .route("/api/queue", get(studio::queue))
         .route("/library", get(library::index))
         .route("/api/library/rows", get(library::rows))
