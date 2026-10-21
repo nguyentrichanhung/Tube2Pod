@@ -1,10 +1,12 @@
 pub mod csrf;
 pub mod library;
+pub mod shows;
 pub mod studio;
 
+use crate::services::cover;
 use crate::state::AppState;
 use axum::body::Body;
-use axum::extract::Path;
+use axum::extract::{DefaultBodyLimit, Path};
 use axum::http::{header, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
@@ -38,6 +40,21 @@ pub fn admin_router(state: AppState) -> Router {
         .route("/api/queue", get(studio::queue))
         .route("/library", get(library::index))
         .route("/api/library/rows", get(library::rows))
+        .route("/shows", get(shows::index).post(shows::create))
+        .route(
+            "/shows/{id}",
+            get(shows::detail)
+                .patch(shows::update)
+                .delete(shows::delete),
+        )
+        .route(
+            "/shows/{id}/cover",
+            post(shows::upload_cover)
+                .layer(DefaultBodyLimit::max(cover::MAX_UPLOAD_BYTES + 1024 * 1024)),
+        )
+        .route("/shows/{id}/feed/toggle", post(shows::toggle_feed))
+        .route("/shows/{id}/feed/rotate", post(shows::rotate_feed))
+        .route("/shows/{id}/publish-ready", post(shows::publish_ready))
         .layer(middleware::from_fn(csrf::csrf_middleware));
     let assets = Router::new().route("/assets/{*path}", get(asset));
     pages.merge(assets).with_state(state)
