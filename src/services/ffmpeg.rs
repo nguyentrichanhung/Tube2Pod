@@ -60,8 +60,11 @@ pub async fn concat_audio(
                 "128k",
                 "-af",
                 "loudnorm=I=-16:TP=-1.5:LRA=11",
+                "-f",
+                "mp3",
             ])
             .arg(out)
+            .kill_on_drop(true)
             .stdin(Stdio::null())
             .output(),
     )
@@ -73,9 +76,12 @@ pub async fn concat_audio(
         let tail = String::from_utf8_lossy(&output.stderr);
         return Err(AppError::Upstream(format!("ffmpeg failed: {tail}")));
     }
-    let duration_s = probe(cfg, out).await?;
     let bytes = tokio::fs::metadata(out).await?.len();
-    if bytes == 0 || duration_s <= 0.0 {
+    if bytes == 0 {
+        return Err(AppError::Upstream("assembled audio is empty".into()));
+    }
+    let duration_s = probe(cfg, out).await?;
+    if !duration_s.is_finite() || duration_s <= 0.0 {
         return Err(AppError::Upstream("assembled audio is empty".into()));
     }
     Ok(Probe { bytes, duration_s })
@@ -94,6 +100,7 @@ pub async fn probe(cfg: &Config, path: &Path) -> AppResult<f64> {
                 "default=nw=1:nk=1",
             ])
             .arg(path)
+            .kill_on_drop(true)
             .output(),
     )
     .await
@@ -224,7 +231,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concat_audio_rejects_empty_output() {
+    async fn concat_audio_rejects_empty_output_before_probing() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = test_config(dir.path());
         fake_binary(
@@ -232,7 +239,7 @@ mod tests {
             "ffmpeg",
             "#!/bin/sh\nout=\nfor a in \"$@\"; do out=\"$a\"; done\n: > \"$out\"\n",
         );
-        fake_binary(dir.path(), "ffprobe", "#!/bin/sh\nprintf '12.5\\n'\n");
+        fake_binary(dir.path(), "ffprobe", "#!/bin/sh\nexit 1\n");
         let part = dir.path().join("part.mp3");
         tokio::fs::write(&part, b"part").await.unwrap();
 
@@ -244,7 +251,69 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, AppError::Upstream(_)));
+        match err {
+            AppError::Upstream(message) => {
+                assert!(message.contains("empty"), "message: {message}")
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn concat_audio_rejects_non_finite_duration() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = test_config(dir.path());
+        fake_binary(
+            dir.path(),
+            "ffmpeg",
+            "#!/bin/sh\nout=\nfor a in \"$@\"; do out=\"$a\"; done\nprintf 'audio' > \"$out\"\n",
+        );
+        fake_binary(dir.path(), "ffprobe", "#!/bin/sh\nprintf 'inf\\n'\n");
+        let part = dir.path().join("part.mp3");
+        tokio::fs::write(&part, b"part").await.unwrap();
+
+        let err = concat_audio(
+            &cfg,
+            std::slice::from_ref(&part),
+            dir.path(),
+            &dir.path().join("out.mp3"),
+        )
+        .await
+        .unwrap_err();
+        match err {
+            AppError::Upstream(message) => {
+                assert!(message.contains("empty"), "message: {message}")
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn concat_audio_forces_mp3_format_before_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = test_config(dir.path());
+        let args_path = dir.path().join("args.txt");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nout=\nfor a in \"$@\"; do out=\"$a\"; done\nprintf 'audio' > \"$out\"\n",
+            args_path.display()
+        );
+        fake_binary(dir.path(), "ffmpeg", &script);
+        fake_binary(dir.path(), "ffprobe", "#!/bin/sh\nprintf '12.5\\n'\n");
+        let part = dir.path().join("part.mp3");
+        tokio::fs::write(&part, b"part").await.unwrap();
+        let out = dir.path().join("out.bin");
+
+        concat_audio(&cfg, std::slice::from_ref(&part), dir.path(), &out)
+            .await
+            .unwrap();
+
+        let args = tokio::fs::read_to_string(&args_path).await.unwrap();
+        let args: Vec<&str> = args.lines().collect();
+        let out_index = args
+            .iter()
+            .rposition(|arg| *arg == out.to_str().unwrap())
+            .unwrap();
+        assert_eq!(&args[out_index - 2..out_index], &["-f", "mp3"]);
     }
 
     #[tokio::test]
