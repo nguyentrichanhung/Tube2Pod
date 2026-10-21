@@ -198,6 +198,19 @@ pub fn status_label_for(status: &str) -> &'static str {
     }
 }
 
+pub fn created_label_for(ts: i64) -> String {
+    let seconds = crate::db::now_ts() - ts;
+    if seconds < 60 {
+        "vừa xong".into()
+    } else if seconds < 3600 {
+        format!("{} phút trước", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{} giờ trước", seconds / 3600)
+    } else {
+        format!("{} ngày trước", seconds / 86_400)
+    }
+}
+
 pub fn error_label_for(code: Option<&str>) -> Option<&'static str> {
     match code? {
         "invalid_url" => Some("Link video không hợp lệ."),
@@ -249,6 +262,10 @@ impl Episode {
 
     pub fn status_label(&self) -> &'static str {
         status_label_for(&self.status)
+    }
+
+    pub fn created_label(&self) -> String {
+        created_label_for(self.created_at)
     }
 
     pub fn error_label(&self) -> Option<&'static str> {
@@ -396,6 +413,14 @@ mod tests {
         assert_eq!(progress_percent_for("publishing", 0, None, None), 95);
         assert_eq!(progress_percent_for("published", 0, None, None), 100);
         assert_eq!(progress_percent_for("ready", 0, None, None), 100);
+    }
+
+    #[test]
+    fn relative_created_label_is_human_readable() {
+        let now = chrono::Utc::now().timestamp();
+        assert_eq!(created_label_for(now - 30), "vừa xong");
+        assert_eq!(created_label_for(now - 120), "2 phút trước");
+        assert_eq!(created_label_for(now - 7200), "2 giờ trước");
     }
 
     #[test]

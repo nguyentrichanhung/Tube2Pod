@@ -18,7 +18,7 @@
     <select name="status">
       <option value="">Tất cả</option>
       {% for status in ["queued", "running", "ready", "published", "failed", "cancelled"] %}
-      <option value="{{ status }}" {% if self.status_selected(status) %}selected{% endif %}>{{ status }}</option>
+      <option value="{{ status }}" {% if self.status_selected(status) %}selected{% endif %}>{{ self.status_label(status) }}</option>
       {% endfor %}
     </select>
   </label>
@@ -26,6 +26,10 @@
     <input name="q" value="{{ query }}" placeholder="Tên video hoặc kênh">
   </label>
 </form>
+<div class="row between">
+  <p class="muted">{{ rows.len() }} tập</p>
+  <a class="btn btn-secondary" href="/library">Xoá bộ lọc</a>
+</div>
 <section class="card" id="rows">
   {% include "partials/episode_rows.html" %}
 </section>

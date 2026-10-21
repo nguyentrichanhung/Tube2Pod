@@ -1,5 +1,6 @@
 pub mod csrf;
 pub mod episodes;
+pub mod errors;
 pub mod library;
 pub mod public;
 pub mod settings;
@@ -82,7 +83,8 @@ pub fn admin_router(state: AppState) -> Router {
         .route("/shows/{id}/publish-ready", post(shows::publish_ready))
         .route("/settings", get(settings::index).post(settings::save))
         .route("/healthz", get(crate::health::healthz))
-        .layer(middleware::from_fn(csrf::csrf_middleware));
+        .layer(middleware::from_fn(csrf::csrf_middleware))
+        .layer(middleware::from_fn(errors::html_errors));
     let assets = Router::new().route("/assets/{*path}", get(asset));
     pages.merge(assets).with_state(state)
 }
@@ -204,6 +206,29 @@ mod tests {
         let response = get("/", Some(&cookie)).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response.headers().get(header::SET_COOKIE).is_none());
+    }
+
+    #[tokio::test]
+    async fn browser_form_error_renders_html_not_json() {
+        let response = admin_router(test_state().await)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/episodes")
+                    .header(header::ACCEPT, "text/html")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("_csrf=bad&url=x&show_id=1&minutes=10"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Yêu cầu không hợp lệ"));
+        assert!(!html.contains("\"ok\":false"));
     }
 
     #[tokio::test]

@@ -9,14 +9,14 @@
       <td><a href="/episodes/{{ row.episode.uuid }}">{{ row.episode.source_title }}</a></td>
       <td>{{ row.show_title }}</td>
       <td>
-        {% if row.episode.status == "published" %}<span class="pill ok">Đã đăng</span>
-        {% else if row.episode.status == "ready" %}<span class="pill">Sẵn sàng</span>
-        {% else if row.episode.status == "failed" %}<span class="pill err">Lỗi</span>
-        {% else %}<span class="pill">{{ row.episode.status }}</span>{% endif %}
-        {% if row.episode.error_code.is_some() %}<div class="error">{{ row.episode.error_code.as_deref().unwrap_or_default() }}</div>{% endif %}
+        <span class="badge{% if row.episode.status == "published" || row.episode.status == "ready" %} badge-ok{% else if row.episode.status == "failed" %} badge-err{% endif %}">{{ row.episode.status_label() }}</span>
+        <div class="progress" role="progressbar" aria-label="Tiến trình {{ row.episode.source_title }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ row.episode.progress_percent() }}">
+          <div class="progress-bar{% if row.episode.status == "failed" || row.episode.status == "cancelled" %} err{% else if row.episode.status == "published" || row.episode.status == "ready" %} ok{% endif %}" style="width:{{ row.episode.progress_percent() }}%"></div>
+        </div>
+        {% if row.episode.error_label().is_some() %}<div class="error">{{ row.episode.error_label().unwrap() }}</div>{% endif %}
       </td>
       <td>{{ row.episode.target_minutes }} phút</td>
-      <td>{{ row.episode.created_at }}</td>
+      <td>{{ row.episode.created_label() }}</td>
     </tr>
   {% endfor %}
   </tbody>
