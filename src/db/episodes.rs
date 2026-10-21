@@ -339,6 +339,18 @@ pub async fn set_chunk_count(pool: &SqlitePool, uuid: &str, chunk_count: i64) ->
     Ok(())
 }
 
+pub async fn clear_chunk_state(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE episodes SET active_take_id = NULL, take_ids_json = NULL,
+            chunk_done = 0, chunk_count = NULL
+         WHERE uuid = ?1",
+    )
+    .bind(uuid)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn set_audio(
     pool: &SqlitePool,
     uuid: &str,
@@ -717,6 +729,24 @@ mod tests {
         let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
         assert_eq!(got.status, status::CANCELLED);
         assert_eq!(got.audio_path.as_deref(), Some("/data/audio/x-1.mp3"));
+    }
+
+    #[tokio::test]
+    async fn clear_chunk_state_drops_all_resume_fields() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
+        set_active_take(&pool, &ep.uuid, Some(77)).await.unwrap();
+        set_chunk_progress(&pool, &ep.uuid, "[77]", 1, 3)
+            .await
+            .unwrap();
+
+        clear_chunk_state(&pool, &ep.uuid).await.unwrap();
+
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.active_take_id, None);
+        assert_eq!(got.take_ids_json, None);
+        assert_eq!(got.chunk_done, 0);
+        assert_eq!(got.chunk_count, None);
     }
 
     #[tokio::test]

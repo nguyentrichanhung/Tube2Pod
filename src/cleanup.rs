@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::db::{self, settings};
 use crate::error::AppResult;
+use crate::models::status;
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -38,29 +39,43 @@ async fn cleanup_audio(pool: &SqlitePool, cfg: &Config, days: i64) -> AppResult<
         return Ok(());
     };
     let now = db::now_ts();
-    let ttl = days.saturating_mul(24 * 60 * 60);
+    let ttl = retention_ttl(days, 24 * 60 * 60);
     while let Some(entry) = entries.next_entry().await? {
         let file_type = entry.file_type().await?;
         if !file_type.is_file() {
             continue;
         }
-        let modified = entry
+        let path = entry.path();
+        let path_text = path.to_string_lossy();
+        let episode = match entry.file_name().to_str().and_then(audio_uuid) {
+            Some(uuid) => db::episodes::get(pool, &uuid).await?,
+            None => None,
+        };
+        if let Some(episode) = &episode {
+            if episode.audio_path.as_deref() == Some(path_text.as_ref()) {
+                continue;
+            }
+        } else {
+            let referenced: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM episodes WHERE audio_path = ?1")
+                    .bind(path_text.as_ref())
+                    .fetch_one(pool)
+                    .await?;
+            if referenced > 0 {
+                continue;
+            }
+        }
+        let fallback = entry
             .metadata()
             .await
             .ok()
             .and_then(|meta| meta.modified().ok())
             .and_then(system_secs)
             .unwrap_or(now);
-        if !is_expired(now, modified, ttl) {
-            continue;
-        }
-        let path = entry.path();
-        let referenced: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM episodes WHERE audio_path = ?1")
-                .bind(path.display().to_string())
-                .fetch_one(pool)
-                .await?;
-        if referenced == 0 {
+        let baseline = episode
+            .map(|episode| episode.updated_at)
+            .unwrap_or(fallback);
+        if is_expired(now, baseline, ttl) {
             let _ = tokio::fs::remove_file(&path).await;
         }
     }
@@ -73,21 +88,31 @@ async fn cleanup_tmp(pool: &SqlitePool, cfg: &Config, hours: i64) -> AppResult<(
         return Ok(());
     };
     let now = db::now_ts();
-    let ttl = hours.saturating_mul(60 * 60);
+    let ttl = retention_ttl(hours, 60 * 60);
     while let Some(entry) = entries.next_entry().await? {
         let file_type = entry.file_type().await?;
         if !file_type.is_dir() {
             continue;
         }
-        let uuid = entry.file_name().to_string_lossy().to_string();
-        let active: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM episodes WHERE uuid = ?1 AND status = 'running'",
-        )
-        .bind(&uuid)
-        .fetch_one(pool)
-        .await?;
-        if active > 0 {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == "yt-dlp" || uuid::Uuid::parse_str(&name).is_err() {
             continue;
+        }
+        let current: Option<String> =
+            sqlx::query_scalar("SELECT status FROM episodes WHERE uuid = ?1")
+                .bind(&name)
+                .fetch_optional(pool)
+                .await?;
+        if matches!(current.as_deref(), Some(status::QUEUED | status::RUNNING)) {
+            continue;
+        }
+        if let Some(current) = current.as_deref() {
+            if !matches!(
+                current,
+                status::FAILED | status::CANCELLED | status::READY | status::PUBLISHED
+            ) {
+                continue;
+            }
         }
         let modified = entry
             .metadata()
@@ -97,16 +122,35 @@ async fn cleanup_tmp(pool: &SqlitePool, cfg: &Config, hours: i64) -> AppResult<(
             .and_then(system_secs)
             .unwrap_or(now);
         if is_expired(now, modified, ttl) {
+            if current.is_some() {
+                db::episodes::clear_chunk_state(pool, &name).await?;
+            }
             let _ = tokio::fs::remove_dir_all(entry.path()).await;
         }
     }
     Ok(())
 }
 
+fn audio_uuid(file_name: &str) -> Option<String> {
+    let stem = file_name.strip_suffix(".mp3")?;
+    let (uuid, version) = stem.rsplit_once('-')?;
+    let version = version.parse::<i64>().ok()?;
+    if version <= 0 {
+        return None;
+    }
+    uuid::Uuid::parse_str(uuid)
+        .ok()
+        .map(|uuid| uuid.to_string())
+}
+
 fn system_secs(time: SystemTime) -> Option<i64> {
     time.duration_since(UNIX_EPOCH)
         .ok()
         .map(|duration| duration.as_secs() as i64)
+}
+
+fn retention_ttl(value: i64, unit: i64) -> i64 {
+    value.max(1).saturating_mul(unit)
 }
 
 pub fn is_expired(now: i64, modified: i64, ttl_secs: i64) -> bool {
@@ -123,6 +167,13 @@ mod tests {
         assert!(!is_expired(1_000, 1_000, 10));
         assert!(!is_expired(1_010, 1_000, 10));
         assert!(is_expired(1_011, 1_000, 10));
+    }
+
+    #[test]
+    fn retention_ttl_clamps_to_at_least_one_unit() {
+        assert_eq!(retention_ttl(0, 86_400), 86_400);
+        assert_eq!(retention_ttl(-5, 3_600), 3_600);
+        assert_eq!(retention_ttl(2, 3_600), 7_200);
     }
 
     fn config(dir: &Path) -> Config {
@@ -146,6 +197,13 @@ mod tests {
     fn write(path: &Path, contents: &[u8]) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, contents).unwrap();
+    }
+
+    fn aged_tmp_dir(cfg: &Config, name: &str, seconds: u64) -> std::path::PathBuf {
+        let dir = cfg.data_dir.join("tmp").join(name);
+        write(&dir.join("part-000.mp3"), b"part");
+        age(&dir, seconds);
+        dir
     }
 
     async fn episode(pool: &SqlitePool, video_id: &str) -> crate::models::Episode {
@@ -177,67 +235,186 @@ mod tests {
         .unwrap()
     }
 
+    async fn set_status(pool: &SqlitePool, uuid: &str, status: &str) {
+        sqlx::query("UPDATE episodes SET status = ?1 WHERE uuid = ?2")
+            .bind(status)
+            .bind(uuid)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn set_resume_state(pool: &SqlitePool, uuid: &str) {
+        sqlx::query(
+            "UPDATE episodes SET active_take_id = 11, take_ids_json = '[11]',
+                chunk_done = 1, chunk_count = 3 WHERE uuid = ?1",
+        )
+        .bind(uuid)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn retention(pool: &SqlitePool, days: &str, hours: &str) {
+        db::settings::set(pool, "retention_old_audio_days", days)
+            .await
+            .unwrap();
+        db::settings::set(pool, "retention_tmp_hours", hours)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
-    async fn run_once_uses_settings_and_keeps_live_files() {
+    async fn run_once_keeps_queued_and_running_tmp_dirs() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = config(dir.path());
         let pool = crate::db::test_pool().await;
-        db::settings::set(&pool, "retention_old_audio_days", "1")
-            .await
-            .unwrap();
-        db::settings::set(&pool, "retention_tmp_hours", "1")
-            .await
-            .unwrap();
+        retention(&pool, "1", "1").await;
 
+        let queued = episode(&pool, "queued").await;
+        let queued_dir = aged_tmp_dir(&cfg, &queued.uuid, 5 * 60 * 60);
+
+        let running = episode(&pool, "running").await;
+        set_status(&pool, &running.uuid, "running").await;
+        let running_dir = aged_tmp_dir(&cfg, &running.uuid, 5 * 60 * 60);
+
+        run_once(&pool, &cfg).await.unwrap();
+
+        assert!(queued_dir.exists(), "queued tmp dir must be preserved");
+        assert!(running_dir.exists(), "running tmp dir must be preserved");
+    }
+
+    #[tokio::test]
+    async fn run_once_removes_terminal_tmp_dir_and_clears_chunk_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path());
+        let pool = crate::db::test_pool().await;
+        retention(&pool, "1", "1").await;
+
+        let failed = episode(&pool, "failed").await;
+        set_status(&pool, &failed.uuid, "failed").await;
+        set_resume_state(&pool, &failed.uuid).await;
+        let failed_dir = aged_tmp_dir(&cfg, &failed.uuid, 2 * 60 * 60);
+
+        run_once(&pool, &cfg).await.unwrap();
+
+        assert!(
+            !failed_dir.exists(),
+            "expired terminal tmp dir must be removed"
+        );
+        let got = db::episodes::get(&pool, &failed.uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.active_take_id, None);
+        assert_eq!(got.take_ids_json, None);
+        assert_eq!(got.chunk_done, 0);
+        assert_eq!(got.chunk_count, None);
+    }
+
+    #[tokio::test]
+    async fn run_once_preserves_shared_yt_dlp_and_non_uuid_tmp_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path());
+        let pool = crate::db::test_pool().await;
+        retention(&pool, "1", "1").await;
+
+        let shared = aged_tmp_dir(&cfg, "yt-dlp", 10 * 24 * 60 * 60);
+        let named = aged_tmp_dir(&cfg, "not-a-uuid", 10 * 24 * 60 * 60);
+
+        run_once(&pool, &cfg).await.unwrap();
+
+        assert!(shared.exists(), "tmp/yt-dlp must be preserved");
+        assert!(named.exists(), "non-uuid tmp dirs must be preserved");
+    }
+
+    #[tokio::test]
+    async fn run_once_removes_expired_orphan_uuid_tmp_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path());
+        let pool = crate::db::test_pool().await;
+        retention(&pool, "1", "1").await;
+
+        let orphan = aged_tmp_dir(&cfg, &uuid::Uuid::new_v4().to_string(), 2 * 60 * 60);
+
+        run_once(&pool, &cfg).await.unwrap();
+
+        assert!(!orphan.exists(), "expired orphan uuid dir must be removed");
+    }
+
+    #[tokio::test]
+    async fn audio_retention_uses_episode_updated_at_and_keeps_current_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path());
+        let pool = crate::db::test_pool().await;
+        retention(&pool, "1", "1").await;
+
+        let episode = episode(&pool, "reread").await;
         let audio = cfg.data_dir.join("audio");
-        let referenced = episode(&pool, "referenced").await;
-        let referenced_path = audio.join(format!("{}-1.mp3", referenced.uuid));
-        write(&referenced_path, b"referenced");
-        age(&referenced_path, 3 * 24 * 60 * 60);
+        let superseded = audio.join(format!("{}-1.mp3", episode.uuid));
+        let current = audio.join(format!("{}-2.mp3", episode.uuid));
+        write(&superseded, b"old");
+        write(&current, b"new");
+        age(&superseded, 10 * 24 * 60 * 60);
+        age(&current, 10 * 24 * 60 * 60);
         db::episodes::set_audio(
             &pool,
-            &referenced.uuid,
-            &referenced_path.display().to_string(),
+            &episode.uuid,
+            &current.display().to_string(),
             3,
             1,
             "hash",
-            1,
+            2,
         )
         .await
         .unwrap();
 
-        let orphan = audio.join("orphan-1.mp3");
-        write(&orphan, b"orphan");
-        age(&orphan, 3 * 24 * 60 * 60);
+        run_once(&pool, &cfg).await.unwrap();
+        assert!(
+            superseded.exists(),
+            "superseded audio is young according to episode.updated_at"
+        );
+        assert!(current.exists(), "current audio must never be deleted");
 
-        let fresh_audio = audio.join("fresh-1.mp3");
-        write(&fresh_audio, b"fresh");
-
-        let tmp = cfg.data_dir.join("tmp");
-        let running = episode(&pool, "running").await;
-        sqlx::query("UPDATE episodes SET status = 'running' WHERE uuid = ?1")
-            .bind(&running.uuid)
+        sqlx::query("UPDATE episodes SET updated_at = ?1 WHERE uuid = ?2")
+            .bind(db::now_ts() - 2 * 24 * 60 * 60)
+            .bind(&episode.uuid)
             .execute(&pool)
             .await
             .unwrap();
-        let run_dir = tmp.join(&running.uuid);
-        write(&run_dir.join("part-000.mp3"), b"part");
-        age(&run_dir, 2 * 60 * 60);
 
-        let stale = tmp.join("stale");
-        write(&stale.join("part-000.mp3"), b"part");
-        age(&stale, 2 * 60 * 60);
+        run_once(&pool, &cfg).await.unwrap();
+        assert!(
+            !superseded.exists(),
+            "superseded audio expires after updated_at ages"
+        );
+        assert!(current.exists(), "current audio must never be deleted");
+    }
 
-        let fresh_tmp = tmp.join("fresh");
-        std::fs::create_dir_all(&fresh_tmp).unwrap();
+    #[tokio::test]
+    async fn zero_retention_is_clamped_and_cannot_delete_young_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path());
+        let pool = crate::db::test_pool().await;
+        retention(&pool, "0", "0").await;
+
+        let orphan_audio = cfg
+            .data_dir
+            .join("audio")
+            .join(format!("{}-1.mp3", uuid::Uuid::new_v4()));
+        write(&orphan_audio, b"orphan");
+        age(&orphan_audio, 30 * 60);
+        let orphan_tmp = aged_tmp_dir(&cfg, &uuid::Uuid::new_v4().to_string(), 30 * 60);
 
         run_once(&pool, &cfg).await.unwrap();
 
-        assert!(!orphan.exists(), "unreferenced old audio should be removed");
-        assert!(referenced_path.exists(), "referenced audio must be kept");
-        assert!(fresh_audio.exists(), "fresh audio must be kept");
-        assert!(run_dir.exists(), "active tmp dir must be kept");
-        assert!(!stale.exists(), "stale tmp dir should be removed");
-        assert!(fresh_tmp.exists(), "fresh tmp dir must be kept");
+        assert!(
+            orphan_audio.exists(),
+            "zero days must clamp to one day, not delete immediately"
+        );
+        assert!(
+            orphan_tmp.exists(),
+            "zero hours must clamp to one hour, not delete immediately"
+        );
     }
 }

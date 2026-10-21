@@ -26,6 +26,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cfg = Arc::new(Config::from_lookup(|key| env::var(key).ok())?);
+    let admin_addr = parse_loopback_bind("BIND_ADMIN", &cfg.bind_admin)?;
+    let public_addr = parse_loopback_bind("BIND_PUBLIC", &cfg.bind_public)?;
     for dir in ["tmp", "audio", "transcripts", "shows"] {
         tokio::fs::create_dir_all(cfg.data_dir.join(dir)).await?;
     }
@@ -33,6 +35,9 @@ async fn main() -> anyhow::Result<()> {
 
     let pool = db::connect(&cfg.database_path()).await?;
     db::migrate(&pool).await?;
+    db::episodes::recover_running(&pool)
+        .await
+        .context("recover running episodes")?;
 
     let notify = Arc::new(Notify::new());
     worker::spawn(pool.clone(), cfg.clone(), notify.clone());
@@ -43,8 +48,6 @@ async fn main() -> anyhow::Result<()> {
         cfg: cfg.clone(),
         notify,
     };
-    let admin_addr: SocketAddr = cfg.bind_admin.parse().context("invalid BIND_ADMIN")?;
-    let public_addr: SocketAddr = cfg.bind_public.parse().context("invalid BIND_PUBLIC")?;
     let admin_listener = tokio::net::TcpListener::bind(admin_addr)
         .await
         .context("bind admin listener")?;
@@ -61,6 +64,49 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn parse_loopback_bind(name: &str, value: &str) -> anyhow::Result<SocketAddr> {
+    let addr: SocketAddr = value.parse().with_context(|| format!("invalid {name}"))?;
+    if !addr.ip().is_loopback() {
+        anyhow::bail!("{name} must bind to loopback (127.0.0.1 or ::1), got {addr}");
+    }
+    Ok(addr)
+}
+
 async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to install SIGTERM handler");
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_loopback_binds_and_rejects_public_interfaces() {
+        assert!(parse_loopback_bind("BIND_ADMIN", "127.0.0.1:8400").is_ok());
+        assert!(parse_loopback_bind("BIND_PUBLIC", "[::1]:8401").is_ok());
+
+        for value in ["0.0.0.0:8400", "192.168.1.5:8400", "not-an-address"] {
+            let error = parse_loopback_bind("BIND_ADMIN", value).unwrap_err();
+            assert!(error.to_string().contains("BIND_ADMIN"), "{value}: {error}");
+        }
+    }
 }
