@@ -139,13 +139,29 @@ pub async fn recover_running(pool: &SqlitePool) -> AppResult<u64> {
     Ok(result.rows_affected())
 }
 
+pub async fn earliest_retry_at(pool: &SqlitePool) -> AppResult<Option<i64>> {
+    let value: Option<i64> = sqlx::query_scalar(
+        "SELECT MIN(next_attempt_at) FROM episodes
+         WHERE status = ?1 AND next_attempt_at IS NOT NULL",
+    )
+    .bind(status::QUEUED)
+    .fetch_one(pool)
+    .await?;
+    Ok(value)
+}
+
 pub async fn set_stage(pool: &SqlitePool, uuid: &str, new_stage: &str) -> AppResult<()> {
-    sqlx::query("UPDATE episodes SET stage = ?1, updated_at = ?2 WHERE uuid = ?3")
-        .bind(new_stage)
-        .bind(now_ts())
-        .bind(uuid)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE episodes SET stage = ?1,
+            attempts = CASE WHEN stage != ?1 THEN 0 ELSE attempts END,
+            updated_at = ?2
+         WHERE uuid = ?3",
+    )
+    .bind(new_stage)
+    .bind(now_ts())
+    .bind(uuid)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -324,11 +340,12 @@ pub async fn set_audio(
     duration_s: i64,
     summary_hash: &str,
     version: i64,
-) -> AppResult<()> {
-    sqlx::query(
+) -> AppResult<bool> {
+    let result = sqlx::query(
         "UPDATE episodes SET audio_path = ?1, audio_bytes = ?2, audio_duration_s = ?3,
-            audio_summary_hash = ?4, audio_version = ?5, updated_at = ?6
-         WHERE uuid = ?7",
+            audio_summary_hash = ?4, audio_version = ?5, active_take_id = NULL,
+            take_ids_json = NULL, chunk_done = 0, chunk_count = NULL, updated_at = ?6
+         WHERE uuid = ?7 AND status != ?8",
     )
     .bind(path)
     .bind(bytes)
@@ -337,9 +354,10 @@ pub async fn set_audio(
     .bind(version)
     .bind(now_ts())
     .bind(uuid)
+    .bind(status::CANCELLED)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(result.rows_affected() > 0)
 }
 
 pub async fn finish(
@@ -354,13 +372,14 @@ pub async fn finish(
         "UPDATE episodes SET stage = ?1, status = ?2, error_code = NULL, error_message = NULL,
             next_attempt_at = NULL, updated_at = ?3,
             published_at = CASE WHEN ?4 THEN COALESCE(published_at, ?3) ELSE published_at END
-         WHERE uuid = ?5",
+         WHERE uuid = ?5 AND status != ?6",
     )
     .bind(final_stage)
     .bind(final_status)
     .bind(now)
     .bind(set_published_at_if_null)
     .bind(uuid)
+    .bind(status::CANCELLED)
     .execute(pool)
     .await?;
     Ok(())
@@ -599,6 +618,96 @@ mod tests {
         assert_eq!(got.attempts, 0);
         assert!(got.next_attempt_at.is_none());
         assert!(got.error_code.is_none());
+    }
+
+    #[tokio::test]
+    async fn finds_the_earliest_retry_for_queued_episodes() {
+        let (pool, show_id) = setup().await;
+        assert_eq!(earliest_retry_at(&pool).await.unwrap(), None);
+
+        let first = create(&pool, episode(show_id, "abc123")).await.unwrap();
+        let second = create(&pool, episode(show_id, "def456")).await.unwrap();
+        let later = now_ts() + 600;
+        let sooner = now_ts() + 30;
+        record_failure(&pool, &first.uuid, "tts_unavailable", "boom", Some(later))
+            .await
+            .unwrap();
+        record_failure(&pool, &second.uuid, "tts_unavailable", "boom", Some(sooner))
+            .await
+            .unwrap();
+
+        assert_eq!(earliest_retry_at(&pool).await.unwrap(), Some(sooner));
+
+        cancel(&pool, &second.uuid).await.unwrap();
+        assert_eq!(earliest_retry_at(&pool).await.unwrap(), Some(later));
+    }
+
+    #[tokio::test]
+    async fn set_stage_resets_attempts_only_when_the_stage_changes() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
+        record_failure(
+            &pool,
+            &ep.uuid,
+            "tts_unavailable",
+            "boom",
+            Some(now_ts() + 30),
+        )
+        .await
+        .unwrap();
+
+        set_stage(&pool, &ep.uuid, stage::QUEUED).await.unwrap();
+        assert_eq!(get(&pool, &ep.uuid).await.unwrap().unwrap().attempts, 1);
+
+        set_stage(&pool, &ep.uuid, stage::FETCHING).await.unwrap();
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.stage, stage::FETCHING);
+        assert_eq!(got.attempts, 0);
+    }
+
+    #[tokio::test]
+    async fn set_audio_clears_chunk_state_and_ignores_cancelled_episodes() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
+        set_active_take(&pool, &ep.uuid, Some(77)).await.unwrap();
+        set_chunk_progress(&pool, &ep.uuid, "[77]", 1, 3)
+            .await
+            .unwrap();
+
+        let installed = set_audio(&pool, &ep.uuid, "/data/audio/x-1.mp3", 10, 5, "hash", 1)
+            .await
+            .unwrap();
+        assert!(installed);
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.active_take_id, None);
+        assert_eq!(got.take_ids_json, None);
+        assert_eq!(got.chunk_done, 0);
+        assert_eq!(got.chunk_count, None);
+
+        cancel(&pool, &ep.uuid).await.unwrap();
+        let installed = set_audio(&pool, &ep.uuid, "/data/audio/x-2.mp3", 20, 9, "hash", 2)
+            .await
+            .unwrap();
+        assert!(!installed);
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.status, status::CANCELLED);
+        assert_eq!(got.audio_path.as_deref(), Some("/data/audio/x-1.mp3"));
+    }
+
+    #[tokio::test]
+    async fn finish_does_not_overwrite_a_cancelled_episode() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
+        cancel(&pool, &ep.uuid).await.unwrap();
+
+        finish(&pool, &ep.uuid, stage::PUBLISHED, status::PUBLISHED, true)
+            .await
+            .unwrap();
+
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.status, status::CANCELLED);
+        assert_eq!(got.stage, stage::QUEUED);
+        assert!(got.published_at.is_none());
     }
 
     #[tokio::test]

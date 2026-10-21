@@ -154,7 +154,20 @@ pub fn spawn(
                         );
                     }
                 },
-                Ok(None) => notify.notified().await,
+                Ok(None) => match episodes::earliest_retry_at(&pool).await {
+                    Ok(Some(at)) => {
+                        let delay = (at - crate::db::now_ts()).max(0) as u64;
+                        tokio::select! {
+                            _ = notify.notified() => {}
+                            _ = tokio::time::sleep(Duration::from_secs(delay)) => {}
+                        }
+                    }
+                    Ok(None) => notify.notified().await,
+                    Err(error) => {
+                        tracing::error!(%error, "failed to read retry schedule");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                },
                 Err(error) => {
                     tracing::error!(%error, "queue claim failed");
                     tokio::time::sleep(Duration::from_secs(5)).await;
