@@ -424,7 +424,7 @@ pub async fn record_failure(
 pub async fn retry(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
     sqlx::query(
         "UPDATE episodes SET status = ?1, attempts = 0, next_attempt_at = NULL,
-            error_code = NULL, error_message = NULL, updated_at = ?2
+            progress_json = NULL, error_code = NULL, error_message = NULL, updated_at = ?2
          WHERE uuid = ?3 AND status IN (?4, ?5, ?6)",
     )
     .bind(status::QUEUED)
@@ -456,7 +456,7 @@ pub async fn cancel(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
 pub async fn reset_for_reread(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
     sqlx::query(
         "UPDATE episodes SET stage = ?1, status = ?2, active_take_id = NULL,
-            take_ids_json = NULL, chunk_done = 0, chunk_count = NULL,
+            take_ids_json = NULL, chunk_done = 0, chunk_count = NULL, progress_json = NULL,
             attempts = 0, next_attempt_at = NULL, error_code = NULL, error_message = NULL,
             updated_at = ?3
          WHERE uuid = ?4",
@@ -602,6 +602,7 @@ mod tests {
         assert_eq!(got.status, status::QUEUED);
         assert_eq!(got.attempts, 0);
         assert!(got.error_code.is_none());
+        assert!(got.progress_json.is_none());
     }
 
     #[tokio::test]
@@ -845,6 +846,9 @@ mod tests {
         )
         .await
         .unwrap();
+        set_progress(&pool, &ep.uuid, r#"{"percent":80}"#)
+            .await
+            .unwrap();
         reset_for_reread(&pool, &ep.uuid).await.unwrap();
         let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
         assert_eq!(got.stage, stage::SYNTHESIZING);
@@ -852,6 +856,7 @@ mod tests {
         assert_eq!(got.audio_summary_hash.as_deref(), Some("hash-old"));
         assert_eq!(got.active_take_id, None);
         assert_eq!(got.chunk_done, 0);
+        assert!(got.progress_json.is_none());
     }
 
     #[tokio::test]

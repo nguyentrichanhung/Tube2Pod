@@ -2,10 +2,12 @@ use crate::db::{episodes, settings, shows};
 use crate::error::{AppError, AppResult};
 use crate::models::{Episode, Show};
 use crate::services::cover;
+use crate::services::omnivoice::OmnivoiceClient;
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
 use crate::web::library::LibraryRow;
 use askama::Template;
+use axum::body::Bytes;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -108,6 +110,12 @@ pub struct ShowEditForm {
 pub struct ConfirmForm {
     pub _csrf: String,
     pub confirm_title: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct DeleteQuery {
+    pub _csrf: Option<String>,
+    pub confirm_title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -442,13 +450,26 @@ pub async fn delete(
     Extension(token): Extension<CsrfToken>,
     headers: HeaderMap,
     Path(id): Path<i64>,
-    Form(form): Form<ConfirmForm>,
+    Query(query): Query<DeleteQuery>,
+    body: Bytes,
 ) -> AppResult<Response> {
-    csrf::verify(&token, &headers, &form._csrf)?;
+    let form_token = form_value(&body, "_csrf");
+    let provided = form_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .or(query._csrf.as_deref())
+        .unwrap_or("");
+    csrf::verify(&token, &headers, provided)?;
+    let form_title = form_value(&body, "confirm_title");
+    let confirm_title = form_title
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or(query.confirm_title.as_deref())
+        .unwrap_or("");
     let show = shows::get(&state.pool, id)
         .await?
         .ok_or(AppError::NotFound)?;
-    if show.title != form.confirm_title.trim() {
+    if show.title != confirm_title.trim() {
         return Err(AppError::BadRequest("Tên show xác nhận không khớp.".into()));
     }
     let mut offset = 0;
@@ -468,6 +489,10 @@ pub async fn delete(
         }
         let batch_len = batch.len();
         for episode in &batch {
+            if let Some(take_id) = episode.active_take_id {
+                let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+                let _ = client.delete_speech(take_id).await;
+            }
             let _ = episodes::cancel(&state.pool, &episode.uuid).await;
             purge_episode_files(&state.cfg.data_dir, episode).await;
         }
@@ -476,6 +501,7 @@ pub async fn delete(
             break;
         }
     }
+    state.notify.notify_one();
     shows::delete(&state.pool, id).await?;
     let _ = tokio::fs::remove_dir_all(state.cfg.data_dir.join("shows").join(id.to_string())).await;
     Ok(redirect_response(&headers, "/shows"))
@@ -487,6 +513,19 @@ pub async fn purge_episode_files(data_dir: &std::path::Path, episode: &Episode) 
     }
     if let Some(path) = &episode.transcript_path {
         let _ = tokio::fs::remove_file(path).await;
+    }
+    let transcript_dir = data_dir.join("transcripts");
+    let transcript_prefix = format!("{}.", episode.uuid);
+    if let Ok(mut entries) = tokio::fs::read_dir(&transcript_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(transcript_prefix.as_str())
+            {
+                let _ = tokio::fs::remove_file(entry.path()).await;
+            }
+        }
     }
     let _ = tokio::fs::remove_dir_all(data_dir.join("tmp").join(&episode.uuid)).await;
     let audio_dir = data_dir.join("audio");
@@ -501,6 +540,12 @@ pub async fn purge_episode_files(data_dir: &std::path::Path, episode: &Episode) 
             }
         }
     }
+}
+
+fn form_value(body: &[u8], key: &str) -> Option<String> {
+    url::form_urlencoded::parse(body)
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.into_owned())
 }
 
 fn is_htmx(headers: &HeaderMap) -> bool {
@@ -917,9 +962,21 @@ mod tests {
         .await
         .unwrap();
         let audio_dir = context.state.cfg.data_dir.join("audio");
+        let transcript_dir = context.state.cfg.data_dir.join("transcripts");
         tokio::fs::create_dir_all(&audio_dir).await.unwrap();
+        tokio::fs::create_dir_all(&transcript_dir).await.unwrap();
         let audio = audio_dir.join(format!("{}-1.mp3", episode.uuid));
+        let transcript = transcript_dir.join(format!("{}.txt", episode.uuid));
+        let raw_caption = transcript_dir.join(format!("{}.json3", episode.uuid));
         tokio::fs::write(&audio, b"audio").await.unwrap();
+        tokio::fs::write(&transcript, b"transcript").await.unwrap();
+        tokio::fs::write(&raw_caption, b"{}").await.unwrap();
+        sqlx::query("UPDATE episodes SET transcript_path = ?1 WHERE uuid = ?2")
+            .bind(transcript.display().to_string())
+            .bind(&episode.uuid)
+            .execute(&context.state.pool)
+            .await
+            .unwrap();
         let path = format!("/shows/{}", show.id);
 
         let rejected = send(
@@ -954,6 +1011,62 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(!audio.exists());
+        assert!(!transcript.exists());
+        assert!(!raw_caption.exists());
+    }
+
+    #[tokio::test]
+    async fn show_delete_route_accepts_csrf_and_title_from_the_query() {
+        let context = ctx().await;
+        let show = complete_show(&context, "Xoá tôi").await;
+        let query = form(&[("_csrf", TOKEN), ("confirm_title", "Xoá tôi")]);
+
+        let response = send(
+            &context,
+            Method::DELETE,
+            &format!("/shows/{}?{query}", show.id),
+            "application/x-www-form-urlencoded",
+            Vec::new(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert!(shows::get(&context.state.pool, show.id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn post_delete_alias_uses_hx_redirect_for_htmx_requests() {
+        let context = ctx().await;
+        let show = complete_show(&context, "Xoá tôi").await;
+
+        let response = send_with_headers(
+            &context,
+            Method::POST,
+            &format!("/shows/{}/delete", show.id),
+            "application/x-www-form-urlencoded",
+            form(&[("_csrf", TOKEN), ("confirm_title", "Xoá tôi")]).into_bytes(),
+            &[("hx-request", "true")],
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(header::LOCATION).is_none());
+        assert_eq!(
+            response
+                .headers()
+                .get("hx-redirect")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/shows"
+        );
+        assert!(shows::get(&context.state.pool, show.id)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -1338,6 +1451,8 @@ mod tests {
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains(&format!("action=\"/shows/{}/edit\"", show.id)));
         assert!(html.contains(&format!("action=\"/shows/{}/delete\"", show.id)));
+        assert!(html.contains(&format!("hx-post=\"/shows/{}/delete\"", show.id)));
+        assert!(!html.contains("hx-delete"));
 
         let missing = crate::web::admin_router(context.state.clone())
             .oneshot(

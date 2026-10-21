@@ -65,7 +65,7 @@
     <section class="card">
       <h2 style="color:var(--danger)">Xoá show</h2>
       <p class="muted">Xoá vĩnh viễn show, tập và audio. Gõ đúng tên show để xác nhận.</p>
-      <form method="post" action="/shows/{{ show.id }}/delete" hx-delete="/shows/{{ show.id }}" class="stack"
+      <form method="post" action="/shows/{{ show.id }}/delete" hx-post="/shows/{{ show.id }}/delete" class="stack"
             hx-confirm="Xoá show này và toàn bộ tập?">
         <input type="hidden" name="_csrf" value="{{ csrf }}">
         <input name="confirm_title" placeholder="{{ show.title }}" required>

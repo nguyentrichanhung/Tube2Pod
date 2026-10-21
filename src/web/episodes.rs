@@ -6,6 +6,7 @@ use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
 use crate::web::shows::purge_episode_files;
 use askama::Template;
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Json, Redirect, Response};
@@ -40,6 +41,11 @@ pub struct SummaryForm {
 #[derive(Debug, Deserialize)]
 pub struct CsrfForm {
     pub _csrf: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct CsrfQuery {
+    pub _csrf: Option<String>,
 }
 
 pub async fn detail(
@@ -195,13 +201,25 @@ pub async fn delete(
     Extension(token): Extension<CsrfToken>,
     headers: HeaderMap,
     Path(uuid): Path<String>,
-    Form(form): Form<CsrfForm>,
+    Query(query): Query<CsrfQuery>,
+    body: Bytes,
 ) -> AppResult<Response> {
-    csrf::verify(&token, &headers, &form._csrf)?;
+    let form_token = form_value(&body, "_csrf");
+    let provided = form_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .or(query._csrf.as_deref())
+        .unwrap_or("");
+    csrf::verify(&token, &headers, provided)?;
     let episode = episodes::get(&state.pool, &uuid)
         .await?
         .ok_or(AppError::NotFound)?;
+    if let Some(take_id) = episode.active_take_id {
+        let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+        let _ = client.delete_speech(take_id).await;
+    }
     let _ = episodes::cancel(&state.pool, &uuid).await;
+    state.notify.notify_one();
     purge_episode_files(&state.cfg.data_dir, &episode).await;
     episodes::delete(&state.pool, &uuid).await?;
     Ok(redirect_response(&headers, "/library"))
@@ -243,6 +261,12 @@ async fn read_transcript(episode: &Episode) -> String {
         Ok(text) => text.chars().take(200_000).collect(),
         Err(_) => String::new(),
     }
+}
+
+fn form_value(body: &[u8], key: &str) -> Option<String> {
+    url::form_urlencoded::parse(body)
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.into_owned())
 }
 
 fn is_htmx(headers: &HeaderMap) -> bool {
@@ -290,6 +314,7 @@ mod tests {
         let cfg = Config::from_lookup(move |key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
             "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
+            "OMNIVOICE_BASE_URL" => Some("http://127.0.0.1:1".into()),
             "DATA_DIR" => Some(path.display().to_string()),
             _ => None,
         })
@@ -420,6 +445,7 @@ mod tests {
         let context = ctx().await;
         let show = create_show(&context, "Show").await;
         let episode = create_episode(&context, show.id, "<script>alert(1)</script>").await;
+        set_status(&context, &episode.uuid, status::READY, stage::READY).await;
 
         let response = get(&context, &format!("/episodes/{}", episode.uuid)).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -428,6 +454,9 @@ mod tests {
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert!(!html.contains("<script>alert(1)</script>"));
         assert!(!html.contains("không tạo thêm bản sao"));
+        assert!(html.contains(&format!("hx-post=\"/episodes/{}/delete\"", episode.uuid)));
+        assert!(!html.contains("hx-delete"));
+        assert!(html.contains(&format!("hx-post=\"/episodes/{}/reread\"", episode.uuid)));
 
         let duplicate = get(&context, &format!("/episodes/{}?duplicate=1", episode.uuid)).await;
         assert_eq!(duplicate.status(), StatusCode::OK);
@@ -813,8 +842,10 @@ mod tests {
         tokio::fs::create_dir_all(&tmp_dir).await.unwrap();
         let audio = audio_dir.join(format!("{}-1.mp3", episode.uuid));
         let transcript = transcript_dir.join(format!("{}.txt", episode.uuid));
+        let raw_caption = transcript_dir.join(format!("{}.vtt", episode.uuid));
         tokio::fs::write(&audio, b"audio").await.unwrap();
         tokio::fs::write(&transcript, b"transcript").await.unwrap();
+        tokio::fs::write(&raw_caption, b"WEBVTT").await.unwrap();
         tokio::fs::write(tmp_dir.join("chunk.mp3"), b"chunk")
             .await
             .unwrap();
@@ -861,7 +892,111 @@ mod tests {
             .is_none());
         assert!(!audio.exists());
         assert!(!transcript.exists());
+        assert!(!raw_caption.exists());
         assert!(!tmp_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn post_delete_alias_removes_episode_and_htmx_redirects() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let normal = create_episode(&context, show.id, "Xoá thường").await;
+
+        let response = send(
+            &context,
+            Method::POST,
+            &format!("/episodes/{}/delete", normal.uuid),
+            Some(csrf_form().into_bytes()),
+            &[],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/library"
+        );
+        assert!(episodes::get(&context.state.pool, &normal.uuid)
+            .await
+            .unwrap()
+            .is_none());
+
+        let htmx = create_episode(&context, show.id, "Xoá htmx").await;
+        let response = send(
+            &context,
+            Method::POST,
+            &format!("/episodes/{}/delete", htmx.uuid),
+            Some(csrf_form().into_bytes()),
+            &[("hx-request", "true")],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(header::LOCATION).is_none());
+        assert_eq!(
+            response
+                .headers()
+                .get("hx-redirect")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/library"
+        );
+        assert!(episodes::get(&context.state.pool, &htmx.uuid)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_route_accepts_a_csrf_token_from_the_query() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Xoá").await;
+
+        let response = send(
+            &context,
+            Method::DELETE,
+            &format!("/episodes/{}?_csrf={TOKEN}", episode.uuid),
+            None,
+            &[],
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert!(episodes::get(&context.state.pool, &episode.uuid)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn deleting_an_active_episode_cleans_up_before_purge() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Đang chạy").await;
+        episodes::set_active_take(&context.state.pool, &episode.uuid, Some(4242))
+            .await
+            .unwrap();
+        set_status(&context, &episode.uuid, status::RUNNING, stage::VOICING).await;
+
+        let response = send(
+            &context,
+            Method::POST,
+            &format!("/episodes/{}/delete", episode.uuid),
+            Some(csrf_form().into_bytes()),
+            &[],
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert!(episodes::get(&context.state.pool, &episode.uuid)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

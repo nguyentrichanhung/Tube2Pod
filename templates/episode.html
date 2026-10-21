@@ -58,7 +58,7 @@
         <form method="post" action="/episodes/{{ episode.uuid }}/retry"><input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">Thử lại</button></form>
         {% endif %}
         {% if episode.status == "published" || episode.status == "ready" || episode.status == "failed" %}
-        <form method="post" action="/episodes/{{ episode.uuid }}/reread" hx-confirm="Bắt đầu tạo audio mới từ bản tóm tắt hiện tại?"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="secondary" type="submit">Đọc lại từ bản sửa</button></form>
+        <form method="post" action="/episodes/{{ episode.uuid }}/reread" hx-post="/episodes/{{ episode.uuid }}/reread" hx-confirm="Bắt đầu tạo audio mới từ bản tóm tắt hiện tại?"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="secondary" type="submit">Đọc lại từ bản sửa</button></form>
         {% endif %}
         {% if episode.status == "ready" %}
         <form method="post" action="/episodes/{{ episode.uuid }}/publish"><input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">Phát hành</button></form>
@@ -67,7 +67,7 @@
         <form method="post" action="/episodes/{{ episode.uuid }}/cancel"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="danger" type="submit">Huỷ</button></form>
         {% endif %}
       </div>
-      <form method="post" action="/episodes/{{ episode.uuid }}" hx-delete="/episodes/{{ episode.uuid }}" hx-confirm="Xoá vĩnh viễn tập này, transcript và mọi bản audio?" class="stack" style="margin-top:1rem">
+      <form method="post" action="/episodes/{{ episode.uuid }}/delete" hx-post="/episodes/{{ episode.uuid }}/delete" hx-confirm="Xoá vĩnh viễn tập này, transcript và mọi bản audio?" class="stack" style="margin-top:1rem">
         <input type="hidden" name="_csrf" value="{{ csrf }}">
         <button class="danger" type="submit">Xoá tập</button>
       </form>
