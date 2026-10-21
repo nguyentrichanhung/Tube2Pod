@@ -9,7 +9,7 @@
       <span class="badge{% if episode.status == "failed" %} badge-err{% else if episode.status == "published" || episode.status == "ready" %} badge-ok{% endif %}">{{ episode.status_label() }}</span>
     </div>
     <div class="muted">{{ episode.stage_label() }}</div>
-    <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ episode.progress_percent() }}">
+    <div class="progress" role="progressbar" aria-label="Tiến độ xử lý tập" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ episode.progress_percent() }}">
       <div class="progress-bar{% if episode.status == "failed" %} err{% else if episode.status == "published" || episode.status == "ready" %} ok{% endif %}" style="width:{{ episode.progress_percent() }}%"></div>
     </div>
     <div class="progress-meta">

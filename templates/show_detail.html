@@ -78,12 +78,28 @@
   <h2>Giọng đọc theo ngôn ngữ</h2>
   {% for row in voice_rows %}
   <div class="voice-row">
-    <div><strong>{{ row.language_label }}</strong><div class="muted">{{ row.voice_name.as_deref().unwrap_or("Chưa chọn giọng") }}</div></div>
+    <div><strong>{{ row.language_label }}</strong><div class="muted">{{ row.voice_name.as_deref().unwrap_or("Chưa chọn giọng") }}{% if row.ready == Some(true) %} <span class="badge badge-ok">Sẵn sàng</span>{% else if row.ready == Some(false) %} <span class="badge badge-err">Chưa sẵn sàng</span>{% endif %}</div></div>
     <button class="btn btn-secondary" hx-get="/shows/{{ show.id }}/voices/{{ row.language }}" hx-target="#voice-picker" hx-swap="innerHTML">Chọn giọng</button>
   </div>
   {% endfor %}
   <div id="voice-picker"></div>
 </section>
+<script>
+  document.body.addEventListener("htmx:responseError", (event) => {
+    const detail = event.detail || {};
+    const origin = detail.elt;
+    const target = detail.target;
+    const targetsPicker =
+      (origin && origin.closest && origin.closest("#voice-picker")) ||
+      (origin && origin.getAttribute && origin.getAttribute("hx-target") === "#voice-picker") ||
+      (target && target.id === "voice-picker") ||
+      (target && target.closest && target.closest("#voice-picker"));
+    if (!targetsPicker) return;
+    const picker = document.getElementById("voice-picker");
+    if (!picker) return;
+    picker.innerHTML = '<div class="notice error" role="alert">Không tải được danh sách giọng. Vui lòng thử lại hoặc liên hệ admin.</div>';
+  });
+</script>
 {% else %}
 <div class="grid two">
   <section class="card stack">

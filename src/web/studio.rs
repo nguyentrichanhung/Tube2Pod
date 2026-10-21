@@ -1,6 +1,7 @@
 use crate::db::{episodes, shows};
 use crate::error::{AppError, AppResult};
 use crate::models::Episode;
+use crate::services::omnivoice::OmnivoiceClient;
 use crate::services::ytdlp;
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
@@ -238,10 +239,23 @@ async fn load_preview(
         .is_some();
     let (voice_name, voice_missing) = match (form.show_id, language) {
         (Some(show_id), Some(language)) => {
-            let name = shows::get_voice(&state.pool, show_id, language)
-                .await?
-                .map(|(_, name)| name);
-            (name.clone(), name.is_none())
+            match shows::get_voice(&state.pool, show_id, language).await? {
+                Some((voice_id, name)) => {
+                    let ready = OmnivoiceClient::new(&state.cfg.omnivoice)
+                        .list_voices()
+                        .await
+                        .map(|voices| {
+                            voices.iter().any(|voice| {
+                                voice.id == voice_id
+                                    && voice.status == "ready"
+                                    && voice.language.as_deref() == Some(language)
+                            })
+                        })
+                        .unwrap_or(false);
+                    (Some(name), !ready)
+                }
+                None => (None, true),
+            }
         }
         _ => (None, false),
     };

@@ -71,6 +71,7 @@ pub struct VoiceRow {
     pub language: &'static str,
     pub language_label: &'static str,
     pub voice_name: Option<String>,
+    pub ready: Option<bool>,
 }
 
 #[derive(Template)]
@@ -252,15 +253,34 @@ pub async fn detail(
     let checklist = feed_checklist(&show);
     let can_enable = checklist.iter().all(|item| item.ok);
     let selected = shows::list_voices(&state.pool, id).await?;
+    let catalog = if selected.is_empty() {
+        None
+    } else {
+        OmnivoiceClient::new(&state.cfg.omnivoice)
+            .list_voices()
+            .await
+            .ok()
+    };
     let voice_rows = [("vi", "Tiếng Việt"), ("en", "English"), ("ko", "한국어")]
         .into_iter()
-        .map(|(language, language_label)| VoiceRow {
-            language,
-            language_label,
-            voice_name: selected
-                .iter()
-                .find(|(lang, _, _)| lang == language)
-                .map(|(_, _, name)| name.clone()),
+        .map(|(language, language_label)| {
+            let stored = selected.iter().find(|(lang, _, _)| lang == language);
+            let voice_name = stored.map(|(_, _, name)| name.clone());
+            let ready = stored.and_then(|(_, voice_id, _)| {
+                catalog.as_ref().map(|voices| {
+                    voices.iter().any(|voice| {
+                        voice.id == *voice_id
+                            && voice.status == "ready"
+                            && voice.language.as_deref() == Some(language)
+                    })
+                })
+            });
+            VoiceRow {
+                language,
+                language_label,
+                voice_name,
+                ready,
+            }
         })
         .collect();
     Ok(Html(

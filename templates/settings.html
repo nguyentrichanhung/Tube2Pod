@@ -39,7 +39,7 @@
       <div class="row between"><span>Tổng dữ liệu</span><strong>{{ storage.total_human }}</strong></div>
       <div class="row between"><span>Audio</span><span>{{ storage.audio_human }}</span></div>
       <div class="row between"><span>File tạm</span><span>{{ storage.tmp_human }}</span></div>
-      <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ storage.audio_percent }}">
+      <div class="progress" role="progressbar" aria-label="Dung lượng audio" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ storage.audio_percent }}">
         <div class="progress-bar ok" style="width:{{ storage.audio_percent }}%"></div>
       </div>
       <p class="muted">Audio chiếm {{ storage.audio_percent }}% dung lượng dữ liệu.</p>

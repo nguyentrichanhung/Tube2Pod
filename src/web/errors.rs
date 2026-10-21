@@ -44,7 +44,7 @@ pub async fn html_errors(request: Request, next: Next) -> Response {
             && name != header::CONTENT_LENGTH
             && name != header::TRANSFER_ENCODING
         {
-            rendered.headers_mut().insert(name.clone(), value.clone());
+            rendered.headers_mut().append(name.clone(), value.clone());
         }
     }
     rendered
