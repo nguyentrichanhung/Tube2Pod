@@ -48,6 +48,7 @@ pub fn admin_router(state: AppState) -> Router {
                 .delete(episodes::delete),
         )
         .route("/episodes/{uuid}/audio", get(episodes::audio))
+        .route("/episodes/{uuid}/progress", get(episodes::progress))
         .route("/episodes/{uuid}/delete", post(episodes::delete))
         .route("/episodes/{uuid}/retry", post(episodes::retry))
         .route("/episodes/{uuid}/cancel", post(episodes::cancel))
