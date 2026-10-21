@@ -1,0 +1,19 @@
+{% if episodes.is_empty() %}
+<div class="empty">Không có tập nào đang xử lý.</div>
+{% else %}
+<div class="stack">
+  {% for episode in episodes %}
+  <div class="row between">
+    <div>
+      <a href="/episodes/{{ episode.uuid }}">{{ episode.source_title }}</a>
+      <div class="muted">{{ episode.stage }} · {{ episode.status }}</div>
+    </div>
+    {% if episode.error_code.is_some() %}
+    <span class="pill err">Lỗi</span>
+    {% else %}
+    <span class="pill">{{ episode.status }}</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}

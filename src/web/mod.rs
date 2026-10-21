@@ -1,35 +1,19 @@
 pub mod csrf;
+pub mod studio;
 
-use crate::error::{AppError, AppResult};
 use crate::state::AppState;
-use askama::Template;
 use axum::body::Body;
 use axum::extract::Path;
 use axum::http::{header, StatusCode};
 use axum::middleware;
-use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
-use axum::{Extension, Router};
-use csrf::CsrfToken;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::Router;
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
 #[folder = "assets/"]
 struct Assets;
-
-#[derive(Template)]
-#[template(path = "base.html")]
-struct ShellTemplate {
-    csrf: String,
-}
-
-async fn shell(Extension(token): Extension<CsrfToken>) -> AppResult<Html<String>> {
-    Ok(Html(
-        ShellTemplate { csrf: token.0 }
-            .render()
-            .map_err(|e| AppError::Internal(e.into()))?,
-    ))
-}
 
 async fn asset(Path(path): Path<String>) -> Response {
     match Assets::get(&path) {
@@ -47,7 +31,10 @@ async fn asset(Path(path): Path<String>) -> Response {
 
 pub fn admin_router(state: AppState) -> Router {
     let pages = Router::new()
-        .route("/", get(shell))
+        .route("/", get(studio::index))
+        .route("/api/preview", post(studio::preview))
+        .route("/episodes", post(studio::create))
+        .route("/api/queue", get(studio::queue))
         .layer(middleware::from_fn(csrf::csrf_middleware));
     let assets = Router::new().route("/assets/{*path}", get(asset));
     pages.merge(assets).with_state(state)
