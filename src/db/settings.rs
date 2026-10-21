@@ -36,6 +36,7 @@ pub async fn set(pool: &SqlitePool, key: &str, value: &str) -> AppResult<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub async fn set_many(pool: &SqlitePool, pairs: &[(&str, &str)]) -> AppResult<()> {
     let mut tx = pool.begin().await?;
     set_many_in_tx(&mut tx, pairs).await?;

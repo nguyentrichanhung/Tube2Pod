@@ -265,15 +265,6 @@ pub async fn list_voices(pool: &SqlitePool, show_id: i64) -> AppResult<Vec<(Stri
     .await?)
 }
 
-pub async fn delete_voice(pool: &SqlitePool, show_id: i64, language: &str) -> AppResult<()> {
-    sqlx::query("DELETE FROM show_voices WHERE show_id = ?1 AND language = ?2")
-        .bind(show_id)
-        .bind(language)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 pub async fn delete(pool: &SqlitePool, id: i64) -> AppResult<()> {
     sqlx::query("DELETE FROM shows WHERE id = ?1")
         .bind(id)

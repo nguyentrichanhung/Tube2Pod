@@ -205,11 +205,11 @@ async fn storage_usage(data_dir: &Path) -> StorageUsage {
     let total = dir_size(data_dir).await;
     let audio = dir_size(&data_dir.join("audio")).await;
     let tmp = dir_size(&data_dir.join("tmp")).await;
-    let audio_percent = if total == 0 {
-        0
-    } else {
-        (audio.saturating_mul(100) / total).min(100) as u8
-    };
+    let audio_percent = audio
+        .saturating_mul(100)
+        .checked_div(total)
+        .unwrap_or(0)
+        .min(100) as u8;
     StorageUsage {
         total_human: format_bytes(total),
         audio_human: format_bytes(audio),

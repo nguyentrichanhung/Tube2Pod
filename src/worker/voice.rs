@@ -212,9 +212,7 @@ mod tests {
         let client = OmnivoiceClient::new(&omni_cfg(&server));
 
         let started = std::time::Instant::now();
-        let voice = resolve_voice(&pool, &cfg, &episode, &client)
-            .await
-            .unwrap();
+        let voice = resolve_voice(&pool, &cfg, &episode, &client).await.unwrap();
         assert_eq!(voice, 42);
         assert!(started.elapsed() < Duration::from_secs(2));
         server.verify().await;
