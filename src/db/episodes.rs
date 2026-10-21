@@ -377,7 +377,7 @@ pub async fn record_failure(
     sqlx::query(
         "UPDATE episodes SET status = ?1, error_code = ?2, error_message = ?3,
             attempts = attempts + 1, next_attempt_at = ?4, updated_at = ?5
-         WHERE uuid = ?6",
+         WHERE uuid = ?6 AND status != ?7",
     )
     .bind(if retry {
         status::QUEUED
@@ -389,6 +389,7 @@ pub async fn record_failure(
     .bind(retry_at)
     .bind(now_ts())
     .bind(uuid)
+    .bind(status::CANCELLED)
     .execute(pool)
     .await?;
     Ok(())
@@ -574,6 +575,29 @@ mod tests {
         let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
         assert_eq!(got.status, status::QUEUED);
         assert_eq!(got.attempts, 0);
+        assert!(got.error_code.is_none());
+    }
+
+    #[tokio::test]
+    async fn record_failure_never_requeues_a_cancelled_episode() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
+        cancel(&pool, &ep.uuid).await.unwrap();
+
+        record_failure(
+            &pool,
+            &ep.uuid,
+            "tts_unavailable",
+            "boom",
+            Some(now_ts() + 30),
+        )
+        .await
+        .unwrap();
+
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.status, status::CANCELLED);
+        assert_eq!(got.attempts, 0);
+        assert!(got.next_attempt_at.is_none());
         assert!(got.error_code.is_none());
     }
 
