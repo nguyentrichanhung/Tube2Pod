@@ -169,6 +169,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn base_shell_exposes_sticky_topbar_and_skip_link() {
+        let response = get("/", None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("skip-link"));
+        assert!(html.contains("class=\"topbar\""));
+    }
+
+    #[tokio::test]
     async fn malformed_cookie_is_regenerated() {
         let response = get("/", Some("t2p_csrf=")).await;
         assert_eq!(response.status(), StatusCode::OK);

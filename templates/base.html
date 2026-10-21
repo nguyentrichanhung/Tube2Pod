@@ -8,8 +8,9 @@
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body hx-headers='{"X-CSRF-Token":"{{ csrf }}"}'>
+  <a class="skip-link" href="#main">Bỏ qua điều hướng</a>
   <header class="topbar">
-    <a class="brand" href="/">Tube2Pod</a>
+    <a class="brand" href="/"><span class="brand-mark">T2</span> Tube2Pod</a>
     <nav aria-label="Điều hướng chính">
       <a href="/">Tạo tập</a>
       <a href="/library">Thư viện</a>
@@ -17,7 +18,7 @@
       <a href="/settings">Cài đặt</a>
     </nav>
   </header>
-  <main class="page">
+  <main class="page" id="main">
     {% block content %}{% endblock %}
   </main>
   <footer class="foot">
@@ -25,5 +26,10 @@
     <span>Tube2Pod</span>
   </footer>
   <script src="/assets/htmx.min.js" defer></script>
+  <script>
+    document.querySelectorAll(".topbar nav a").forEach((link) => {
+      if (link.getAttribute("href") === location.pathname) link.classList.add("active");
+    });
+  </script>
 </body>
 </html>
