@@ -67,7 +67,8 @@ pub fn admin_router(state: AppState) -> Router {
         .route("/shows/{id}/delete", post(shows::delete))
         .route(
             "/shows/{id}/cover",
-            post(shows::upload_cover)
+            get(shows::cover_preview)
+                .post(shows::upload_cover)
                 .layer(DefaultBodyLimit::max(cover::MAX_UPLOAD_BYTES + 1024 * 1024)),
         )
         .route("/shows/{id}/feed/toggle", post(shows::toggle_feed))

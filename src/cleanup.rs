@@ -3,11 +3,15 @@ use crate::db::{self, settings};
 use crate::error::AppResult;
 use crate::models::status;
 use sqlx::SqlitePool;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 
 const CLEANUP_INTERVAL_SECS: u64 = 24 * 60 * 60;
+const BACKUP_RETENTION_DAYS: i64 = 7;
+
+static BACKUP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub fn spawn(pool: SqlitePool, cfg: Arc<Config>) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -30,7 +34,45 @@ pub async fn run_once(pool: &SqlitePool, cfg: &Config) -> AppResult<()> {
     let tmp_hours = settings::read_i64(pool, "retention_tmp_hours", 24).await?;
     cleanup_audio(pool, cfg, audio_days).await?;
     cleanup_tmp(pool, cfg, tmp_hours).await?;
+    backup_database(pool, cfg).await?;
     Ok(())
+}
+
+async fn backup_database(pool: &SqlitePool, cfg: &Config) -> AppResult<()> {
+    let _guard = BACKUP_LOCK.lock().await;
+    let dir = cfg.data_dir.join("backups");
+    tokio::fs::create_dir_all(&dir).await?;
+    let today = chrono::Utc::now().date_naive();
+    let target = dir.join(format!("tube2pod-{}.db", today.format("%Y-%m-%d")));
+    if !tokio::fs::try_exists(&target).await.unwrap_or(false) {
+        let sql = format!("VACUUM INTO {}", sql_string_literal(&target));
+        sqlx::query(&sql).execute(pool).await?;
+    }
+    prune_backups(&dir, today).await?;
+    Ok(())
+}
+
+async fn prune_backups(dir: &Path, today: chrono::NaiveDate) -> AppResult<()> {
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    let cutoff = today - chrono::Duration::days(BACKUP_RETENTION_DAYS);
+    while let Some(entry) = entries.next_entry().await? {
+        let Some(date) = entry.file_name().to_str().and_then(backup_date) else {
+            continue;
+        };
+        if date < cutoff {
+            let _ = tokio::fs::remove_file(entry.path()).await;
+        }
+    }
+    Ok(())
+}
+
+fn backup_date(file_name: &str) -> Option<chrono::NaiveDate> {
+    let date = file_name.strip_prefix("tube2pod-")?.strip_suffix(".db")?;
+    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
+}
+
+fn sql_string_literal(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "''"))
 }
 
 async fn cleanup_audio(pool: &SqlitePool, cfg: &Config, days: i64) -> AppResult<()> {
@@ -170,6 +212,14 @@ mod tests {
     }
 
     #[test]
+    fn backup_paths_are_safely_quoted_for_vacuum_into() {
+        assert_eq!(
+            sql_string_literal(Path::new("/tmp/it's.db")),
+            "'/tmp/it''s.db'"
+        );
+    }
+
+    #[test]
     fn retention_ttl_clamps_to_at_least_one_unit() {
         assert_eq!(retention_ttl(0, 86_400), 86_400);
         assert_eq!(retention_ttl(-5, 3_600), 3_600);
@@ -262,6 +312,43 @@ mod tests {
         db::settings::set(pool, "retention_tmp_hours", hours)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_once_creates_a_daily_backup_and_prunes_old_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path());
+        let pool = crate::db::connect(&cfg.database_path()).await.unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        let backups = cfg.data_dir.join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        let today = chrono::Utc::now().date_naive();
+        let name = |date: chrono::NaiveDate| format!("tube2pod-{}.db", date.format("%Y-%m-%d"));
+        let today_path = backups.join(name(today));
+        let old_path = backups.join(name(today - chrono::Duration::days(8)));
+        let recent_path = backups.join(name(today - chrono::Duration::days(2)));
+        write(&today_path, b"keep");
+        write(&old_path, b"old");
+        write(&recent_path, b"recent");
+
+        run_once(&pool, &cfg).await.unwrap();
+
+        assert_eq!(std::fs::read(&today_path).unwrap(), b"keep");
+        assert!(
+            !old_path.exists(),
+            "backups older than 7 days must be pruned"
+        );
+        assert!(recent_path.exists(), "recent backups must be kept");
+
+        std::fs::remove_file(&today_path).unwrap();
+        run_once(&pool, &cfg).await.unwrap();
+
+        let bytes = std::fs::read(&today_path).unwrap();
+        assert!(
+            bytes.starts_with(b"SQLite format 3\0"),
+            "not a SQLite backup"
+        );
+        assert!(recent_path.exists(), "recent backups must be kept");
     }
 
     #[tokio::test]

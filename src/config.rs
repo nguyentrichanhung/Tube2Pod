@@ -11,10 +11,24 @@ pub struct OmnivoiceConfig {
     pub synthesis_timeout_secs: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum AuthMode {
     Tailscale { user: String },
     Password { password: String },
+}
+
+impl std::fmt::Debug for AuthMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthMode::Tailscale { user } => {
+                f.debug_struct("Tailscale").field("user", user).finish()
+            }
+            AuthMode::Password { .. } => f
+                .debug_struct("Password")
+                .field("password", &"<redacted>")
+                .finish(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -149,6 +163,19 @@ mod tests {
         assert_eq!(cfg.bind_public, "127.0.0.1:8401");
         assert!(cfg.omnivoice.chunk_chars <= 5000);
         assert_eq!(cfg.omnivoice.chunk_chars, 4500);
+    }
+
+    #[test]
+    fn debug_redacts_the_omnivoice_password() {
+        let cfg = Config::from_lookup(env(&[
+            ("PUBLIC_BASE_URL", "https://pod.example.ts.net:8443"),
+            ("OMNIVOICE_AUTH_MODE", "password"),
+            ("OMNIVOICE_PASSWORD", "s3cret"),
+        ]))
+        .unwrap();
+        let debug = format!("{cfg:?}");
+        assert!(debug.contains("redacted"), "{debug}");
+        assert!(!debug.contains("s3cret"), "{debug}");
     }
 
     #[test]

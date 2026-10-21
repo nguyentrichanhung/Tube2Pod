@@ -101,6 +101,7 @@ async fn run_dump(cfg: &Config, video: &VideoId) -> AppResult<Metadata> {
     let output = tokio::time::timeout(
         Duration::from_secs(60),
         Command::new(&cfg.ytdlp_path)
+            .kill_on_drop(true)
             .args([
                 "--dump-single-json",
                 "--no-playlist",
@@ -247,6 +248,7 @@ pub async fn download_caption(
     let output = tokio::time::timeout(
         Duration::from_secs(60),
         Command::new(&cfg.ytdlp_path)
+            .kill_on_drop(true)
             .args(&args)
             .env("HOME", cfg.data_dir.join("tmp/yt-dlp"))
             .env("XDG_CACHE_HOME", cfg.data_dir.join("tmp/yt-dlp/cache"))

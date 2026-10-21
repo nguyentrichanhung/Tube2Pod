@@ -62,40 +62,84 @@ pub async fn resolve_voice(
         );
     }
 
+    let name = format!("Tube2Pod · {} · {}", show.title, language);
+    let name = name.chars().take(NAME_MAX).collect::<String>();
+
+    if let Some(design_id) = episode.voice_design_id {
+        match poll_design(client, design_id).await {
+            Ok(DesignPoll::Ready) => {
+                return save_design_and_activate(
+                    pool,
+                    client,
+                    show.id,
+                    language,
+                    &episode.uuid,
+                    design_id,
+                    &name,
+                )
+                .await;
+            }
+            Ok(DesignPoll::Failed) | Err(_) => {
+                let _ = client.delete_design(design_id).await;
+                clear_design(pool, &episode.uuid).await?;
+            }
+        }
+    }
+
     let options = client.voice_options().await.map_err(tts_error)?;
     let sample = sample_text(language);
     let sample = fit_sample(&sample, options.min_chars, options.max_chars);
     let preset: VoicePreset = serde_json::from_str(&show.voice_preset_json).unwrap_or_default();
     let design = create_design(pool, client, &episode.uuid, language, &sample, &preset).await?;
 
-    let name = format!("Tube2Pod · {} · {}", show.title, language);
-    let name = name.chars().take(NAME_MAX).collect::<String>();
-    let voice = match client.save_design(design.id, &name).await {
+    let voice_id = save_design_and_activate(
+        pool,
+        client,
+        show.id,
+        language,
+        &episode.uuid,
+        design.id,
+        &name,
+    )
+    .await?;
+    let _ = cfg;
+    Ok(voice_id)
+}
+
+async fn save_design_and_activate(
+    pool: &SqlitePool,
+    client: &OmnivoiceClient,
+    show_id: i64,
+    language: &str,
+    uuid: &str,
+    design_id: i64,
+    name: &str,
+) -> Result<i64, PipelineError> {
+    let voice = match client.save_design(design_id, name).await {
         Ok(voice) => voice,
         Err(error) => {
-            let _ = client.delete_design(design.id).await;
-            clear_design(pool, &episode.uuid).await?;
+            let _ = client.delete_design(design_id).await;
+            clear_design(pool, uuid).await?;
             return Err(design_error(error.to_string()));
         }
     };
-    shows::upsert_voice(pool, show.id, language, voice.id, &name)
+    shows::upsert_voice(pool, show_id, language, voice.id, name)
         .await
         .map_err(|e| PipelineError::from_app(e, "internal"))?;
-    episodes::set_voice(pool, &episode.uuid, voice.id)
+    episodes::set_voice(pool, uuid, voice.id)
         .await
         .map_err(|e| PipelineError::from_app(e, "internal"))?;
 
     match poll_voice(client, voice.id).await? {
         VoicePoll::Ready => {}
         VoicePoll::Failed => {
-            shows::delete_voice(pool, show.id, language)
+            shows::delete_voice(pool, show_id, language)
                 .await
                 .map_err(|e| PipelineError::from_app(e, "internal"))?;
             return Err(design_error("Giọng đọc chưa sẵn sàng."));
         }
     }
-    activate_episode(pool, &episode.uuid, voice.id).await?;
-    let _ = cfg;
+    activate_episode(pool, uuid, voice.id).await?;
     Ok(voice.id)
 }
 
@@ -473,6 +517,123 @@ mod tests {
                 .0,
             42
         );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn resumes_a_ready_unsaved_design_after_restart() {
+        let server = MockServer::start().await;
+        mount_design_status(&server, 7, "ready").await;
+        Mock::given(method("POST"))
+            .and(path("/api/voice-designs/7/save"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {"id": 42, "name": "Tube2Pod", "status": "measuring", "language": "vi"},
+                "error": null
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/voices"))
+            .respond_with(voices_response(serde_json::json!([
+                {"id": 42, "name": "Tube2Pod", "status": "ready", "language": "vi"}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/voice-designs"))
+            .respond_with(design_response(9))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/voice-designs/options"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {"min_chars": 20, "max_chars": 500, "sample_text": "sample"},
+                "error": null
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = OmnivoiceClient::new(&omnivoice_cfg(&server));
+        let pool = db::test_pool().await;
+        let (show, ep) = seed_episode(&pool).await;
+        db::episodes::set_voice_design(&pool, &ep.uuid, Some(7))
+            .await
+            .unwrap();
+        let ep = db::episodes::get(&pool, &ep.uuid).await.unwrap().unwrap();
+        let root = tempfile::tempdir().unwrap();
+
+        let voice = resolve_voice(&pool, &app_cfg(root.path()), &ep, &client)
+            .await
+            .unwrap();
+        assert_eq!(voice, 42);
+        assert_eq!(
+            shows::get_voice(&pool, show.id, "vi")
+                .await
+                .unwrap()
+                .unwrap()
+                .0,
+            42
+        );
+        let got = db::episodes::get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.voice_id, Some(42));
+        assert_eq!(got.voice_design_id, None);
+        assert_eq!(got.stage, stage::SYNTHESIZING);
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn discards_a_failed_unsaved_design_before_designing_again() {
+        let server = MockServer::start().await;
+        mount_design_status(&server, 7, "failed").await;
+        Mock::given(method("DELETE"))
+            .and(path("/api/voice-designs/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true, "data": null, "error": null
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        mount_options(&server).await;
+        mount_design_sequence(&server, vec![8]).await;
+        mount_design_status(&server, 8, "ready").await;
+        mount_save(&server, 8, 42).await;
+        Mock::given(method("GET"))
+            .and(path("/api/voices"))
+            .respond_with(voices_response(serde_json::json!([
+                {"id": 42, "name": "Tube2Pod", "status": "ready", "language": "vi"}
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = OmnivoiceClient::new(&omnivoice_cfg(&server));
+        let pool = db::test_pool().await;
+        let (show, ep) = seed_episode(&pool).await;
+        db::episodes::set_voice_design(&pool, &ep.uuid, Some(7))
+            .await
+            .unwrap();
+        let ep = db::episodes::get(&pool, &ep.uuid).await.unwrap().unwrap();
+        let root = tempfile::tempdir().unwrap();
+
+        let voice = resolve_voice(&pool, &app_cfg(root.path()), &ep, &client)
+            .await
+            .unwrap();
+        assert_eq!(voice, 42);
+        assert_eq!(
+            shows::get_voice(&pool, show.id, "vi")
+                .await
+                .unwrap()
+                .unwrap()
+                .0,
+            42
+        );
+        let got = db::episodes::get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.voice_design_id, None);
         server.verify().await;
     }
 

@@ -11,9 +11,48 @@ use crate::error::AppError;
 use crate::models::{stage, status};
 use crate::services::omnivoice::OmnivoiceClient;
 use sqlx::SqlitePool;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
+
+pub const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+pub async fn is_cancelled(pool: &SqlitePool, uuid: &str) -> bool {
+    match episodes::get(pool, uuid).await {
+        Ok(Some(episode)) => episode.status == status::CANCELLED,
+        Ok(None) => true,
+        Err(error) => {
+            tracing::warn!(%error, %uuid, "cancellation check failed");
+            false
+        }
+    }
+}
+
+async fn wait_for_cancellation(pool: &SqlitePool, uuid: &str) {
+    loop {
+        tokio::time::sleep(CANCEL_POLL_INTERVAL).await;
+        match episodes::get(pool, uuid).await {
+            Ok(Some(episode)) if episode.status != status::CANCELLED => {}
+            Ok(Some(_)) | Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(%error, %uuid, "cancellation watch failed");
+                return;
+            }
+        }
+    }
+}
+
+pub async fn cancellable<F>(pool: &SqlitePool, uuid: &str, future: F) -> Option<F::Output>
+where
+    F: Future,
+{
+    tokio::select! {
+        biased;
+        _ = wait_for_cancellation(pool, uuid) => None,
+        output = future => Some(output),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PipelineError {
@@ -78,7 +117,11 @@ impl Pipeline {
                 stage::ASSEMBLING => {
                     assemble::assemble_episode(&self.pool, &self.cfg, &episode).await?
                 }
-                stage::PUBLISHING => publish::publish_episode(&self.pool, &episode).await?,
+                stage::PUBLISHING => {
+                    publish::publish_episode(&self.pool, &episode).await?;
+                    let parts = synth::parts_dir(&self.cfg, &episode.uuid);
+                    let _ = tokio::fs::remove_dir_all(parts).await;
+                }
                 stage::READY | stage::PUBLISHED => return Ok(()),
                 other => {
                     return Err(PipelineError::new(

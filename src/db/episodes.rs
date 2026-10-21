@@ -256,21 +256,6 @@ pub async fn set_summary_edit(
     Ok(())
 }
 
-pub async fn queue_at_stage(pool: &SqlitePool, uuid: &str, new_stage: &str) -> AppResult<()> {
-    sqlx::query(
-        "UPDATE episodes SET stage = ?1, status = ?2, attempts = 0,
-            next_attempt_at = NULL, error_code = NULL, error_message = NULL, updated_at = ?3
-         WHERE uuid = ?4",
-    )
-    .bind(new_stage)
-    .bind(status::QUEUED)
-    .bind(now_ts())
-    .bind(uuid)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 pub async fn set_voice(pool: &SqlitePool, uuid: &str, voice_id: i64) -> AppResult<()> {
     sqlx::query(
         "UPDATE episodes SET voice_id = ?1, voice_design_id = NULL, updated_at = ?2 WHERE uuid = ?3",
@@ -480,6 +465,23 @@ pub async fn reset_for_reread(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
     .execute(pool)
     .await?;
     Ok(())
+}
+
+pub async fn publish_one(pool: &SqlitePool, uuid: &str) -> AppResult<bool> {
+    let now = now_ts();
+    let result = sqlx::query(
+        "UPDATE episodes SET status = ?1, stage = ?2,
+            published_at = COALESCE(published_at, ?3), updated_at = ?3
+         WHERE uuid = ?4 AND status = ?5",
+    )
+    .bind(status::PUBLISHED)
+    .bind(stage::PUBLISHED)
+    .bind(now)
+    .bind(uuid)
+    .bind(status::READY)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 pub async fn publish_ready(pool: &SqlitePool, show_id: i64) -> AppResult<u64> {

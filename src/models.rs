@@ -26,7 +26,7 @@ pub mod status {
     pub const CANCELLED: &str = "cancelled";
 }
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize)]
+#[derive(Clone, sqlx::FromRow, Serialize)]
 pub struct Show {
     pub id: i64,
     pub title: String,
@@ -48,6 +48,33 @@ pub struct Show {
     pub voice_preset_json: String,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+impl std::fmt::Debug for Show {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Show")
+            .field("id", &self.id)
+            .field("title", &self.title)
+            .field("author", &self.author)
+            .field("description", &self.description)
+            .field("category", &self.category)
+            .field("owner_name", &self.owner_name)
+            .field("owner_email", &self.owner_email)
+            .field("explicit", &self.explicit)
+            .field("language", &self.language)
+            .field("website_url", &self.website_url)
+            .field("cover_path", &self.cover_path)
+            .field("cover_version", &self.cover_version)
+            .field("cover_custom", &self.cover_custom)
+            .field("feed_token", &"<redacted>")
+            .field("feed_enabled", &self.feed_enabled)
+            .field("default_minutes", &self.default_minutes)
+            .field("auto_publish", &self.auto_publish)
+            .field("voice_preset_json", &self.voice_preset_json)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .finish()
+    }
 }
 
 impl Show {
@@ -197,6 +224,35 @@ mod tests {
         assert_eq!(target_chars(10, "vi"), 10_440);
         assert_eq!(supported_language("en-US"), Some("en"));
         assert_eq!(supported_language("ja"), None);
+    }
+
+    #[test]
+    fn show_debug_redacts_the_feed_token() {
+        let show = Show {
+            id: 1,
+            title: "Show".into(),
+            author: "Author".into(),
+            description: "Description".into(),
+            category: "Technology".into(),
+            owner_name: "Owner".into(),
+            owner_email: "owner@example.com".into(),
+            explicit: false,
+            language: "vi".into(),
+            website_url: "https://example.test".into(),
+            cover_path: Some("/tmp/cover.jpg".into()),
+            cover_version: 1,
+            cover_custom: false,
+            feed_token: "super-secret-token".into(),
+            feed_enabled: true,
+            default_minutes: 10,
+            auto_publish: true,
+            voice_preset_json: "{}".into(),
+            created_at: 1,
+            updated_at: 2,
+        };
+        let debug = format!("{show:?}");
+        assert!(debug.contains("redacted"), "{debug}");
+        assert!(!debug.contains("super-secret-token"), "{debug}");
     }
 
     #[test]

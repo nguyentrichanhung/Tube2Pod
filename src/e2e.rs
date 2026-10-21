@@ -143,6 +143,10 @@ async fn youtube_url_becomes_a_published_feed_item() {
     assert_eq!(published.status, crate::models::status::PUBLISHED);
     assert_eq!(published.stage, crate::models::stage::PUBLISHED);
     assert_eq!(published.source_title, "Một video thử nghiệm");
+    assert!(
+        !crate::worker::synth::parts_dir(&cfg, &episode.uuid).exists(),
+        "temporary parts must be removed after a successful publish"
+    );
     let audio_path = published.audio_path.as_ref().unwrap();
     assert!(std::path::Path::new(audio_path).exists());
     assert_eq!(std::fs::read(audio_path).unwrap(), b"ID3fake-mp3");

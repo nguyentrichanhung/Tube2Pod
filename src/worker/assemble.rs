@@ -25,15 +25,22 @@ pub async fn assemble_episode(
         ));
     }
     let out = dir.join("out.mp3");
-    let probe = ffmpeg::concat_audio(cfg, &parts, &dir, &out)
-        .await
-        .map_err(|e| PipelineError::from_app(e, "assembly_failed"))?;
+    let concat = ffmpeg::concat_audio(cfg, &parts, &dir, &out);
+    let probe = match crate::worker::cancellable(pool, &episode.uuid, concat).await {
+        Some(result) => result.map_err(|e| PipelineError::from_app(e, "assembly_failed"))?,
+        None => {
+            let _ = tokio::fs::remove_file(&out).await;
+            let _ = tokio::fs::remove_file(dir.join("concat.txt")).await;
+            return Ok(());
+        }
+    };
     let current = episodes::get(pool, &episode.uuid)
         .await
         .map_err(|e| PipelineError::from_app(e, "internal"))?
         .ok_or_else(|| PipelineError::new("internal", "episode disappeared", false))?;
     if current.status == status::CANCELLED {
         let _ = tokio::fs::remove_file(&out).await;
+        let _ = tokio::fs::remove_file(dir.join("concat.txt")).await;
         return Ok(());
     }
     let version = if episode.audio_path.is_some() {
@@ -192,6 +199,86 @@ mod tests {
             .join("audio")
             .join(format!("{task_uuid}-1.mp3"))
             .exists());
+    }
+
+    #[tokio::test]
+    async fn cancellation_kills_the_concat_before_it_finishes() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = test_config(root.path());
+        let started = root.path().join("ffmpeg-started");
+        let finished = root.path().join("ffmpeg-finished");
+        let script = format!(
+            "#!/bin/sh\nout=\nfor a in \"$@\"; do out=\"$a\"; done\ntouch '{}'\nsleep 1\ntouch '{}'\nprintf 'audio' > \"$out\"\n",
+            started.display(),
+            finished.display()
+        );
+        fake_binary(root.path(), "ffmpeg", &script);
+        fake_binary(root.path(), "ffprobe", "#!/bin/sh\nprintf '12.5\\n'\n");
+
+        let pool = db::test_pool().await;
+        let show = shows::create(
+            &pool,
+            NewShow {
+                title: "Show".into(),
+                ..NewShow::default()
+            },
+        )
+        .await
+        .unwrap();
+        let ep = db::episodes::create(
+            &pool,
+            db::episodes::NewEpisode {
+                show_id: show.id,
+                video_id: "v1".into(),
+                source_url: "https://www.youtube.com/watch?v=v1".into(),
+                source_title: "Video".into(),
+                source_channel: "".into(),
+                source_duration_s: Some(600),
+                source_thumbnail_url: None,
+                source_upload_date: None,
+                language: "vi".into(),
+                target_minutes: 10,
+            },
+        )
+        .await
+        .unwrap();
+
+        let dir = crate::worker::synth::parts_dir(&cfg, &ep.uuid);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("part-000.mp3"), b"part").unwrap();
+        std::fs::write(dir.join("summary_hash.txt"), "hash-new").unwrap();
+        db::episodes::set_chunk_count(&pool, &ep.uuid, 1)
+            .await
+            .unwrap();
+        let ep = db::episodes::get(&pool, &ep.uuid).await.unwrap().unwrap();
+
+        let task_pool = pool.clone();
+        let task_cfg = cfg.clone();
+        let task_uuid = ep.uuid.clone();
+        let task = tokio::spawn(async move { assemble_episode(&task_pool, &task_cfg, &ep).await });
+
+        for _ in 0..500 {
+            if started.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(started.exists(), "ffmpeg did not start");
+
+        db::episodes::cancel(&pool, &task_uuid).await.unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("assemble did not stop after cancellation")
+            .unwrap();
+        result.unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(1300)).await;
+        assert!(!finished.exists(), "ffmpeg kept running after cancellation");
+        let got = db::episodes::get(&pool, &task_uuid).await.unwrap().unwrap();
+        assert_eq!(got.status, crate::models::status::CANCELLED);
+        assert_eq!(got.stage, stage::QUEUED);
+        assert!(got.audio_path.is_none());
+        assert!(!dir.join("out.mp3").exists());
     }
 
     #[tokio::test]

@@ -7,13 +7,14 @@ use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
 use crate::web::library::LibraryRow;
 use askama::Template;
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::Extension;
 use axum::Form;
 use serde::Deserialize;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct ChecklistItem {
@@ -241,7 +242,7 @@ pub async fn detail(
         .collect();
     let episode_count = rows.len();
     let feed_url = format!("{}/feed/{}.xml", state.cfg.public_base_url, show.feed_token);
-    let cover_url = show.cover_url(&state.cfg.public_base_url);
+    let cover_url = format!("/shows/{}/cover", show.id);
     let checklist = feed_checklist(&show);
     let can_enable = checklist.iter().all(|item| item.ok);
     Ok(Html(
@@ -321,6 +322,28 @@ pub async fn update(
         &headers,
         &format!("/shows/{id}?tab=info"),
     ))
+}
+
+pub async fn cover_preview(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    request: Request<Body>,
+) -> AppResult<Response> {
+    let show = shows::get(&state.pool, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let path = show.cover_path.ok_or(AppError::NotFound)?;
+    let mut response =
+        crate::web::public::serve_contained(&state, PathBuf::from(path), request).await?;
+    if matches!(
+        response.status(),
+        StatusCode::OK | StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED
+    ) {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    Ok(response)
 }
 
 pub async fn upload_cover(
@@ -1368,6 +1391,68 @@ mod tests {
             image::load_from_memory(&bytes).unwrap().dimensions(),
             (3000, 3000)
         );
+    }
+
+    #[tokio::test]
+    async fn cover_preview_works_for_a_show_with_a_disabled_feed() {
+        let context = ctx().await;
+        let show = complete_show(&context, "Show").await;
+        let path = context
+            .state
+            .cfg
+            .data_dir
+            .join("shows")
+            .join(show.id.to_string())
+            .join("cover.jpg");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"\xff\xd8\xff\xe0cover").unwrap();
+        shows::set_cover(
+            &context.state.pool,
+            show.id,
+            &path.display().to_string(),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+        let response = send(
+            &context,
+            Method::GET,
+            &format!("/shows/{}/cover", show.id),
+            "",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "no-store"
+        );
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(&bytes[..3], &[0xff, 0xd8, 0xff]);
+
+        let detail = send(
+            &context,
+            Method::GET,
+            &format!("/shows/{}?tab=info", show.id),
+            "",
+            Vec::new(),
+        )
+        .await;
+        let html = String::from_utf8(
+            to_bytes(detail.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains(&format!("src=\"/shows/{}/cover\"", show.id)));
     }
 
     #[tokio::test]

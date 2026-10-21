@@ -30,6 +30,11 @@ pub fn summarize(sentences: &[String], options: &SummaryOptions) -> SummaryResul
         };
     }
 
+    let usable_index: HashMap<usize, usize> = usable
+        .iter()
+        .enumerate()
+        .map(|(position, (original, _))| (*original, position))
+        .collect();
     let docs: Vec<BTreeSet<String>> = usable
         .iter()
         .map(|(_, sentence)| tokens(sentence))
@@ -75,30 +80,31 @@ pub fn summarize(sentences: &[String], options: &SummaryOptions) -> SummaryResul
     let mut selected: Vec<usize> = Vec::new();
     let mut used_chars = 0usize;
     let mut candidates = scored;
+    let mut similarities = vec![0.0f64; candidates.len()];
     while !candidates.is_empty() {
         let mut best: Option<(usize, f64)> = None;
-        for (position, (relevance, index)) in candidates.iter().enumerate() {
-            let doc = &docs[usable.iter().position(|(i, _)| i == index).unwrap()];
-            let similarity = selected
-                .iter()
-                .map(|chosen| {
-                    let chosen_doc = &docs[usable.iter().position(|(i, _)| i == chosen).unwrap()];
-                    cosine(doc, chosen_doc)
-                })
-                .fold(0.0f64, f64::max);
-            let score = 0.7 * relevance - 0.3 * similarity;
+        for (position, (relevance, _)) in candidates.iter().enumerate() {
+            let score = 0.7 * relevance - 0.3 * similarities[position];
             if best.is_none_or(|(_, best_score)| score > best_score) {
                 best = Some((position, score));
             }
         }
         let (position, _) = best.unwrap();
         let (_, index) = candidates.remove(position);
+        similarities.remove(position);
         let sentence_chars = char_counts[index];
         if !selected.is_empty() && used_chars + sentence_chars > budget {
             break;
         }
         used_chars += sentence_chars;
         selected.push(index);
+        let chosen_doc = &docs[usable_index[&index]];
+        for (position, (_, candidate_index)) in candidates.iter().enumerate() {
+            let similarity = cosine(&docs[usable_index[candidate_index]], chosen_doc);
+            if similarity > similarities[position] {
+                similarities[position] = similarity;
+            }
+        }
         if used_chars >= budget {
             break;
         }
@@ -433,11 +439,42 @@ mod tests {
         let result = summarize(
             &["Một câu ngắn.".into(), "Một câu khác.".into()],
             &SummaryOptions {
-                target_chars: 5000,
+                target_chars: 3000,
                 title: "Ngắn".into(),
             },
         );
         assert_eq!(result.selected_indices, vec![0, 1]);
+    }
+
+    #[test]
+    fn long_transcript_summarizes_quickly_and_deterministically() {
+        let sentences: Vec<String> = (0..3000)
+            .map(|i| {
+                format!(
+                    "Câu số {i} giải thích chủ đề lập trình an toàn, hiệu năng và ví dụ cụ thể."
+                )
+            })
+            .collect();
+        let options = SummaryOptions {
+            target_chars: 3000,
+            title: "Rust".into(),
+        };
+
+        let started = std::time::Instant::now();
+        let first = summarize(&sentences, &options);
+        let elapsed = started.elapsed();
+        let second = summarize(&sentences, &options);
+
+        assert_eq!(first.selected_indices, second.selected_indices);
+        assert!(!first.selected_indices.is_empty());
+        assert!(first
+            .selected_indices
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]));
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "summarize took {elapsed:?}"
+        );
     }
 
     #[test]

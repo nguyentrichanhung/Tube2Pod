@@ -36,10 +36,14 @@ pub async fn fetch_episode(
         }
     }
 
-    let meta = ytdlp::probe(cfg, &video).await.map_err(|e| {
-        let code = ytdlp::classify_source_error(&e);
-        PipelineError::from_app(e, code)
-    })?;
+    let meta =
+        match crate::worker::cancellable(pool, &episode.uuid, ytdlp::probe(cfg, &video)).await {
+            Some(result) => result.map_err(|e| {
+                let code = ytdlp::classify_source_error(&e);
+                PipelineError::from_app(e, code)
+            })?,
+            None => return Ok(()),
+        };
     let max_source_minutes = crate::db::settings::read_i64(pool, "max_source_minutes", 360)
         .await
         .map_err(|e| PipelineError::from_app(e, "internal"))?;
@@ -72,9 +76,14 @@ pub async fn fetch_episode(
     })?;
 
     let tmp = cfg.data_dir.join("tmp").join(&episode.uuid);
-    let raw_path = ytdlp::download_caption(cfg, &video, &caption, &tmp, &episode.uuid)
-        .await
-        .map_err(|e| PipelineError::from_app(e, "source_unavailable"))?;
+    let download = ytdlp::download_caption(cfg, &video, &caption, &tmp, &episode.uuid);
+    let raw_path = match crate::worker::cancellable(pool, &episode.uuid, download).await {
+        Some(result) => result.map_err(|e| PipelineError::from_app(e, "source_unavailable"))?,
+        None => {
+            let _ = tokio::fs::remove_dir_all(&tmp).await;
+            return Ok(());
+        }
+    };
     let raw = tokio::fs::read_to_string(&raw_path)
         .await
         .map_err(|e| PipelineError::from_app(e.into(), "source_unavailable"))?;
@@ -102,6 +111,10 @@ pub async fn fetch_episode(
         ));
     }
     let plain = sentences.join("\n");
+    if crate::worker::is_cancelled(pool, &episode.uuid).await {
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+        return Ok(());
+    }
     let transcript_dir = cfg.data_dir.join("transcripts");
     tokio::fs::create_dir_all(&transcript_dir)
         .await
@@ -114,6 +127,10 @@ pub async fn fetch_episode(
     tokio::fs::write(&canonical_text, &plain)
         .await
         .map_err(|e| PipelineError::from_app(e.into(), "internal"))?;
+    if crate::worker::is_cancelled(pool, &episode.uuid).await {
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+        return Ok(());
+    }
 
     episodes::set_fetched(
         pool,
@@ -149,7 +166,7 @@ mod tests {
         self,
         shows::{self, NewShow},
     };
-    use crate::models::stage;
+    use crate::models::{stage, status};
     use std::os::unix::fs::PermissionsExt;
 
     fn config_with_script(data_dir: &std::path::Path, script_body: &str) -> Config {
@@ -291,6 +308,65 @@ mod tests {
         let error = fetch_episode(&pool, &cfg, &ep).await.unwrap_err();
         assert_eq!(error.code, "source_unavailable");
         assert!(error.retryable, "upstream failures should retry: {error:?}");
+    }
+
+    #[tokio::test]
+    async fn cancellation_kills_the_caption_download_and_cleans_tmp() {
+        let dir = tempfile::tempdir().unwrap();
+        let started = dir.path().join("download-started");
+        let finished = dir.path().join("download-finished");
+        let fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ytdlp_vi.json");
+        let caption = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/captions_vi.json3");
+        let cfg = config_with_script(
+            dir.path(),
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--dump-single-json\" ]; then cat '{}'; exit 0; fi\ntouch '{}'\nsleep 1\ntouch '{}'\nout=''\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"-o\" ]; then out=\"$2\"; shift; fi\n  shift\ndone\ncp '{}' \"${{out%.*}}.json3\"\n",
+                fixture.display(),
+                started.display(),
+                finished.display(),
+                caption.display()
+            ),
+        );
+        let pool = db::test_pool().await;
+        let ep = seed_episode(&pool).await;
+        let uuid = ep.uuid.clone();
+
+        let task_pool = pool.clone();
+        let task_cfg = cfg.clone();
+        let task = tokio::spawn(async move { fetch_episode(&task_pool, &task_cfg, &ep).await });
+
+        for _ in 0..500 {
+            if started.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(started.exists(), "caption download did not start");
+
+        crate::db::episodes::cancel(&pool, &uuid).await.unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("fetch did not stop after cancellation")
+            .unwrap();
+        result.unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(1300)).await;
+        assert!(!finished.exists(), "yt-dlp kept running after cancellation");
+        let got = crate::db::episodes::get(&pool, &uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.status, status::CANCELLED);
+        assert_ne!(got.stage, stage::SUMMARIZING);
+        assert!(got.transcript_path.is_none());
+        assert!(!cfg.data_dir.join("tmp").join(&uuid).exists());
+        assert!(!cfg
+            .data_dir
+            .join("transcripts")
+            .join(format!("{uuid}.txt"))
+            .exists());
     }
 
     #[tokio::test]

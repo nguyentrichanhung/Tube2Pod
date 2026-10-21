@@ -1,6 +1,6 @@
 use crate::db::{episodes, shows};
 use crate::error::{AppError, AppResult};
-use crate::models::{sha256_hex, stage, status, Episode, Show};
+use crate::models::{sha256_hex, status, Episode, Show};
 use crate::services::omnivoice::OmnivoiceClient;
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
@@ -115,12 +115,9 @@ pub async fn update_summary(
     csrf::verify(&token, &headers, &form._csrf)?;
     let text = validate_summary(&form.summary_text)?;
     let hash = sha256_hex(&text);
-    let episode = episodes::get(&state.pool, &uuid)
+    episodes::get(&state.pool, &uuid)
         .await?
         .ok_or(AppError::NotFound)?;
-    if matches!(episode.status.as_str(), status::QUEUED | status::RUNNING) {
-        return Err(AppError::Conflict("Không sửa được tập đang xử lý.".into()));
-    }
     episodes::set_summary_edit(&state.pool, &uuid, &text, &hash).await?;
     Ok(redirect_response(&headers, &format!("/episodes/{uuid}")))
 }
@@ -193,6 +190,11 @@ pub async fn cancel(
         let client = OmnivoiceClient::new(&state.cfg.omnivoice);
         let _ = client.delete_speech(take_id).await;
     }
+    if let Some(design_id) = episode.voice_design_id {
+        let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+        let _ = client.delete_design(design_id).await;
+        episodes::set_voice_design(&state.pool, &uuid, None).await?;
+    }
     episodes::cancel(&state.pool, &uuid).await?;
     state.notify.notify_one();
     Ok(redirect_response(&headers, &format!("/episodes/{uuid}")))
@@ -214,8 +216,13 @@ pub async fn publish(
             "Chỉ phát hành tập đang sẵn sàng.".into(),
         ));
     }
-    episodes::queue_at_stage(&state.pool, &uuid, stage::PUBLISHING).await?;
-    state.notify.notify_one();
+    if !episodes::publish_one(&state.pool, &uuid).await? {
+        return Err(AppError::Conflict(
+            "Chỉ phát hành tập đang sẵn sàng.".into(),
+        ));
+    }
+    let parts = crate::worker::synth::parts_dir(&state.cfg, &uuid);
+    let _ = tokio::fs::remove_dir_all(parts).await;
     Ok(redirect_response(&headers, &format!("/episodes/{uuid}")))
 }
 
@@ -332,12 +339,17 @@ mod tests {
     }
 
     async fn ctx() -> Ctx {
+        ctx_with_omnivoice("http://127.0.0.1:1").await
+    }
+
+    async fn ctx_with_omnivoice(base_url: &str) -> Ctx {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().to_path_buf();
+        let base_url = base_url.to_string();
         let cfg = Config::from_lookup(move |key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
             "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
-            "OMNIVOICE_BASE_URL" => Some("http://127.0.0.1:1".into()),
+            "OMNIVOICE_BASE_URL" => Some(base_url.clone()),
             "DATA_DIR" => Some(path.display().to_string()),
             _ => None,
         })
@@ -671,7 +683,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_summary_rejects_blank_busy_and_cross_site_requests() {
+    async fn update_summary_allows_running_edits_but_rejects_blank_and_cross_site() {
         let context = ctx().await;
         let show = create_show(&context, "Show").await;
         let episode = create_episode(&context, show.id, "Tập").await;
@@ -679,13 +691,15 @@ mod tests {
         let blank = patch_summary(&context, &episode.uuid, "   ").await;
         assert_eq!(blank.status(), StatusCode::BAD_REQUEST);
 
-        let busy = patch_summary(&context, &episode.uuid, "Nội dung").await;
-        assert_eq!(busy.status(), StatusCode::CONFLICT);
-        let unchanged = episodes::get(&context.state.pool, &episode.uuid)
+        set_status(&context, &episode.uuid, status::RUNNING, stage::VOICING).await;
+        let running = patch_summary(&context, &episode.uuid, "Nội dung").await;
+        assert_eq!(running.status(), StatusCode::SEE_OTHER);
+        let edited = episodes::get(&context.state.pool, &episode.uuid)
             .await
             .unwrap()
             .unwrap();
-        assert!(unchanged.summary().is_empty());
+        assert_eq!(edited.summary(), "Nội dung");
+        assert!(edited.summary_edited_at.is_some());
 
         set_status(&context, &episode.uuid, status::READY, stage::READY).await;
         let cross_site = send(
@@ -701,7 +715,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(unchanged.summary().is_empty());
+        assert_eq!(unchanged.summary(), "Nội dung");
     }
 
     #[tokio::test]
@@ -923,11 +937,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn publish_only_queues_ready_episodes() {
+    async fn cancel_deletes_an_active_voice_design_and_clears_it() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("DELETE"))
+            .and(wiremock::matchers::path("/api/voice-designs/7"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"ok": true, "data": null, "error": null})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let context = ctx_with_omnivoice(&server.uri()).await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Đang tạo giọng").await;
+        set_status(&context, &episode.uuid, status::RUNNING, stage::VOICING).await;
+        episodes::set_voice_design(&context.state.pool, &episode.uuid, Some(7))
+            .await
+            .unwrap();
+
+        let response = send(
+            &context,
+            Method::POST,
+            &format!("/episodes/{}/cancel", episode.uuid),
+            Some(csrf_form().into_bytes()),
+            &[],
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let got = episodes::get(&context.state.pool, &episode.uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.status, status::CANCELLED);
+        assert_eq!(got.voice_design_id, None);
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn publish_publishes_ready_episodes_without_auto_publish() {
         let context = ctx().await;
         let show = create_show(&context, "Show").await;
+        sqlx::query("UPDATE shows SET auto_publish = 0 WHERE id = ?1")
+            .bind(show.id)
+            .execute(&context.state.pool)
+            .await
+            .unwrap();
         let ready = create_episode(&context, show.id, "Sẵn sàng").await;
         set_status(&context, &ready.uuid, status::READY, stage::READY).await;
+        let parts = crate::worker::synth::parts_dir(&context.state.cfg, &ready.uuid);
+        tokio::fs::create_dir_all(&parts).await.unwrap();
+        tokio::fs::write(parts.join("part-000.mp3"), b"part")
+            .await
+            .unwrap();
         let queued = create_episode(&context, show.id, "Chờ").await;
 
         let response = send(
@@ -943,8 +1006,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(published.status, status::QUEUED);
-        assert_eq!(published.stage, stage::PUBLISHING);
+        assert_eq!(published.status, status::PUBLISHED);
+        assert_eq!(published.stage, stage::PUBLISHED);
+        assert!(published.published_at.is_some());
+        assert!(!parts.exists(), "temporary parts must be removed");
 
         let rejected = send(
             &context,

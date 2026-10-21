@@ -123,10 +123,13 @@ pub async fn cover(
     Path(file): Path<String>,
     request: Request<Body>,
 ) -> AppResult<Response> {
-    let (token, _version) = parse_cover_name(&file).ok_or(AppError::NotFound)?;
+    let (token, version) = parse_cover_name(&file).ok_or(AppError::NotFound)?;
     let show = shows::get_by_feed_token(&state.pool, &token)
         .await?
         .ok_or(AppError::NotFound)?;
+    if !show.feed_enabled || !show.feed_complete() || version != show.cover_version {
+        return Err(AppError::NotFound);
+    }
     let path = state
         .cfg
         .data_dir
@@ -973,6 +976,43 @@ mod tests {
                 "{path} cached an error"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn cover_is_hidden_unless_the_feed_is_enabled_and_complete() {
+        let fx = fixture().await;
+        let uri = format!("/cover/{}-1.jpg", fx.token);
+        assert_eq!(get(&fx.state, &uri).await.status(), StatusCode::OK);
+
+        shows::set_feed_enabled(&fx.state.pool, fx.show_id, false)
+            .await
+            .unwrap();
+        assert_eq!(get(&fx.state, &uri).await.status(), StatusCode::NOT_FOUND);
+
+        sqlx::query("UPDATE shows SET feed_enabled = 1, description = '' WHERE id = ?1")
+            .bind(fx.show_id)
+            .execute(&fx.state.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            get(&fx.state, &uri).await.status(),
+            StatusCode::NOT_FOUND,
+            "an incomplete feed must not expose the cover"
+        );
+
+        sqlx::query("UPDATE shows SET description = 'Mô tả' WHERE id = ?1")
+            .bind(fx.show_id)
+            .execute(&fx.state.pool)
+            .await
+            .unwrap();
+        assert_eq!(get(&fx.state, &uri).await.status(), StatusCode::OK);
+        assert_eq!(
+            get(&fx.state, &format!("/cover/{}-99.jpg", fx.token))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND,
+            "only the current cover version may be served"
+        );
     }
 
     #[cfg(unix)]
