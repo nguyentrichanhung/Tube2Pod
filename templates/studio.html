@@ -20,7 +20,9 @@
 
     <div class="grid two">
       <label>Show
-        <select name="show_id" required>
+        <select name="show_id" required
+                hx-post="/api/preview" hx-target="#preview" hx-trigger="change"
+                hx-include="closest form">
           {% for show in shows %}
           <option value="{{ show.id }}" data-default-minutes="{{ show.default_minutes }}" {% if selected_show == Some(show.id.clone()) %}selected{% endif %}>{{ show.title }}</option>
           {% endfor %}
@@ -38,7 +40,7 @@
 
     <div class="row between">
       <span></span>
-      <button type="submit" {% if shows.is_empty() %}disabled{% endif %}>Tạo tập</button>
+      <button type="submit" data-no-shows="{% if shows.is_empty() %}true{% else %}false{% endif %}" {% if shows.is_empty() %}disabled{% endif %}>Tạo tập</button>
     </div>
   </form>
 </section>
@@ -77,7 +79,10 @@
   document.body.addEventListener("htmx:afterSwap", (event) => {
     if (event.detail.target.id !== "preview") return;
     const submit = document.querySelector("form[action='/episodes'] button[type='submit']");
-    if (submit) submit.disabled = Boolean(event.detail.target.querySelector("[data-voice-missing]"));
+    if (submit) {
+      const noShows = submit.dataset.noShows === "true";
+      submit.disabled = noShows || Boolean(event.detail.target.querySelector("[data-voice-missing]"));
+    }
   });
 </script>
 {% endblock %}

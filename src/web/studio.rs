@@ -27,6 +27,7 @@ pub struct StudioTemplate {
 #[derive(Template)]
 #[template(path = "partials/queue.html")]
 pub struct QueueTemplate {
+    csrf: String,
     episodes: Vec<Episode>,
 }
 
@@ -37,6 +38,7 @@ pub struct PreviewTemplate {
     channel: String,
     duration: String,
     language: String,
+    language_label: String,
     has_captions: bool,
     thumbnail: String,
     has_thumbnail: bool,
@@ -68,6 +70,7 @@ impl From<&PreviewData> for PreviewTemplate {
             channel: data.channel.clone().unwrap_or_default(),
             duration: duration_label(data.duration_s),
             language: data.language.unwrap_or("không xác định").to_string(),
+            language_label: language_label(data.language),
             has_captions: data.has_captions,
             thumbnail: data.thumbnail.clone().unwrap_or_default(),
             has_thumbnail: data.thumbnail.is_some(),
@@ -206,7 +209,7 @@ pub async fn preview(
             if htmx {
                 Ok(Html(
                     PreviewErrorTemplate {
-                        message: error.to_string(),
+                        message: preview_error_message(&error),
                     }
                     .render()?,
                 )
@@ -268,7 +271,26 @@ fn duration_label(seconds: Option<i64>) -> String {
     }
 }
 
-pub async fn queue(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
+fn language_label(language: Option<&str>) -> String {
+    match language {
+        Some("vi") => "Tiếng Việt".into(),
+        Some("en") => "English".into(),
+        Some("ko") => "한국어".into(),
+        _ => "ngôn ngữ này".into(),
+    }
+}
+
+fn preview_error_message(error: &AppError) -> String {
+    match error {
+        AppError::BadRequest(message) | AppError::Conflict(message) => message.clone(),
+        _ => "Không xem trước được video. Vui lòng thử lại sau.".into(),
+    }
+}
+
+pub async fn queue(
+    State(state): State<AppState>,
+    Extension(token): Extension<CsrfToken>,
+) -> AppResult<impl IntoResponse> {
     let running = episodes::list(
         &state.pool,
         &episodes::EpisodeFilter {
@@ -312,7 +334,13 @@ pub async fn queue(State(state): State<AppState>) -> AppResult<impl IntoResponse
             episodes.push(episode);
         }
     }
-    Ok(Html(QueueTemplate { episodes }.render()?))
+    Ok(Html(
+        QueueTemplate {
+            csrf: token.0,
+            episodes,
+        }
+        .render()?,
+    ))
 }
 
 fn validate_minutes(minutes: i64) -> AppResult<()> {
@@ -616,6 +644,48 @@ mod tests {
         assert!(html.contains("role=\"progressbar\""));
         assert!(html.contains("Đang tạo audio"));
         assert!(html.contains("67%"));
+    }
+
+    #[tokio::test]
+    async fn queue_retries_failed_episodes_with_a_post_form() {
+        let state = test_state().await;
+        let show_id = create_show(&state).await;
+        let episode = episodes::create(&state.pool, new_episode(show_id, VIDEO_ID, "Failed video"))
+            .await
+            .unwrap();
+        episodes::record_failure(&state.pool, &episode.uuid, "tts", "boom", None)
+            .await
+            .unwrap();
+
+        let html = response_body(get(&state, "/api/queue").await).await;
+
+        assert!(html.contains(&format!("action=\"/episodes/{}/retry\"", episode.uuid)));
+        assert!(html.contains("method=\"post\""));
+        assert!(html.contains(&format!("name=\"_csrf\" value=\"{TOKEN}\"")));
+        assert!(!html.contains(&format!("href=\"/episodes/{}/retry\"", episode.uuid)));
+    }
+
+    #[test]
+    fn preview_errors_hide_internal_details() {
+        assert_eq!(
+            preview_error_message(&AppError::BadRequest("Lỗi công khai.".into())),
+            "Lỗi công khai."
+        );
+        assert_eq!(
+            preview_error_message(&AppError::Conflict("Xung đột công khai.".into())),
+            "Xung đột công khai."
+        );
+        for error in [
+            AppError::Upstream("secret upstream".into()),
+            AppError::Internal(anyhow::anyhow!("secret internal")),
+            AppError::NotFound,
+            AppError::Forbidden,
+        ] {
+            assert_eq!(
+                preview_error_message(&error),
+                "Không xem trước được video. Vui lòng thử lại sau."
+            );
+        }
     }
 
     #[tokio::test]

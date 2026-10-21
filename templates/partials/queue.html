@@ -16,8 +16,17 @@
       <span>{% if episode.progress_detail().is_some() %}{{ episode.progress_detail().unwrap() }}{% else %}{{ episode.stage_label() }}{% endif %}</span>
       <span>{{ episode.progress_percent() }}%</span>
     </div>
+    <div class="row">
+      <a class="button secondary" href="/episodes/{{ episode.uuid }}">Mở tập</a>
+      {% if episode.status == "failed" || episode.status == "cancelled" %}
+      <form method="post" action="/episodes/{{ episode.uuid }}/retry" class="row" hx-boost="false">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <button type="submit" class="secondary">Thử lại</button>
+      </form>
+      {% endif %}
+    </div>
     {% if episode.error_label().is_some() %}
-    <div class="notice error">{{ episode.error_label().unwrap() }} <a href="/episodes/{{ episode.uuid }}/retry">Thử lại</a></div>
+    <div class="notice error">{{ episode.error_label().unwrap() }}</div>
     {% endif %}
   </div>
   {% endfor %}
