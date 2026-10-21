@@ -102,7 +102,7 @@ pub async fn resolve_voice(
         return Ok(existing_voice_id);
     }
 
-    let options = client.voice_options().await.map_err(tts_error)?;
+    let options = client.voice_options(language).await.map_err(tts_error)?;
     let sample = sample_text(language);
     let sample = fit_sample(&sample, options.min_chars, options.max_chars);
     let preset: VoicePreset = serde_json::from_str(&show.voice_preset_json).unwrap_or_default();

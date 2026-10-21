@@ -5,6 +5,7 @@ use reqwest::{Client, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -31,6 +32,37 @@ pub struct SpeechTake {
 pub struct VoiceOptions {
     pub min_chars: usize,
     pub max_chars: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawVoiceOptions {
+    #[serde(default)]
+    min_chars: Option<usize>,
+    #[serde(default)]
+    max_chars: Option<usize>,
+    #[serde(default)]
+    languages: HashMap<String, RawLanguageOptions>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawLanguageOptions {
+    min_chars: usize,
+    max_chars: usize,
+}
+
+impl RawVoiceOptions {
+    fn for_language(self, language: &str) -> VoiceOptions {
+        if let Some(limits) = self.languages.get(language) {
+            return VoiceOptions {
+                min_chars: limits.min_chars,
+                max_chars: limits.max_chars,
+            };
+        }
+        VoiceOptions {
+            min_chars: self.min_chars.unwrap_or(20),
+            max_chars: self.max_chars.unwrap_or(500),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -167,9 +199,11 @@ impl OmnivoiceClient {
             .ok_or_else(|| AppError::Upstream("Omnivoice returned no data".into()))
     }
 
-    pub async fn voice_options(&self) -> AppResult<VoiceOptions> {
-        self.call(Method::GET, "/api/voice-designs/options", None)
-            .await
+    pub async fn voice_options(&self, language: &str) -> AppResult<VoiceOptions> {
+        let raw: RawVoiceOptions = self
+            .call(Method::GET, "/api/voice-designs/options", None)
+            .await?;
+        Ok(raw.for_language(language))
     }
 
     pub async fn list_voices(&self) -> AppResult<Vec<Voice>> {
@@ -545,7 +579,7 @@ mod tests {
             .await;
 
         let client = OmnivoiceClient::new(&cfg(&server.uri()));
-        let options = client.voice_options().await.unwrap();
+        let options = client.voice_options("vi").await.unwrap();
         assert_eq!(options.max_chars, 300);
         let design = client
             .create_design("vi", "Xin chào", &crate::models::VoicePreset::default())
@@ -557,6 +591,31 @@ mod tests {
         let voice = client.save_design(design.id, "Giọng mới").await.unwrap();
         assert_eq!(voice.id, 11);
         client.delete_design(design.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reads_language_scoped_voice_options() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/voice-designs/options"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {
+                    "languages": {
+                        "vi": {"min_chars": 40, "max_chars": 900, "sample_text": "Xin chào"},
+                        "en": {"min_chars": 30, "max_chars": 700, "sample_text": "Hello"}
+                    }
+                },
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+
+        let client = OmnivoiceClient::new(&cfg(&server.uri()));
+        let vi = client.voice_options("vi").await.unwrap();
+        assert_eq!((vi.min_chars, vi.max_chars), (40, 900));
+        let en = client.voice_options("en").await.unwrap();
+        assert_eq!((en.min_chars, en.max_chars), (30, 700));
     }
 
     #[tokio::test]
