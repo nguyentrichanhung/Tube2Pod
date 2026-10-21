@@ -2,6 +2,8 @@ mod cleanup;
 mod config;
 mod db;
 mod domain;
+#[cfg(test)]
+mod e2e;
 mod error;
 mod health;
 mod lock;
