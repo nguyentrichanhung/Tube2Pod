@@ -28,6 +28,8 @@ rustc-ice-*.txt
 docs/superpowers/
 .worktrees/
 .env
+deploy/*.env
+!deploy/*.env.example
 *.db
 *.db-wal
 *.db-shm

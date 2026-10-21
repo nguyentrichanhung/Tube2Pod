@@ -1,6 +1,6 @@
 [Unit]
 Description=Tube2Pod podcast generator
-Documentation=https://github.com/your-user/tube2pod
+# Add Documentation=<public repository URL> when one is available.
 After=network-online.target
 Wants=network-online.target
 

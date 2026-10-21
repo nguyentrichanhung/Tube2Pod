@@ -1,6 +1,4 @@
 # Tube2Pod
-The script to convert youtube video script into podcast script
-## Tube2Pod
 
 YouTube URL → RSS podcast. Tube2Pod fetches captions, builds an extractive
 summary in Rust, sends the spoken script to Omnivoice, assembles MP3s with
@@ -26,6 +24,25 @@ cargo run
 Open `http://127.0.0.1:8400` for admin. The public listener is
 `http://127.0.0.1:8401`; feed URLs still use `PUBLIC_BASE_URL`.
 
+### Omnivoice authentication
+
+Tube2Pod supports two Omnivoice authentication modes:
+
+- **Tailscale (default):** set `OMNIVOICE_AUTH_MODE=tailscale` and
+  `OMNIVOICE_TAILNET_USER=<tailnet identity>`. Tube2Pod sends that identity to
+  Omnivoice, which must trust the tailnet connection. This is the recommended
+  mode when both services run on the same tailnet.
+- **Password:** set `OMNIVOICE_AUTH_MODE=password` and
+  `OMNIVOICE_PASSWORD=<long random secret>`. Tube2Pod logs in through
+  Omnivoice's `/api/auth/login`, stores the returned session cookie, and
+  retries once after a `401`. Use this when Omnivoice is not protected by
+  Tailscale identity.
+
+The populated environment file is a secret. Keep
+`/etc/tube2pod/tube2pod.env` at mode `0600`, owned by `root:root` or
+`tube2pod`. Never commit it or put real credentials in
+`deploy/tube2pod.env.example`.
+
 ### Production install
 
 ```bash
@@ -41,13 +58,35 @@ sudo install -m 0600 deploy/tube2pod.env.example /etc/tube2pod/tube2pod.env
 sudo editor /etc/tube2pod/tube2pod.env
 ```
 
-Install dependencies outside `/home` because the unit sets
-`ProtectHome=true`:
+The unit sets `ProtectHome=true`, so tools installed under `/home` (including
+pip user installs and virtualenvs) are invisible to the service. Install
+`yt-dlp`, `ffmpeg`, and `ffprobe` system-wide instead.
+
+Install the distro package and expose it at the configured path, or install
+the official standalone `yt-dlp` binary directly:
 
 ```bash
-sudo install -m 0755 "$(command -v yt-dlp)" /usr/local/bin/yt-dlp
-# Debian/Ubuntu: sudo apt install ffmpeg
+# Option A: distro package (Debian/Ubuntu installs /usr/bin/yt-dlp).
+sudo apt install yt-dlp ffmpeg
+sudo ln -sf /usr/bin/yt-dlp /usr/local/bin/yt-dlp
+
+# Option B: official standalone yt-dlp binary.
+sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+  -o /usr/local/bin/yt-dlp
+sudo chmod 0755 /usr/local/bin/yt-dlp
 ```
+
+Verify every tool as the service user with an empty environment, using the
+absolute paths configured in `/etc/tube2pod/tube2pod.env`:
+
+```bash
+sudo -u tube2pod env -i /usr/local/bin/yt-dlp --version
+sudo -u tube2pod env -i /usr/bin/ffmpeg -version
+sudo -u tube2pod env -i /usr/bin/ffprobe -version
+```
+
+If the tools live elsewhere, update `YTDLP_PATH`, `FFMPEG_PATH`, and
+`FFPROBE_PATH` to their absolute paths after installation.
 
 Start:
 
@@ -74,9 +113,11 @@ and without a trailing slash. Do not expose `:8400` with Funnel.
 
 1. Create a show in `/shows`.
 2. Complete the feed checklist and enable the feed.
-3. Copy `/feed/<token>.xml`.
+3. Open the show's **Feed** tab and copy the absolute Feed URL, for example
+   `https://YOUR-MACHINE.YOUR-TAILNET.ts.net:8443/feed/<token>.xml`. Use the
+   full URL, not just the `/feed/<token>.xml` path.
 4. In Apple Podcasts Connect choose **Add Show → Add by URL**.
-5. Paste the feed URL.
+5. Paste the absolute feed URL.
 
 There is no public Apple submission API. Rotating a feed token immediately
 invalidates the old URL and breaks existing subscriptions.
@@ -90,13 +131,23 @@ backup while running.
 ### Retention
 
 Cleanup runs at startup and every 24 hours. Settings are stored in the
-database and can be changed in the admin UI:
+database and can be changed in the admin UI. Values are clamped to at least
+one day/hour, and the UI accepts 1–365 days and 1–720 hours.
 
-- **Old audio** (`retention_old_audio_days`, default 7): removes audio for
-  finished episodes that have not been updated within the retention window.
-  Current audio for an episode is never deleted.
-- **Temporary files** (`retention_tmp_hours`, default 24): removes stale
-  downloads, transcripts, and partial synthesis output.
+- **Old or superseded audio** (`retention_old_audio_days`, default 7):
+  deletes files in `audio/` that are not the episode's current
+  `audio_path`. For `<uuid>-<version>.mp3` files linked to an episode, expiry
+  is measured from that episode's `updated_at`. Orphan files (unrecognized
+  names or no matching episode) use the file's mtime instead. The current
+  audio for every episode is never deleted.
+- **Temporary episode directories** (`retention_tmp_hours`, default 24):
+  deletes `tmp/<uuid>/` directories for episodes in `failed`, `cancelled`,
+  `ready`, or `published` state once the directory's mtime is older than the
+  window. `queued` and `running` episodes are skipped, as are `tmp/yt-dlp`
+  and non-UUID directories. Orphan UUID directories are removed after the
+  same window.
+- **Canonical transcripts** in `transcripts/` are **not** removed by
+  retention. Back them up; delete them manually if you no longer need them.
 
 Backups only retain what exists at backup time; audio older than the
 retention window will already be gone.
