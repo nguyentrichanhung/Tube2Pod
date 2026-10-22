@@ -89,6 +89,11 @@
       refresh();
     });
     form.addEventListener("input", refresh);
+    document.body.addEventListener("htmx:afterSwap", (event) => {
+      if (event.detail && event.detail.target && event.detail.target.id === "rows") {
+        refresh();
+      }
+    });
     const filterForm = document.querySelector("form[action='/library']");
     if (filterForm) {
       filterForm.addEventListener("change", syncFilters);

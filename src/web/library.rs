@@ -203,7 +203,7 @@ pub async fn bulk_delete(
     let mut seen = std::collections::HashSet::new();
     let uuids: Vec<String> = form_values(&body, "uuid")
         .into_iter()
-        .map(|uuid| uuid.trim().to_string())
+        .map(|uuid| uuid.trim().to_ascii_lowercase())
         .filter(|uuid| !uuid.is_empty() && seen.insert(uuid.clone()))
         .collect();
     if uuids.is_empty() {
@@ -214,24 +214,32 @@ pub async fn bulk_delete(
             "Chỉ xoá được tối đa 200 tập mỗi lần.".into(),
         ));
     }
-    let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+    let mut take_ids = Vec::new();
     let mut deleted = 0usize;
     let mut skipped = 0usize;
     for uuid in uuids {
-        let Some(episode) = episodes::get(&state.pool, &uuid).await? else {
+        let Some(episode) = episodes::delete_if_terminal(&state.pool, &uuid).await? else {
             skipped += 1;
             continue;
         };
-        if !deletable_status(&episode.status) {
-            skipped += 1;
-            continue;
-        }
         if let Some(take_id) = episode.active_take_id {
-            let _ = client.delete_speech(take_id).await;
+            take_ids.push(take_id);
         }
         purge_episode_files(&state.cfg.data_dir, &episode).await;
-        episodes::delete(&state.pool, &uuid).await?;
         deleted += 1;
+    }
+    if !take_ids.is_empty() {
+        let cfg = state.cfg.clone();
+        tokio::spawn(async move {
+            let client = OmnivoiceClient::new(&cfg.omnivoice);
+            for take_id in take_ids {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    client.delete_speech(take_id),
+                )
+                .await;
+            }
+        });
     }
     if deleted > 0 {
         state.notify.notify_one();
@@ -663,6 +671,35 @@ mod tests {
             .unwrap()
             .is_some());
         assert!(!audio_path.exists());
+    }
+
+    #[tokio::test]
+    async fn bulk_delete_dedupes_uuid_case_variants() {
+        let context = ctx().await;
+        let show_id = create_show(&context).await;
+        let episode = create_episode(&context, show_id, "one", "One").await;
+        set_status(&context, &episode.uuid, status::PUBLISHED).await;
+
+        let body = form(&[
+            ("_csrf", TOKEN),
+            ("confirm", "XOA"),
+            ("uuid", &episode.uuid),
+            ("uuid", &episode.uuid.to_ascii_uppercase()),
+        ]);
+        let response = send_form(&context, "/library/bulk-delete", body).await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(location.contains("deleted=1"), "{location}");
+        assert!(location.contains("skipped=0"), "{location}");
+        assert!(episodes::get(&context.state.pool, &episode.uuid)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
