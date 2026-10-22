@@ -117,8 +117,7 @@ pub fn build_voice_rows(
             let catalog_voice = stored.and_then(|(_, voice_id, _)| {
                 catalog.and_then(|voices| {
                     voices.iter().find(|voice| {
-                        voice.id == *voice_id
-                            && voice.language.as_deref() == Some(language)
+                        voice.id == *voice_id && voice.language.as_deref() == Some(language)
                     })
                 })
             });
