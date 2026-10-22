@@ -100,6 +100,25 @@
     picker.innerHTML = '<div class="notice error" role="alert">Không tải được danh sách giọng. Vui lòng thử lại hoặc liên hệ admin.</div>';
   });
 </script>
+<script>
+  if (!window.__tube2podVoicePreview) {
+    window.__tube2podVoicePreview = true;
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest(".voice-preview-button");
+      if (!button) return;
+      const scope = button.closest("[data-voice-preview]");
+      if (!scope) return;
+      const audio = scope.querySelector("audio");
+      const label = scope.querySelector(".voice-preview-label");
+      if (!audio) return;
+      audio.src = button.dataset.previewUrl;
+      audio.play().catch(() => {});
+      if (label) {
+        label.textContent = "Đang phát: " + (button.dataset.voiceName || "giọng đọc");
+      }
+    });
+  }
+</script>
 {% else %}
 <div class="grid two">
   <section class="card stack">

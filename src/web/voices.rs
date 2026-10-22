@@ -20,6 +20,7 @@ pub struct VoicePickerTemplate {
     pub show_id: i64,
     pub language: String,
     pub language_label: &'static str,
+    pub selected_voice_id: Option<i64>,
     pub voices: Vec<Voice>,
 }
 
@@ -68,11 +69,15 @@ pub async fn picker(
         .into_iter()
         .cloned()
         .collect();
+    let selected_voice_id = shows::get_voice(&state.pool, show_id, &language)
+        .await?
+        .map(|(id, _)| id);
     Ok(Html(
         VoicePickerTemplate {
             csrf: token.0,
             show_id,
             language_label: language_label(&language),
+            selected_voice_id,
             language,
             voices,
         }
@@ -118,9 +123,10 @@ pub async fn preview(
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, content_type);
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400"));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=86400"),
+    );
     response
         .headers_mut()
         .insert(header::CONTENT_LENGTH, content_length);
@@ -417,6 +423,49 @@ mod tests {
         )
         .await;
         assert_eq!(unsupported.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn picker_marks_the_selected_voice_and_exposes_metadata() {
+        let server = MockServer::start().await;
+        mount_voices(
+            &server,
+            serde_json::json!([
+                {
+                    "id": 42,
+                    "name": "Phượng",
+                    "status": "ready",
+                    "language": "vi",
+                    "preview_url": "/api/voices/42/preview",
+                    "design": {"gender": "female", "age": "middle_aged"}
+                }
+            ]),
+        )
+        .await;
+        let context = ctx(&server).await;
+        let show_id = create_show(&context).await;
+        shows::upsert_voice(&context.state.pool, show_id, "vi", 42, "Phượng")
+            .await
+            .unwrap();
+
+        let response = request(
+            &context,
+            Method::GET,
+            &format!("/shows/{show_id}/voices/vi"),
+            None,
+            TOKEN,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_text(response).await;
+        assert!(html.contains("Phượng"));
+        assert!(html.contains("Nữ"));
+        assert!(html.contains("Trung niên"));
+        assert!(html.contains("voice-preview-bar"));
+        assert!(html.contains("data-preview-url=\"/shows/"));
+        assert!(html.contains("checked"));
+        assert!(html.contains("voice-option selected"));
     }
 
     async fn mount_preview(server: &MockServer) {
