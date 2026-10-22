@@ -67,6 +67,13 @@ pub struct ShowsTemplate {
     cards: Vec<ShowCard>,
 }
 
+pub struct VoiceRow {
+    pub language: &'static str,
+    pub language_label: &'static str,
+    pub voice_name: Option<String>,
+    pub ready: Option<bool>,
+}
+
 #[derive(Template)]
 #[template(path = "show_detail.html")]
 pub struct ShowDetailTemplate {
@@ -79,6 +86,7 @@ pub struct ShowDetailTemplate {
     can_enable: bool,
     feed_url: String,
     cover_url: String,
+    voice_rows: Vec<VoiceRow>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,8 +108,6 @@ pub struct ShowEditForm {
     pub language: String,
     pub website_url: String,
     pub category: String,
-    pub owner_name: String,
-    pub owner_email: String,
     pub explicit: Option<String>,
     pub default_minutes: i64,
     pub auto_publish: Option<String>,
@@ -230,6 +236,7 @@ pub async fn detail(
     let tab = match query.tab.as_deref() {
         Some("info") => "info",
         Some("feed") => "feed",
+        Some("voices") => "voices",
         _ => "episodes",
     };
     let episodes = episodes::list_for_show(&state.pool, id, 200).await?;
@@ -245,6 +252,37 @@ pub async fn detail(
     let cover_url = format!("/shows/{}/cover", show.id);
     let checklist = feed_checklist(&show);
     let can_enable = checklist.iter().all(|item| item.ok);
+    let selected = shows::list_voices(&state.pool, id).await?;
+    let catalog = if tab != "voices" || selected.is_empty() {
+        None
+    } else {
+        OmnivoiceClient::new(&state.cfg.omnivoice)
+            .list_voices()
+            .await
+            .ok()
+    };
+    let voice_rows = [("vi", "Tiếng Việt"), ("en", "English"), ("ko", "한국어")]
+        .into_iter()
+        .map(|(language, language_label)| {
+            let stored = selected.iter().find(|(lang, _, _)| lang == language);
+            let voice_name = stored.map(|(_, _, name)| name.clone());
+            let ready = stored.and_then(|(_, voice_id, _)| {
+                catalog.as_ref().map(|voices| {
+                    voices.iter().any(|voice| {
+                        voice.id == *voice_id
+                            && voice.status == "ready"
+                            && voice.language.as_deref() == Some(language)
+                    })
+                })
+            });
+            VoiceRow {
+                language,
+                language_label,
+                voice_name,
+                ready,
+            }
+        })
+        .collect();
     Ok(Html(
         ShowDetailTemplate {
             csrf: token.0,
@@ -256,6 +294,7 @@ pub async fn detail(
             can_enable,
             feed_url,
             cover_url,
+            voice_rows,
         }
         .render()?,
     ))
@@ -285,8 +324,8 @@ pub async fn update(
             author: Some(form.author),
             description: Some(form.description),
             category: Some(form.category),
-            owner_name: Some(form.owner_name),
-            owner_email: Some(form.owner_email),
+            owner_name: None,
+            owner_email: None,
             explicit: Some(form.explicit.is_some()),
             language: Some(form.language),
             website_url: Some(form.website_url),
@@ -578,7 +617,7 @@ fn is_htmx(headers: &HeaderMap) -> bool {
         == Some("true")
 }
 
-fn redirect_response(headers: &HeaderMap, location: &str) -> Response {
+pub(crate) fn redirect_response(headers: &HeaderMap, location: &str) -> Response {
     if is_htmx(headers) {
         let mut response = StatusCode::OK.into_response();
         let value =
@@ -1502,6 +1541,40 @@ mod tests {
                 .status,
             status::PUBLISHED
         );
+    }
+
+    #[tokio::test]
+    async fn show_forms_do_not_render_owner_fields() {
+        let context = ctx().await;
+        let response = send(&context, Method::GET, "/shows", "", Vec::new()).await;
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(!html.contains("name=\"owner_name\""));
+        assert!(!html.contains("name=\"owner_email\""));
+    }
+
+    #[tokio::test]
+    async fn show_cards_use_real_cover_images() {
+        let context = ctx().await;
+        let show = complete_show(&context, "Show bìa").await;
+        let response = send(&context, Method::GET, "/shows", "", Vec::new()).await;
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains(&format!(
+            "<img class=\"cover\" src=\"/shows/{}/cover\"",
+            show.id
+        )));
+        assert!(!html.contains("aria-label=\"Bìa Show bìa\""));
     }
 
     #[tokio::test]

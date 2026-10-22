@@ -6,10 +6,10 @@
 <div class="grid two">
   <form method="post" action="/settings" class="card stack">
     <input type="hidden" name="_csrf" value="{{ csrf }}">
-    <h2>Chủ sở hữu mặc định</h2>
+    <h2>Chủ sở hữu</h2>
     <label>Tên chủ sở hữu<input name="owner_name" value="{{ settings.owner_name }}"></label>
     <label>Email chủ sở hữu<input type="email" name="owner_email" value="{{ settings.owner_email }}"></label>
-    <p class="muted">Show mới lấy hai giá trị này; có thể sửa riêng trong tab Thông tin show.</p>
+    <p class="muted">Áp dụng cho mọi show và feed. Không cần nhập lại cho từng show.</p>
 
     <h2>Mặc định phát hành</h2>
     <label class="row"><input type="checkbox" name="auto_publish_default" value="on" {% if settings.auto_publish_default %}checked{% endif %} style="width:auto"> Tự phát hành khi feed bật</label>
@@ -22,7 +22,7 @@
     <h2>Dọn dẹp</h2>
     <label>Giữ audio cũ (ngày)<input type="number" name="retention_old_audio_days" min="1" max="365" value="{{ settings.retention_old_audio_days }}"></label>
     <label>Giữ file tạm (giờ)<input type="number" name="retention_tmp_hours" min="1" max="720" value="{{ settings.retention_tmp_hours }}"></label>
-    <button type="submit">Lưu cài đặt</button>
+    <button class="btn" type="submit">Lưu cài đặt</button>
   </form>
 
   <aside class="stack">
@@ -39,6 +39,10 @@
       <div class="row between"><span>Tổng dữ liệu</span><strong>{{ storage.total_human }}</strong></div>
       <div class="row between"><span>Audio</span><span>{{ storage.audio_human }}</span></div>
       <div class="row between"><span>File tạm</span><span>{{ storage.tmp_human }}</span></div>
+      <div class="progress" role="progressbar" aria-label="Dung lượng audio" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ storage.audio_percent }}">
+        <div class="progress-bar ok" style="width:{{ storage.audio_percent }}%"></div>
+      </div>
+      <p class="muted">Audio chiếm {{ storage.audio_percent }}% dung lượng dữ liệu.</p>
     </section>
   </aside>
 </div>

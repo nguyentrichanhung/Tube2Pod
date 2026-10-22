@@ -84,6 +84,10 @@ impl LibraryTemplate {
     pub fn status_selected(&self, status: &str) -> bool {
         self.selected_status == status
     }
+
+    pub fn status_label(&self, status: &str) -> &'static str {
+        crate::models::status_label_for(status)
+    }
 }
 
 #[derive(Template)]
@@ -150,6 +154,98 @@ fn build_rows(episodes: Vec<Episode>, shows: &[Show]) -> Vec<LibraryRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use axum::body::{to_bytes, Body};
+    use axum::http::{header, Method, Request, StatusCode};
+    use std::sync::Arc;
+    use tokio::sync::Notify;
+    use tower::ServiceExt;
+
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    struct Ctx {
+        state: AppState,
+        _dir: tempfile::TempDir,
+    }
+
+    async fn ctx() -> Ctx {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let cfg = Config::from_lookup(move |key| match key {
+            "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
+            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
+            "DATA_DIR" => Some(path.display().to_string()),
+            _ => None,
+        })
+        .unwrap();
+        Ctx {
+            state: AppState {
+                pool: crate::db::test_pool().await,
+                cfg: Arc::new(cfg),
+                notify: Arc::new(Notify::new()),
+            },
+            _dir: dir,
+        }
+    }
+
+    async fn send(context: &Ctx, method: Method, path: &str) -> axum::response::Response {
+        crate::web::admin_router(context.state.clone())
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(header::ACCEPT, "text/html")
+                    .header(header::COOKIE, format!("t2p_csrf={TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn body_string(response: axum::response::Response) -> String {
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn library_rows_use_labels_and_relative_time() {
+        let context = ctx().await;
+        let show = crate::db::shows::create(
+            &context.state.pool,
+            crate::db::shows::NewShow {
+                title: "Show".into(),
+                ..crate::db::shows::NewShow::default()
+            },
+        )
+        .await
+        .unwrap();
+        let episode = crate::db::episodes::create(
+            &context.state.pool,
+            crate::db::episodes::NewEpisode {
+                show_id: show.id,
+                video_id: "video".into(),
+                source_url: "https://www.youtube.com/watch?v=video".into(),
+                source_title: "Tập mẫu".into(),
+                source_channel: "Kênh".into(),
+                source_duration_s: None,
+                source_thumbnail_url: None,
+                source_upload_date: None,
+                language: "vi".into(),
+                target_minutes: 10,
+            },
+        )
+        .await
+        .unwrap();
+        let response = send(&context, Method::GET, "/library").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_string(response).await;
+        assert!(html.contains("Đang chờ"));
+        assert!(html.contains("vừa xong"));
+        assert!(html.contains("aria-label=\"Tiến trình Tập mẫu\""));
+        assert!(!html.contains("<td>queued</td>"));
+        assert!(!html.contains(&format!("<td>{}</td>", episode.created_at)));
+    }
 
     fn parse_query(raw: &str) -> LibraryQuery {
         let uri: axum::http::Uri = raw.parse().unwrap();

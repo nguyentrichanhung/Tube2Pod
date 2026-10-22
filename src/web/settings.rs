@@ -1,4 +1,5 @@
 use crate::db::settings;
+use crate::db::shows;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
@@ -37,6 +38,7 @@ pub struct StorageUsage {
     pub total_human: String,
     pub audio_human: String,
     pub tmp_human: String,
+    pub audio_percent: u8,
 }
 
 #[derive(Template)]
@@ -113,34 +115,34 @@ pub async fn save(
     let min_source_seconds = values.min_source_seconds.to_string();
     let retention_old_audio_days = values.retention_old_audio_days.to_string();
     let retention_tmp_hours = values.retention_tmp_hours.to_string();
-    settings::set_many(
-        &state.pool,
-        &[
-            (OWNER_NAME, values.owner_name.as_str()),
-            (OWNER_EMAIL, values.owner_email.as_str()),
-            (
-                AUTO_PUBLISH,
-                if values.auto_publish_default {
-                    "true"
-                } else {
-                    "false"
-                },
-            ),
-            (
-                DEFAULT_EXPLICIT,
-                if values.default_explicit {
-                    "true"
-                } else {
-                    "false"
-                },
-            ),
-            (MAX_SOURCE_MINUTES, max_source_minutes.as_str()),
-            (MIN_SOURCE_SECONDS, min_source_seconds.as_str()),
-            (RETENTION_OLD_AUDIO_DAYS, retention_old_audio_days.as_str()),
-            (RETENTION_TMP_HOURS, retention_tmp_hours.as_str()),
-        ],
-    )
-    .await?;
+    let pairs = [
+        (OWNER_NAME, values.owner_name.as_str()),
+        (OWNER_EMAIL, values.owner_email.as_str()),
+        (
+            AUTO_PUBLISH,
+            if values.auto_publish_default {
+                "true"
+            } else {
+                "false"
+            },
+        ),
+        (
+            DEFAULT_EXPLICIT,
+            if values.default_explicit {
+                "true"
+            } else {
+                "false"
+            },
+        ),
+        (MAX_SOURCE_MINUTES, max_source_minutes.as_str()),
+        (MIN_SOURCE_SECONDS, min_source_seconds.as_str()),
+        (RETENTION_OLD_AUDIO_DAYS, retention_old_audio_days.as_str()),
+        (RETENTION_TMP_HOURS, retention_tmp_hours.as_str()),
+    ];
+    let mut tx = state.pool.begin().await?;
+    settings::set_many_in_tx(&mut tx, &pairs).await?;
+    shows::sync_owner_in_tx(&mut tx, &values.owner_name, &values.owner_email).await?;
+    tx.commit().await?;
     Ok(Redirect::to("/settings"))
 }
 
@@ -203,10 +205,16 @@ async fn storage_usage(data_dir: &Path) -> StorageUsage {
     let total = dir_size(data_dir).await;
     let audio = dir_size(&data_dir.join("audio")).await;
     let tmp = dir_size(&data_dir.join("tmp")).await;
+    let audio_percent = audio
+        .saturating_mul(100)
+        .checked_div(total)
+        .unwrap_or(0)
+        .min(100) as u8;
     StorageUsage {
         total_human: format_bytes(total),
         audio_human: format_bytes(audio),
         tmp_human: format_bytes(tmp),
+        audio_percent,
     }
 }
 
@@ -428,6 +436,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn settings_page_explains_global_owner() {
+        let context = ctx().await;
+        let response = send(&context, "GET", "/settings", "", Vec::new(), &[]).await;
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains("Áp dụng cho mọi show và feed"));
+    }
+
+    #[tokio::test]
     async fn saves_valid_settings_and_redirects() {
         let context = ctx().await;
         let response = send(
@@ -510,6 +532,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn saving_settings_syncs_owner_to_every_show() {
+        let context = ctx().await;
+        for title in ["Alpha", "Beta"] {
+            crate::db::shows::create(
+                &context.state.pool,
+                crate::db::shows::NewShow {
+                    title: title.into(),
+                    owner_name: "Old".into(),
+                    owner_email: "old@example.com".into(),
+                    ..crate::db::shows::NewShow::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let response = send(
+            &context,
+            "POST",
+            "/settings",
+            "application/x-www-form-urlencoded",
+            form(&valid_pairs()).into_bytes(),
+            &[],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let shows = crate::db::shows::list(&context.state.pool).await.unwrap();
+        assert_eq!(shows.len(), 2);
+        for show in shows {
+            assert_eq!(show.owner_name, "Chủ Podcast");
+            assert_eq!(show.owner_email, "owner@example.com");
+        }
+    }
+
+    #[tokio::test]
     async fn storage_usage_walks_nested_directories() {
         let dir = tempfile::tempdir().unwrap();
         tokio::fs::create_dir_all(dir.path().join("audio/nested"))
@@ -534,5 +592,6 @@ mod tests {
         assert_eq!(usage.audio_human, "1.5 KB");
         assert_eq!(usage.tmp_human, "256 B");
         assert_eq!(usage.total_human, "1.8 KB");
+        assert_eq!(usage.audio_percent, 85);
     }
 }

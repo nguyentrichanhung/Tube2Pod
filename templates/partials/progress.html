@@ -1,0 +1,17 @@
+<div class="stack">
+  <div class="row between">
+    <strong>{{ episode.stage_label() }}</strong>
+    <span>{{ episode.progress_percent() }}%</span>
+  </div>
+  <div class="progress" role="progressbar"
+       aria-label="Tiến trình {{ episode.source_title }}"
+       aria-valuemin="0" aria-valuemax="100"
+       aria-valuenow="{{ episode.progress_percent() }}">
+    <div class="progress-bar{% if episode.status == "failed" || episode.status == "cancelled" %} err{% else if episode.status == "published" || episode.status == "ready" %} ok{% endif %}"
+         style="width:{{ episode.progress_percent() }}%"></div>
+  </div>
+  <div class="progress-meta">
+    <span>{% if episode.progress_detail().is_some() %}{{ episode.progress_detail().unwrap() }}{% else %}{{ episode.status_label() }}{% endif %}</span>
+    <span>{{ episode.progress_percent() }}%</span>
+  </div>
+</div>

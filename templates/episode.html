@@ -10,15 +10,16 @@
     {% if episode.status == "published" %}<span class="pill ok">Đã đăng</span>
     {% else if episode.status == "ready" %}<span class="pill">Sẵn sàng</span>
     {% else if episode.status == "failed" %}<span class="pill err">Lỗi</span>
-    {% else %}<span class="pill">{{ episode.stage }}</span>{% endif %}
+    {% else if episode.is_active() %}<span class="pill">{{ episode.stage_label() }}</span>
+    {% else %}<span class="pill">{{ episode.status_label() }}</span>{% endif %}
   </div>
 </div>
 
 {% if duplicate %}
 <div class="notice" role="status">Tập này đã có trong thư viện; không tạo thêm bản sao.</div>
 {% endif %}
-{% if episode.error_code.is_some() %}
-<div class="notice error" role="alert">{{ episode.error_code.as_deref().unwrap_or_default() }}: {{ episode.error_message.as_deref().unwrap_or_default() }}</div>
+{% if episode.error_label().is_some() %}
+<div class="notice error" role="alert">{{ episode.error_label().unwrap() }}</div>
 {% endif %}
 {% if episode.language != show.language %}
 <div class="notice">Tập này đọc tiếng {{ episode.language }}; feed đang khai báo tiếng {{ show.language }}.</div>
@@ -75,14 +76,7 @@
   </section>
 
   <aside class="stack">
-    <div class="card">
-      <h2>Tiến trình</h2>
-      <div class="stack" aria-live="polite">
-        <div><strong>{{ episode.stage }}</strong></div>
-        <div class="muted">{{ episode.status }}</div>
-        <pre style="white-space:pre-wrap">{{ episode.progress_json.as_deref().unwrap_or("") }}</pre>
-      </div>
-    </div>
+    {% include "partials/episode_progress.html" %}
     <div class="card">
       <h2>Transcript</h2>
       {% if transcript.is_empty() %}

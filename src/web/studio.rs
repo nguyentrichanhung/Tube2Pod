@@ -1,6 +1,7 @@
 use crate::db::{episodes, shows};
 use crate::error::{AppError, AppResult};
 use crate::models::Episode;
+use crate::services::omnivoice::OmnivoiceClient;
 use crate::services::ytdlp;
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
@@ -21,11 +22,13 @@ pub struct StudioTemplate {
     shows: Vec<crate::models::Show>,
     recent: Vec<Episode>,
     selected_show: Option<i64>,
+    selected_minutes: i64,
 }
 
 #[derive(Template)]
 #[template(path = "partials/queue.html")]
 pub struct QueueTemplate {
+    csrf: String,
     episodes: Vec<Episode>,
 }
 
@@ -36,9 +39,12 @@ pub struct PreviewTemplate {
     channel: String,
     duration: String,
     language: String,
+    language_label: String,
     has_captions: bool,
     thumbnail: String,
     has_thumbnail: bool,
+    voice_name: Option<String>,
+    voice_missing: bool,
 }
 
 #[derive(Template)]
@@ -54,6 +60,8 @@ struct PreviewData {
     language: Option<&'static str>,
     has_captions: bool,
     thumbnail: Option<String>,
+    voice_name: Option<String>,
+    voice_missing: bool,
 }
 
 impl From<&PreviewData> for PreviewTemplate {
@@ -63,9 +71,12 @@ impl From<&PreviewData> for PreviewTemplate {
             channel: data.channel.clone().unwrap_or_default(),
             duration: duration_label(data.duration_s),
             language: data.language.unwrap_or("không xác định").to_string(),
+            language_label: language_label(data.language),
             has_captions: data.has_captions,
             thumbnail: data.thumbnail.clone().unwrap_or_default(),
             has_thumbnail: data.thumbnail.is_some(),
+            voice_name: data.voice_name.clone(),
+            voice_missing: data.voice_missing,
         }
     }
 }
@@ -87,6 +98,7 @@ pub struct CreateForm {
 pub struct PreviewForm {
     pub _csrf: String,
     pub url: String,
+    pub show_id: Option<i64>,
 }
 
 pub async fn index(
@@ -103,12 +115,18 @@ pub async fn index(
         },
     )
     .await?;
+    let selected_show = query.show.or_else(|| shows.first().map(|show| show.id));
+    let selected_minutes = selected_show
+        .and_then(|id| shows.iter().find(|show| show.id == id))
+        .map(|show| show.default_minutes)
+        .unwrap_or(10);
     Ok(Html(
         StudioTemplate {
             csrf: token.0,
             shows,
             recent,
-            selected_show: query.show,
+            selected_show,
+            selected_minutes,
         }
         .render()?,
     ))
@@ -182,6 +200,8 @@ pub async fn preview(
                     "language": data.language,
                     "has_captions": data.has_captions,
                     "thumbnail": data.thumbnail,
+                    "voice_name": data.voice_name,
+                    "voice_missing": data.voice_missing,
                 }))
                 .into_response())
             }
@@ -190,7 +210,7 @@ pub async fn preview(
             if htmx {
                 Ok(Html(
                     PreviewErrorTemplate {
-                        message: error.to_string(),
+                        message: preview_error_message(&error),
                     }
                     .render()?,
                 )
@@ -217,6 +237,28 @@ async fn load_preview(
     let has_captions = language
         .and_then(|lang| ytdlp::choose_caption(&meta, lang))
         .is_some();
+    let (voice_name, voice_missing) = match (form.show_id, language) {
+        (Some(show_id), Some(language)) => {
+            match shows::get_voice(&state.pool, show_id, language).await? {
+                Some((voice_id, name)) => {
+                    let ready = OmnivoiceClient::new(&state.cfg.omnivoice)
+                        .list_voices()
+                        .await
+                        .map(|voices| {
+                            voices.iter().any(|voice| {
+                                voice.id == voice_id
+                                    && voice.status == "ready"
+                                    && voice.language.as_deref() == Some(language)
+                            })
+                        })
+                        .unwrap_or(false);
+                    (Some(name), !ready)
+                }
+                None => (None, true),
+            }
+        }
+        _ => (None, false),
+    };
     Ok(PreviewData {
         title: meta.title,
         channel: meta.channel,
@@ -224,6 +266,8 @@ async fn load_preview(
         language,
         has_captions,
         thumbnail: meta.thumbnail,
+        voice_name,
+        voice_missing,
     })
 }
 
@@ -241,7 +285,26 @@ fn duration_label(seconds: Option<i64>) -> String {
     }
 }
 
-pub async fn queue(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
+fn language_label(language: Option<&str>) -> String {
+    match language {
+        Some("vi") => "Tiếng Việt".into(),
+        Some("en") => "English".into(),
+        Some("ko") => "한국어".into(),
+        _ => "ngôn ngữ này".into(),
+    }
+}
+
+fn preview_error_message(error: &AppError) -> String {
+    match error {
+        AppError::BadRequest(message) | AppError::Conflict(message) => message.clone(),
+        _ => "Không xem trước được video. Vui lòng thử lại sau.".into(),
+    }
+}
+
+pub async fn queue(
+    State(state): State<AppState>,
+    Extension(token): Extension<CsrfToken>,
+) -> AppResult<impl IntoResponse> {
     let running = episodes::list(
         &state.pool,
         &episodes::EpisodeFilter {
@@ -285,7 +348,13 @@ pub async fn queue(State(state): State<AppState>) -> AppResult<impl IntoResponse
             episodes.push(episode);
         }
     }
-    Ok(Html(QueueTemplate { episodes }.render()?))
+    Ok(Html(
+        QueueTemplate {
+            csrf: token.0,
+            episodes,
+        }
+        .render()?,
+    ))
 }
 
 fn validate_minutes(minutes: i64) -> AppResult<()> {
@@ -531,6 +600,106 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response_body(response).await.contains("Queued video"));
+    }
+
+    #[tokio::test]
+    async fn index_selects_the_requested_show_and_its_default_minutes() {
+        let state = test_state().await;
+        for (title, minutes) in [("Alpha", 10), ("Beta", 15)] {
+            shows::create(
+                &state.pool,
+                NewShow {
+                    title: title.into(),
+                    default_minutes: minutes,
+                    ..NewShow::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let beta = shows::list(&state.pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|show| show.title == "Beta")
+            .unwrap();
+
+        let html = response_body(get(&state, &format!("/?show={}", beta.id)).await).await;
+
+        assert!(html.contains(&format!(
+            "value=\"{}\" data-default-minutes=\"15\" selected",
+            beta.id
+        )));
+        assert!(html.contains("value=\"15\" checked"));
+    }
+
+    #[tokio::test]
+    async fn queue_renders_progress_bars_and_vietnamese_labels() {
+        let state = test_state().await;
+        let show_id = create_show(&state).await;
+        let episode = episodes::create(
+            &state.pool,
+            new_episode(show_id, VIDEO_ID, "Progress video"),
+        )
+        .await
+        .unwrap();
+        crate::db::episodes::set_stage(
+            &state.pool,
+            &episode.uuid,
+            crate::models::stage::SYNTHESIZING,
+        )
+        .await
+        .unwrap();
+        crate::db::episodes::set_chunk_progress(&state.pool, &episode.uuid, "[1,2]", 2, 4)
+            .await
+            .unwrap();
+        let response = get(&state, "/api/queue").await;
+        let html = response_body(response).await;
+        assert!(html.contains("role=\"progressbar\""));
+        assert!(html.contains("Đang tạo audio"));
+        assert!(html.contains("67%"));
+    }
+
+    #[tokio::test]
+    async fn queue_retries_failed_episodes_with_a_post_form() {
+        let state = test_state().await;
+        let show_id = create_show(&state).await;
+        let episode = episodes::create(&state.pool, new_episode(show_id, VIDEO_ID, "Failed video"))
+            .await
+            .unwrap();
+        episodes::record_failure(&state.pool, &episode.uuid, "tts", "boom", None)
+            .await
+            .unwrap();
+
+        let html = response_body(get(&state, "/api/queue").await).await;
+
+        assert!(html.contains(&format!("action=\"/episodes/{}/retry\"", episode.uuid)));
+        assert!(html.contains("method=\"post\""));
+        assert!(html.contains(&format!("name=\"_csrf\" value=\"{TOKEN}\"")));
+        assert!(!html.contains(&format!("href=\"/episodes/{}/retry\"", episode.uuid)));
+    }
+
+    #[test]
+    fn preview_errors_hide_internal_details() {
+        assert_eq!(
+            preview_error_message(&AppError::BadRequest("Lỗi công khai.".into())),
+            "Lỗi công khai."
+        );
+        assert_eq!(
+            preview_error_message(&AppError::Conflict("Xung đột công khai.".into())),
+            "Xung đột công khai."
+        );
+        for error in [
+            AppError::Upstream("secret upstream".into()),
+            AppError::Internal(anyhow::anyhow!("secret internal")),
+            AppError::NotFound,
+            AppError::Forbidden,
+        ] {
+            assert_eq!(
+                preview_error_message(&error),
+                "Không xem trước được video. Vui lòng thử lại sau."
+            );
+        }
     }
 
     #[tokio::test]

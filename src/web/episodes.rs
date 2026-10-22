@@ -26,6 +26,14 @@ pub struct EpisodeTemplate {
     audio_url: Option<String>,
     transcript: String,
     duplicate: bool,
+    progress_active: bool,
+}
+
+#[derive(Template)]
+#[template(path = "partials/episode_progress.html")]
+pub struct ProgressTemplate {
+    pub episode: Episode,
+    pub progress_active: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -69,6 +77,7 @@ pub async fn detail(
         )
     });
     let transcript = read_transcript(&episode).await;
+    let progress_active = episode.is_active();
     Ok(Html(
         EpisodeTemplate {
             csrf: token.0,
@@ -78,6 +87,24 @@ pub async fn detail(
             audio_url,
             transcript,
             duplicate: query.duplicate.as_deref() == Some("1"),
+            progress_active,
+        }
+        .render()?,
+    ))
+}
+
+pub async fn progress(
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+) -> AppResult<Html<String>> {
+    let episode = episodes::get(&state.pool, &uuid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let progress_active = episode.is_active();
+    Ok(Html(
+        ProgressTemplate {
+            episode,
+            progress_active,
         }
         .render()?,
     ))
@@ -1223,6 +1250,51 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn progress_partial_uses_labels_and_stops_for_terminal_episode() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Vi").await;
+        crate::db::episodes::set_stage(
+            &context.state.pool,
+            &episode.uuid,
+            crate::models::stage::SYNTHESIZING,
+        )
+        .await
+        .unwrap();
+        crate::db::episodes::set_chunk_progress(&context.state.pool, &episode.uuid, "[]", 2, 4)
+            .await
+            .unwrap();
+        let active = send(
+            &context,
+            Method::GET,
+            &format!("/episodes/{}/progress", episode.uuid),
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(active.status(), StatusCode::OK);
+        let html = body(active).await;
+        assert!(html.contains("Đang tạo audio"));
+        assert!(html.contains("67%"));
+        assert!(html.contains("hx-trigger=\"every 2s\""));
+        assert!(html.contains("aria-live=\"polite\""));
+
+        crate::db::episodes::finish(&context.state.pool, &episode.uuid, "ready", "ready", false)
+            .await
+            .unwrap();
+        let done = send(
+            &context,
+            Method::GET,
+            &format!("/episodes/{}/progress", episode.uuid),
+            None,
+            &[],
+        )
+        .await;
+        let html = body(done).await;
+        assert!(!html.contains("every 2s"));
     }
 
     #[tokio::test]

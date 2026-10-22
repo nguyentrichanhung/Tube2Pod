@@ -36,8 +36,18 @@ pub async fn set(pool: &SqlitePool, key: &str, value: &str) -> AppResult<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub async fn set_many(pool: &SqlitePool, pairs: &[(&str, &str)]) -> AppResult<()> {
     let mut tx = pool.begin().await?;
+    set_many_in_tx(&mut tx, pairs).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn set_many_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    pairs: &[(&str, &str)],
+) -> AppResult<()> {
     for (key, value) in pairs {
         sqlx::query(
             "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
@@ -46,10 +56,9 @@ pub async fn set_many(pool: &SqlitePool, pairs: &[(&str, &str)]) -> AppResult<()
         .bind(key)
         .bind(value)
         .bind(now_ts())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
-    tx.commit().await?;
     Ok(())
 }
 

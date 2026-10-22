@@ -148,6 +148,20 @@ pub async fn update(pool: &SqlitePool, id: i64, patch: ShowPatch) -> AppResult<S
     Ok(row)
 }
 
+pub async fn sync_owner_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    owner_name: &str,
+    owner_email: &str,
+) -> AppResult<()> {
+    sqlx::query("UPDATE shows SET owner_name = ?1, owner_email = ?2, updated_at = ?3")
+        .bind(owner_name.trim())
+        .bind(owner_email.trim())
+        .bind(now_ts())
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 pub async fn set_cover(
     pool: &SqlitePool,
     id: i64,
@@ -241,13 +255,14 @@ pub async fn get_voice(
     .await?)
 }
 
-pub async fn delete_voice(pool: &SqlitePool, show_id: i64, language: &str) -> AppResult<()> {
-    sqlx::query("DELETE FROM show_voices WHERE show_id = ?1 AND language = ?2")
-        .bind(show_id)
-        .bind(language)
-        .execute(pool)
-        .await?;
-    Ok(())
+pub async fn list_voices(pool: &SqlitePool, show_id: i64) -> AppResult<Vec<(String, i64, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT language, omnivoice_voice_id, voice_name
+         FROM show_voices WHERE show_id = ?1 ORDER BY language",
+    )
+    .bind(show_id)
+    .fetch_all(pool)
+    .await?)
 }
 
 pub async fn delete(pool: &SqlitePool, id: i64) -> AppResult<()> {

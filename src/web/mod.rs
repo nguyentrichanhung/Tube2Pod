@@ -1,10 +1,12 @@
 pub mod csrf;
 pub mod episodes;
+pub mod errors;
 pub mod library;
 pub mod public;
 pub mod settings;
 pub mod shows;
 pub mod studio;
+pub mod voices;
 
 use crate::services::cover;
 use crate::state::AppState;
@@ -47,6 +49,7 @@ pub fn admin_router(state: AppState) -> Router {
                 .delete(episodes::delete),
         )
         .route("/episodes/{uuid}/audio", get(episodes::audio))
+        .route("/episodes/{uuid}/progress", get(episodes::progress))
         .route("/episodes/{uuid}/delete", post(episodes::delete))
         .route("/episodes/{uuid}/retry", post(episodes::retry))
         .route("/episodes/{uuid}/cancel", post(episodes::cancel))
@@ -71,12 +74,17 @@ pub fn admin_router(state: AppState) -> Router {
                 .post(shows::upload_cover)
                 .layer(DefaultBodyLimit::max(cover::MAX_UPLOAD_BYTES + 1024 * 1024)),
         )
+        .route(
+            "/shows/{id}/voices/{language}",
+            get(voices::picker).post(voices::select),
+        )
         .route("/shows/{id}/feed/toggle", post(shows::toggle_feed))
         .route("/shows/{id}/feed/rotate", post(shows::rotate_feed))
         .route("/shows/{id}/publish-ready", post(shows::publish_ready))
         .route("/settings", get(settings::index).post(settings::save))
         .route("/healthz", get(crate::health::healthz))
-        .layer(middleware::from_fn(csrf::csrf_middleware));
+        .layer(middleware::from_fn(csrf::csrf_middleware))
+        .layer(middleware::from_fn(errors::html_errors));
     let assets = Router::new().route("/assets/{*path}", get(asset));
     pages.merge(assets).with_state(state)
 }
@@ -164,6 +172,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn base_shell_exposes_sticky_topbar_and_skip_link() {
+        let response = get("/", None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("skip-link"));
+        assert!(html.contains("class=\"topbar\""));
+    }
+
+    #[tokio::test]
     async fn malformed_cookie_is_regenerated() {
         let response = get("/", Some("t2p_csrf=")).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -186,6 +206,62 @@ mod tests {
         let response = get("/", Some(&cookie)).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response.headers().get(header::SET_COOKIE).is_none());
+    }
+
+    #[tokio::test]
+    async fn browser_form_error_renders_html_not_json() {
+        let response = admin_router(test_state().await)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/episodes")
+                    .header(header::ACCEPT, "text/html")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("_csrf=bad&url=x&show_id=1&minutes=10"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Yêu cầu không hợp lệ"));
+        assert!(!html.contains("\"ok\":false"));
+    }
+
+    #[tokio::test]
+    async fn browser_form_redirect_is_not_rewritten_as_html_error() {
+        let body = format!(
+            "_csrf={VALID}&owner_name=Owner&owner_email=owner@example.com&auto_publish_default=on&max_source_minutes=120&min_source_seconds=30&retention_old_audio_days=7&retention_tmp_hours=24"
+        );
+        let response = admin_router(test_state().await)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/settings")
+                    .header(header::ACCEPT, "text/html")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::COOKIE, format!("t2p_csrf={VALID}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("/settings")
+        );
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(!html.contains("Yêu cầu không hợp lệ"));
     }
 
     #[tokio::test]

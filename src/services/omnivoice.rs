@@ -28,12 +28,14 @@ pub struct SpeechTake {
     pub error: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct VoiceOptions {
     pub min_chars: usize,
     pub max_chars: usize,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct RawVoiceOptions {
     #[serde(default)]
@@ -44,6 +46,7 @@ struct RawVoiceOptions {
     languages: HashMap<String, RawLanguageOptions>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct RawLanguageOptions {
     min_chars: usize,
@@ -51,6 +54,7 @@ struct RawLanguageOptions {
 }
 
 impl RawVoiceOptions {
+    #[allow(dead_code)]
     fn for_language(self, language: &str) -> VoiceOptions {
         if let Some(limits) = self.languages.get(language) {
             return VoiceOptions {
@@ -65,6 +69,7 @@ impl RawVoiceOptions {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct VoiceDesign {
     pub id: i64,
@@ -199,6 +204,7 @@ impl OmnivoiceClient {
             .ok_or_else(|| AppError::Upstream("Omnivoice returned no data".into()))
     }
 
+    #[allow(dead_code)]
     pub async fn voice_options(&self, language: &str) -> AppResult<VoiceOptions> {
         let raw: RawVoiceOptions = self
             .call(Method::GET, "/api/voice-designs/options", None)
@@ -210,6 +216,7 @@ impl OmnivoiceClient {
         self.call(Method::GET, "/api/voices", None).await
     }
 
+    #[allow(dead_code)]
     pub async fn create_design(
         &self,
         language: &str,
@@ -230,11 +237,13 @@ impl OmnivoiceClient {
         .await
     }
 
+    #[allow(dead_code)]
     pub async fn design_status(&self, id: i64) -> AppResult<VoiceDesign> {
         self.call(Method::GET, &format!("/api/voice-designs/{id}"), None)
             .await
     }
 
+    #[allow(dead_code)]
     pub async fn save_design(&self, id: i64, name: &str) -> AppResult<Voice> {
         self.call(
             Method::POST,

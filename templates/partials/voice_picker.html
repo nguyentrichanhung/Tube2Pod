@@ -1,0 +1,17 @@
+<form method="post" action="/shows/{{ show_id }}/voices/{{ language }}" hx-post="/shows/{{ show_id }}/voices/{{ language }}" hx-target="#voice-picker" hx-swap="innerHTML" class="stack">
+  <input type="hidden" name="_csrf" value="{{ csrf }}">
+  <h3>Chọn giọng {{ language_label }}</h3>
+  {% if voices.is_empty() %}
+  <div class="notice">Chưa có giọng {{ language_label }} sẵn sàng trong Omnivoice. Liên hệ admin.</div>
+  {% else %}
+  {% for voice in voices %}
+  <label class="voice-option">
+    <input type="radio" name="voice_id" value="{{ voice.id }}" required>
+    <span>{{ voice.name.as_deref().unwrap_or("Không tên") }}</span>
+    <span class="pill ok">{{ language_label }}</span>
+  </label>
+  {% endfor %}
+  <input type="hidden" name="voice_name" value="">
+  <button type="submit">Lưu giọng</button>
+  {% endif %}
+</form>
