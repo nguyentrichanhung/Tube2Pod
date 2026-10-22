@@ -2,7 +2,7 @@ use crate::db::{episodes, settings, shows};
 use crate::error::{AppError, AppResult};
 use crate::models::{Episode, Show};
 use crate::services::cover;
-use crate::services::omnivoice::OmnivoiceClient;
+use crate::services::omnivoice::{OmnivoiceClient, Voice};
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
 use crate::web::library::LibraryRow;
@@ -58,6 +58,17 @@ pub struct ShowCard {
     pub show: Show,
     pub episode_count: i64,
     pub last_episode: Option<String>,
+    pub has_cover: bool,
+    pub initial: String,
+}
+
+pub fn card_initial(title: &str) -> String {
+    title
+        .trim()
+        .chars()
+        .next()
+        .map(|ch| ch.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".into())
 }
 
 #[derive(Template)]
@@ -67,11 +78,75 @@ pub struct ShowsTemplate {
     cards: Vec<ShowCard>,
 }
 
+impl ShowsTemplate {
+    pub fn language_label(&self, language: &str) -> &'static str {
+        crate::models::language_label(language)
+    }
+}
+
 pub struct VoiceRow {
     pub language: &'static str,
     pub language_label: &'static str,
     pub voice_name: Option<String>,
+    pub voice_id: Option<i64>,
+    pub gender: Option<String>,
+    pub age: Option<String>,
     pub ready: Option<bool>,
+    pub preview_url: Option<String>,
+}
+
+impl VoiceRow {
+    pub fn gender_label(&self) -> &'static str {
+        crate::models::voice_gender_label(self.gender.as_deref())
+    }
+
+    pub fn age_label(&self) -> &'static str {
+        crate::models::voice_age_label(self.age.as_deref())
+    }
+}
+
+pub fn build_voice_rows(
+    selected: &[(String, i64, String)],
+    catalog: Option<&[Voice]>,
+    show_id: i64,
+) -> Vec<VoiceRow> {
+    ["vi", "en", "ko"]
+        .into_iter()
+        .map(|language| {
+            let stored = selected.iter().find(|(lang, _, _)| lang == language);
+            let catalog_voice = stored.and_then(|(_, voice_id, _)| {
+                catalog.and_then(|voices| {
+                    voices
+                        .iter()
+                        .find(|voice| voice.id == *voice_id && voice.is_ready_for(language))
+                })
+            });
+            let ready = stored.and_then(|_| {
+                catalog.map(|_| catalog_voice.is_some_and(|voice| voice.is_ready_for(language)))
+            });
+            VoiceRow {
+                language,
+                language_label: crate::models::language_label(language),
+                voice_name: stored.map(|(_, _, name)| name.clone()),
+                voice_id: stored.map(|(_, id, _)| *id),
+                gender: catalog_voice
+                    .and_then(|voice| voice.design.as_ref())
+                    .and_then(|design| design.gender.clone()),
+                age: catalog_voice
+                    .and_then(|voice| voice.design.as_ref())
+                    .and_then(|design| design.age.clone()),
+                ready,
+                preview_url: catalog_voice
+                    .filter(|voice| voice.is_ready_for(language))
+                    .map(|voice| {
+                        format!(
+                            "/shows/{show_id}/voices/{language}/preview?voice_id={}",
+                            voice.id
+                        )
+                    }),
+            }
+        })
+        .collect()
 }
 
 #[derive(Template)]
@@ -87,6 +162,7 @@ pub struct ShowDetailTemplate {
     feed_url: String,
     cover_url: String,
     voice_rows: Vec<VoiceRow>,
+    has_playable_voice: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,10 +230,17 @@ pub async fn index(
         .bind(show.id)
         .fetch_optional(&state.pool)
         .await?;
+        let has_cover = show
+            .cover_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty());
+        let initial = card_initial(&show.title);
         cards.push(ShowCard {
             show,
             episode_count: count,
             last_episode,
+            has_cover,
+            initial,
         });
     }
     Ok(Html(
@@ -261,28 +344,8 @@ pub async fn detail(
             .await
             .ok()
     };
-    let voice_rows = [("vi", "Tiếng Việt"), ("en", "English"), ("ko", "한국어")]
-        .into_iter()
-        .map(|(language, language_label)| {
-            let stored = selected.iter().find(|(lang, _, _)| lang == language);
-            let voice_name = stored.map(|(_, _, name)| name.clone());
-            let ready = stored.and_then(|(_, voice_id, _)| {
-                catalog.as_ref().map(|voices| {
-                    voices.iter().any(|voice| {
-                        voice.id == *voice_id
-                            && voice.status == "ready"
-                            && voice.language.as_deref() == Some(language)
-                    })
-                })
-            });
-            VoiceRow {
-                language,
-                language_label,
-                voice_name,
-                ready,
-            }
-        })
-        .collect();
+    let voice_rows = build_voice_rows(&selected, catalog.as_deref(), id);
+    let has_playable_voice = voice_rows.iter().any(|row| row.preview_url.is_some());
     Ok(Html(
         ShowDetailTemplate {
             csrf: token.0,
@@ -295,6 +358,7 @@ pub async fn detail(
             feed_url,
             cover_url,
             voice_rows,
+            has_playable_voice,
         }
         .render()?,
     ))
@@ -643,6 +707,7 @@ mod tests {
     use crate::config::Config;
     use crate::db::{episodes, shows};
     use crate::models::{stage, status, Show};
+    use crate::services::omnivoice::{Voice, VoiceDesignInfo};
     use crate::state::AppState;
     use axum::body::{to_bytes, Body};
     use axum::http::{header, Method, Request, StatusCode};
@@ -815,6 +880,66 @@ mod tests {
         assert!(feed_checklist(&missing)
             .iter()
             .any(|item| !item.ok && item.label == "Email chủ sở hữu"));
+    }
+
+    #[test]
+    fn builds_voice_rows_with_metadata_readiness_and_preview() {
+        let selected = vec![("vi".to_string(), 42, "Phượng".to_string())];
+        let catalog = vec![Voice {
+            id: 42,
+            name: Some("Phượng".into()),
+            status: "ready".into(),
+            language: Some("vi".into()),
+            preview_url: Some("/api/voices/42/preview".into()),
+            design: Some(VoiceDesignInfo {
+                gender: Some("female".into()),
+                age: Some("middle_aged".into()),
+                ..Default::default()
+            }),
+        }];
+
+        let rows = build_voice_rows(&selected, Some(&catalog), 7);
+        let vi = rows.iter().find(|row| row.language == "vi").unwrap();
+        assert_eq!(vi.voice_name.as_deref(), Some("Phượng"));
+        assert_eq!(vi.gender_label(), "Nữ");
+        assert_eq!(vi.age_label(), "Trung niên");
+        assert_eq!(vi.ready, Some(true));
+        assert_eq!(
+            vi.preview_url.as_deref(),
+            Some("/shows/7/voices/vi/preview?voice_id=42")
+        );
+
+        let en = rows.iter().find(|row| row.language == "en").unwrap();
+        assert_eq!(en.voice_name, None);
+        assert_eq!(en.ready, None);
+    }
+
+    #[test]
+    fn marks_a_stored_voice_not_ready_without_a_preview() {
+        let selected = vec![("en".to_string(), 43, "Minh".to_string())];
+        let catalog = vec![Voice {
+            id: 43,
+            name: Some("Minh".into()),
+            status: "failed".into(),
+            language: Some("en".into()),
+            ..Default::default()
+        }];
+
+        let rows = build_voice_rows(&selected, Some(&catalog), 7);
+        let en = rows.iter().find(|row| row.language == "en").unwrap();
+        assert_eq!(en.ready, Some(false));
+        assert_eq!(en.preview_url, None);
+    }
+
+    #[test]
+    fn leaves_readiness_unknown_when_the_catalog_is_unavailable() {
+        let selected = vec![("vi".to_string(), 42, "Phượng".to_string())];
+
+        let rows = build_voice_rows(&selected, None, 7);
+        let vi = rows.iter().find(|row| row.language == "vi").unwrap();
+        assert_eq!(vi.voice_name.as_deref(), Some("Phượng"));
+        assert_eq!(vi.ready, None);
+        assert_eq!(vi.preview_url, None);
     }
 
     #[tokio::test]
@@ -1495,6 +1620,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn voices_tab_renders_missing_voice_state() {
+        let context = ctx().await;
+        let show = complete_show(&context, "Show").await;
+        let response = send(
+            &context,
+            Method::GET,
+            &format!("/shows/{}?tab=voices", show.id),
+            "",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains("Chưa chọn giọng"));
+    }
+
+    #[tokio::test]
     async fn publish_ready_publishes_all_ready_episodes_for_the_show() {
         let context = ctx().await;
         let show = complete_show(&context, "Show").await;
@@ -1623,5 +1771,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn show_list_renders_cover_fallback_metadata_and_actions() {
+        let context = ctx().await;
+        let show = shows::create(
+            &context.state.pool,
+            shows::NewShow {
+                title: "Lich Su".into(),
+                category: "Technology".into(),
+                language: "vi".into(),
+                ..shows::NewShow::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = send(&context, Method::GET, "/shows", "", Vec::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains("cover-fallback"));
+        assert!(html.contains(">L<"));
+        assert!(html.contains("Technology"));
+        assert!(html.contains("Tiếng Việt"));
+        assert!(html.contains("Quản lý show"));
+        assert!(html.contains("Tạo tập"));
+        assert!(!html.contains(&format!("src=\"/shows/{}/cover\"", show.id)));
+
+        shows::set_cover(&context.state.pool, show.id, "/tmp/cover.jpg", false, false)
+            .await
+            .unwrap();
+        let response = send(&context, Method::GET, "/shows", "", Vec::new()).await;
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains(&format!("src=\"/shows/{}/cover\"", show.id)));
+    }
+
+    #[test]
+    fn show_card_initial_is_uppercase_first_character() {
+        assert_eq!(card_initial("  lich su"), "L");
+        assert_eq!(card_initial("한국어"), "한");
+        assert_eq!(card_initial("   "), "?");
     }
 }

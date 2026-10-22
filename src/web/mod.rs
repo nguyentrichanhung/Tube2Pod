@@ -78,6 +78,10 @@ pub fn admin_router(state: AppState) -> Router {
             "/shows/{id}/voices/{language}",
             get(voices::picker).post(voices::select),
         )
+        .route(
+            "/shows/{id}/voices/{language}/preview",
+            get(voices::preview),
+        )
         .route("/shows/{id}/feed/toggle", post(shows::toggle_feed))
         .route("/shows/{id}/feed/rotate", post(shows::rotate_feed))
         .route("/shows/{id}/publish-ready", post(shows::publish_ready))
@@ -305,5 +309,20 @@ mod tests {
                 .unwrap(),
             "text/css"
         );
+    }
+
+    #[tokio::test]
+    async fn stylesheet_exposes_paper_ink_tokens_and_voice_classes() {
+        let response = get("/assets/app.css", None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let css = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(css.contains("--ink:#33251d"));
+        assert!(css.contains("--paper:#fbf7ef"));
+        assert!(css.contains(".cover-fallback"));
+        assert!(css.contains(".voice-preview-bar"));
+        assert!(css.contains(".voice-preview-button"));
     }
 }

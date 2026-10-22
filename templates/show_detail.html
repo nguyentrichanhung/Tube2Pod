@@ -74,12 +74,37 @@
   </aside>
 </div>
 {% else if tab == "voices" %}
-<section class="card stack">
+<section class="card stack" data-voice-preview>
   <h2>Giọng đọc theo ngôn ngữ</h2>
+  {% if has_playable_voice %}
+  <div class="voice-preview-bar">
+    <span class="voice-preview-label">Chọn “Nghe thử” để nghe giọng đã chọn.</span>
+    <audio controls preload="none" aria-label="Nghe thử giọng đọc"></audio>
+  </div>
+  {% endif %}
   {% for row in voice_rows %}
   <div class="voice-row">
-    <div><strong>{{ row.language_label }}</strong><div class="muted">{{ row.voice_name.as_deref().unwrap_or("Chưa chọn giọng") }}{% if row.ready == Some(true) %} <span class="badge badge-ok">Sẵn sàng</span>{% else if row.ready == Some(false) %} <span class="badge badge-err">Chưa sẵn sàng</span>{% endif %}</div></div>
-    <button class="btn btn-secondary" hx-get="/shows/{{ show.id }}/voices/{{ row.language }}" hx-target="#voice-picker" hx-swap="innerHTML">Chọn giọng</button>
+    <div>
+      <strong>{{ row.language_label }}</strong>
+      <div class="muted">
+        {{ row.voice_name.as_deref().unwrap_or("Chưa chọn giọng") }}
+        {% if row.ready == Some(true) %}<span class="badge badge-ok">Sẵn sàng</span>{% else if row.ready == Some(false) %}<span class="badge badge-err">Chưa sẵn sàng</span>{% endif %}
+      </div>
+      {% if row.voice_id.is_some() %}
+      <div class="voice-row-meta">{{ row.gender_label() }} · {{ row.age_label() }}</div>
+      {% endif %}
+    </div>
+    <div class="row">
+      {% if row.preview_url.is_some() %}
+      <button type="button" class="voice-preview-button"
+              aria-label="Nghe thử giọng {{ row.voice_name.as_deref().unwrap_or("đọc") }}"
+              data-preview-url="{{ row.preview_url.as_deref().unwrap_or("") }}"
+              data-voice-name="{{ row.voice_name.as_deref().unwrap_or("Giọng đọc") }}">Nghe thử</button>
+      {% endif %}
+      <button class="btn btn-secondary"
+              hx-get="/shows/{{ show.id }}/voices/{{ row.language }}"
+              hx-target="#voice-picker" hx-swap="innerHTML">Chọn giọng</button>
+    </div>
   </div>
   {% endfor %}
   <div id="voice-picker"></div>
@@ -99,6 +124,32 @@
     if (!picker) return;
     picker.innerHTML = '<div class="notice error" role="alert">Không tải được danh sách giọng. Vui lòng thử lại hoặc liên hệ admin.</div>';
   });
+</script>
+<script>
+  if (!window.__tube2podVoicePreview) {
+    window.__tube2podVoicePreview = true;
+    document.addEventListener("click", (event) => {
+      if (!(event.target instanceof Element)) return;
+      const button = event.target.closest(".voice-preview-button");
+      if (!button) return;
+      const scope = button.closest("[data-voice-preview]");
+      if (!scope) return;
+      const audio = scope.querySelector("audio");
+      const label = scope.querySelector(".voice-preview-label");
+      if (!audio) return;
+      audio.src = button.dataset.previewUrl;
+      audio.onplaying = () => {
+        if (label) {
+          label.textContent = "Đang phát: " + (button.dataset.voiceName || "giọng đọc");
+        }
+      };
+      audio.play().catch(() => {
+        if (label) {
+          label.textContent = "Không phát được sample. Vui lòng thử lại.";
+        }
+      });
+    });
+  }
 </script>
 {% else %}
 <div class="grid two">

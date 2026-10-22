@@ -1,15 +1,32 @@
-<form method="post" action="/shows/{{ show_id }}/voices/{{ language }}" hx-post="/shows/{{ show_id }}/voices/{{ language }}" hx-target="#voice-picker" hx-swap="innerHTML" class="stack">
+<form method="post" action="/shows/{{ show_id }}/voices/{{ language }}"
+      hx-post="/shows/{{ show_id }}/voices/{{ language }}"
+      hx-target="#voice-picker" hx-swap="innerHTML"
+      class="stack" data-voice-preview>
   <input type="hidden" name="_csrf" value="{{ csrf }}">
   <h3>Chọn giọng {{ language_label }}</h3>
   {% if voices.is_empty() %}
-  <div class="notice">Chưa có giọng {{ language_label }} sẵn sàng trong Omnivoice. Liên hệ admin.</div>
+  <div class="notice error" role="alert">Chưa có giọng {{ language_label }} sẵn sàng trong Omnivoice. Liên hệ admin.</div>
   {% else %}
+  <div class="voice-preview-bar">
+    <span class="voice-preview-label">Chọn “Nghe” để nghe thử giọng.</span>
+    <audio controls preload="none" aria-label="Nghe thử giọng đọc"></audio>
+  </div>
   {% for voice in voices %}
-  <label class="voice-option">
-    <input type="radio" name="voice_id" value="{{ voice.id }}" required>
-    <span>{{ voice.name.as_deref().unwrap_or("Không tên") }}</span>
-    <span class="pill ok">{{ language_label }}</span>
-  </label>
+  <div class="voice-option{% if selected_voice_id == Some(voice.id.clone()) %} selected{% endif %}">
+    <label class="voice-option-main">
+      <input type="radio" name="voice_id" value="{{ voice.id }}" required
+             {% if selected_voice_id == Some(voice.id.clone()) %}checked{% endif %}>
+      <span>
+        <strong>{{ voice.name.as_deref().unwrap_or("Không tên") }}</strong>
+        <span class="voice-row-meta">{{ voice.gender_label() }} · {{ voice.age_label() }} · {{ language_label }}</span>
+      </span>
+    </label>
+    <span class="badge badge-ok">Sẵn sàng</span>
+    <button type="button" class="voice-preview-button"
+            aria-label="Nghe thử giọng {{ voice.name.as_deref().unwrap_or("đọc") }}"
+            data-preview-url="/shows/{{ show_id }}/voices/{{ language }}/preview?voice_id={{ voice.id }}"
+            data-voice-name="{{ voice.name.as_deref().unwrap_or("Giọng đọc") }}">Nghe</button>
+  </div>
   {% endfor %}
   <input type="hidden" name="voice_name" value="">
   <button type="submit">Lưu giọng</button>

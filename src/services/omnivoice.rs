@@ -10,14 +10,59 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 const MAX_SPEECH_CHARS: usize = 5000;
+const MAX_PREVIEW_BYTES: usize = 10 * 1024 * 1024;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Voice {
     pub id: i64,
     pub name: Option<String>,
     pub status: String,
     #[serde(default)]
     pub language: Option<String>,
+    #[serde(default)]
+    pub preview_url: Option<String>,
+    #[serde(default)]
+    pub design: Option<VoiceDesignInfo>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct VoiceDesignInfo {
+    #[serde(default)]
+    pub gender: Option<String>,
+    #[serde(default)]
+    pub age: Option<String>,
+    #[serde(default)]
+    pub pitch: Option<String>,
+    #[serde(default)]
+    pub style: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct VoicePreview {
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+}
+
+impl Voice {
+    pub fn is_ready_for(&self, language: &str) -> bool {
+        self.status == "ready" && self.language.as_deref() == Some(language)
+    }
+
+    pub fn gender_label(&self) -> &'static str {
+        crate::models::voice_gender_label(
+            self.design
+                .as_ref()
+                .and_then(|design| design.gender.as_deref()),
+        )
+    }
+
+    pub fn age_label(&self) -> &'static str {
+        crate::models::voice_age_label(
+            self.design
+                .as_ref()
+                .and_then(|design| design.age.as_deref()),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -314,6 +359,49 @@ impl OmnivoiceClient {
         }
     }
 
+    pub async fn preview_voice(&self, id: i64) -> AppResult<VoicePreview> {
+        let path = format!("/api/voices/{id}/preview");
+        let mut retried = false;
+        loop {
+            let response = self
+                .request(Method::GET, &path)
+                .send()
+                .await
+                .map_err(|e| AppError::Upstream(e.to_string()))?;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED
+                && !retried
+                && matches!(self.auth_mode, AuthMode::Password { .. })
+            {
+                self.login().await?;
+                retried = true;
+                continue;
+            }
+            if !response.status().is_success() {
+                return Err(AppError::Upstream(format!(
+                    "Omnivoice preview HTTP {}",
+                    response.status()
+                )));
+            }
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("audio/mpeg")
+                .to_string();
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| AppError::Upstream(e.to_string()))?;
+            if bytes.len() > MAX_PREVIEW_BYTES {
+                return Err(AppError::Upstream("Omnivoice preview is too large".into()));
+            }
+            return Ok(VoicePreview {
+                content_type,
+                bytes: bytes.to_vec(),
+            });
+        }
+    }
+
     pub async fn delete_speech(&self, id: i64) -> AppResult<()> {
         self.send::<Value>(Method::DELETE, &format!("/api/speech/{id}"), None)
             .await
@@ -541,6 +629,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetches_voice_preview_audio() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/voices/7/preview"))
+            .and(header("tailscale-user-login", "owner@example.com"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "audio/mpeg")
+                    .set_body_bytes(b"ID3fake".to_vec()),
+            )
+            .mount(&server)
+            .await;
+
+        let client = OmnivoiceClient::new(&cfg(&server.uri()));
+        let preview = client.preview_voice(7).await.unwrap();
+        assert_eq!(preview.content_type, "audio/mpeg");
+        assert_eq!(preview.bytes, b"ID3fake");
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_voice_previews() {
+        let server = MockServer::start().await;
+        let body = vec![0u8; MAX_PREVIEW_BYTES + 1];
+        Mock::given(method("GET"))
+            .and(path("/api/voices/7/preview"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+            .mount(&server)
+            .await;
+
+        let client = OmnivoiceClient::new(&cfg(&server.uri()));
+        let error = client.preview_voice(7).await.unwrap_err();
+        assert!(matches!(error, AppError::Upstream(_)));
+    }
+
+    #[tokio::test]
     async fn drives_voice_design_lifecycle() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -633,5 +756,48 @@ mod tests {
         let text = "a".repeat(MAX_SPEECH_CHARS + 1);
         let error = client.create_speech(&text, 7).await.unwrap_err();
         assert!(matches!(error, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn voice_readiness_requires_ready_status_and_matching_language() {
+        let mut voice = Voice {
+            status: "ready".into(),
+            language: Some("vi".into()),
+            ..Default::default()
+        };
+        assert!(voice.is_ready_for("vi"));
+        assert!(!voice.is_ready_for("en"));
+        voice.status = "failed".into();
+        assert!(!voice.is_ready_for("vi"));
+    }
+
+    #[test]
+    fn deserializes_voice_design_metadata() {
+        let voice: Voice = serde_json::from_str(
+            r#"{
+                "id": 7,
+                "name": "Phượng",
+                "status": "ready",
+                "language": "vi",
+                "preview_url": "/api/voices/7/preview",
+                "design": {
+                    "gender": "female",
+                    "age": "middle_aged",
+                    "pitch": "low",
+                    "style": "warm",
+                    "seed": 1,
+                    "params": {}
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(voice.preview_url.as_deref(), Some("/api/voices/7/preview"));
+        let design = voice.design.unwrap();
+        assert_eq!(design.gender.as_deref(), Some("female"));
+        assert_eq!(design.age.as_deref(), Some("middle_aged"));
+        assert_eq!(
+            crate::models::voice_age_label(design.age.as_deref()),
+            "Trung niên"
+        );
     }
 }

@@ -1,11 +1,13 @@
 use crate::db::shows;
 use crate::error::{AppError, AppResult};
+use crate::models::language_label;
 use crate::services::omnivoice::{OmnivoiceClient, Voice};
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
 use askama::Template;
-use axum::extract::{Path, State};
-use axum::http::HeaderMap;
+use axum::body::Body;
+use axum::extract::{Path, Query, State};
+use axum::http::{header, HeaderMap, HeaderValue};
 use axum::response::{Html, Response};
 use axum::Extension;
 use axum::Form;
@@ -18,7 +20,13 @@ pub struct VoicePickerTemplate {
     pub show_id: i64,
     pub language: String,
     pub language_label: &'static str,
+    pub selected_voice_id: Option<i64>,
     pub voices: Vec<Voice>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct PreviewQuery {
+    pub voice_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,17 +47,8 @@ pub fn validate_language(language: &str) -> AppResult<()> {
 pub fn filter_ready_voices<'a>(voices: &'a [Voice], language: &str) -> Vec<&'a Voice> {
     voices
         .iter()
-        .filter(|voice| voice.status == "ready" && voice.language.as_deref() == Some(language))
+        .filter(|voice| voice.is_ready_for(language))
         .collect()
-}
-
-fn language_label(language: &str) -> &'static str {
-    match language {
-        "vi" => "Tiếng Việt",
-        "en" => "English",
-        "ko" => "한국어",
-        _ => "Không xác định",
-    }
 }
 
 pub async fn picker(
@@ -70,16 +69,76 @@ pub async fn picker(
         .into_iter()
         .cloned()
         .collect();
+    let selected_voice_id = shows::get_voice(&state.pool, show_id, &language)
+        .await?
+        .map(|(id, _)| id);
     Ok(Html(
         VoicePickerTemplate {
             csrf: token.0,
             show_id,
             language_label: language_label(&language),
+            selected_voice_id,
             language,
             voices,
         }
         .render()?,
     ))
+}
+
+pub async fn preview(
+    State(state): State<AppState>,
+    Path((show_id, language)): Path<(i64, String)>,
+    Query(query): Query<PreviewQuery>,
+) -> AppResult<Response> {
+    validate_language(&language)?;
+    shows::get(&state.pool, show_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let voice_id = match query.voice_id {
+        Some(id) => id,
+        None => shows::get_voice(&state.pool, show_id, &language)
+            .await?
+            .map(|(id, _)| id)
+            .ok_or(AppError::NotFound)?,
+    };
+    let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+    let voices = client
+        .list_voices()
+        .await
+        .map_err(|e| AppError::Upstream(e.to_string()))?;
+    let voice = voices
+        .iter()
+        .find(|voice| voice.id == voice_id && voice.is_ready_for(&language))
+        .ok_or_else(|| AppError::BadRequest("Giọng đọc không còn khả dụng.".into()))?;
+    let preview = client.preview_voice(voice.id).await?;
+    let content_type = if preview
+        .content_type
+        .to_ascii_lowercase()
+        .starts_with("audio/")
+    {
+        HeaderValue::from_str(&preview.content_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("audio/mpeg"))
+    } else {
+        HeaderValue::from_static("audio/mpeg")
+    };
+    let content_length = HeaderValue::from_str(&preview.bytes.len().to_string())
+        .unwrap_or_else(|_| HeaderValue::from_static("0"));
+    let mut response = Response::new(Body::from(preview.bytes));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, content_type);
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=86400"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CONTENT_LENGTH, content_length);
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
 }
 
 pub async fn select(
@@ -101,11 +160,7 @@ pub async fn select(
         .map_err(|e| AppError::Upstream(e.to_string()))?;
     let selected = voices
         .iter()
-        .find(|voice| {
-            voice.id == form.voice_id
-                && voice.status == "ready"
-                && voice.language.as_deref() == Some(language.as_str())
-        })
+        .find(|voice| voice.id == form.voice_id && voice.is_ready_for(&language))
         .ok_or_else(|| AppError::BadRequest("Giọng đọc không còn khả dụng.".into()))?;
     let name = selected.name.clone().unwrap_or(form.voice_name);
     shows::upsert_voice(&state.pool, show_id, &language, selected.id, &name).await?;
@@ -125,7 +180,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Notify;
     use tower::ServiceExt;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{header as wm_header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -229,6 +284,7 @@ mod tests {
             name: Some(format!("Voice {id}")),
             status: status.into(),
             language: language.map(str::to_string),
+            ..Voice::default()
         }
     }
 
@@ -360,6 +416,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let html = body_text(response).await;
         assert!(html.contains("Phượng"));
+        assert!(html.contains("Sẵn sàng"));
         assert!(html.contains(&format!("action=\"/shows/{show_id}/voices/vi\"")));
 
         let unsupported = request(
@@ -371,5 +428,195 @@ mod tests {
         )
         .await;
         assert_eq!(unsupported.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn picker_marks_the_selected_voice_and_exposes_metadata() {
+        let server = MockServer::start().await;
+        mount_voices(
+            &server,
+            serde_json::json!([
+                {
+                    "id": 42,
+                    "name": "Phượng",
+                    "status": "ready",
+                    "language": "vi",
+                    "preview_url": "/api/voices/42/preview",
+                    "design": {"gender": "female", "age": "middle_aged"}
+                }
+            ]),
+        )
+        .await;
+        let context = ctx(&server).await;
+        let show_id = create_show(&context).await;
+        shows::upsert_voice(&context.state.pool, show_id, "vi", 42, "Phượng")
+            .await
+            .unwrap();
+
+        let response = request(
+            &context,
+            Method::GET,
+            &format!("/shows/{show_id}/voices/vi"),
+            None,
+            TOKEN,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_text(response).await;
+        assert!(html.contains("Phượng"));
+        assert!(html.contains("Nữ"));
+        assert!(html.contains("Trung niên"));
+        assert!(html.contains("voice-preview-bar"));
+        assert!(html.contains("data-preview-url=\"/shows/"));
+        assert!(html.contains("checked"));
+        assert!(html.contains("voice-option selected"));
+    }
+
+    async fn mount_preview_with_content_type(server: &MockServer, content_type: &'static str) {
+        Mock::given(method("GET"))
+            .and(path("/api/voices/42/preview"))
+            .and(wm_header("tailscale-user-login", "owner"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", content_type)
+                    .set_body_bytes(b"ID3fake".to_vec()),
+            )
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_preview(server: &MockServer) {
+        mount_preview_with_content_type(server, "audio/mpeg").await;
+    }
+
+    #[tokio::test]
+    async fn preview_proxy_serves_ready_voice_audio() {
+        let server = MockServer::start().await;
+        mount_voices(&server, ready_voices()).await;
+        mount_preview(&server).await;
+        let context = ctx(&server).await;
+        let show_id = create_show(&context).await;
+
+        let response = request(
+            &context,
+            Method::GET,
+            &format!("/shows/{show_id}/voices/vi/preview?voice_id=42"),
+            None,
+            TOKEN,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "audio/mpeg"
+        );
+        assert!(response.headers().get(header::CACHE_CONTROL).is_some());
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(&bytes[..], b"ID3fake");
+    }
+
+    #[tokio::test]
+    async fn preview_proxy_forces_audio_content_type_and_nosniff() {
+        let server = MockServer::start().await;
+        mount_voices(&server, ready_voices()).await;
+        mount_preview_with_content_type(&server, "text/html").await;
+        let context = ctx(&server).await;
+        let show_id = create_show(&context).await;
+
+        let response = request(
+            &context,
+            Method::GET,
+            &format!("/shows/{show_id}/voices/vi/preview?voice_id=42"),
+            None,
+            TOKEN,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "audio/mpeg"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-content-type-options")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "nosniff"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "private, max-age=86400"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "7"
+        );
+    }
+
+    #[tokio::test]
+    async fn preview_proxy_rejects_wrong_language_and_non_ready_voices() {
+        let server = MockServer::start().await;
+        mount_voices(
+            &server,
+            serde_json::json!([
+                {"id": 42, "name": "Phượng", "status": "ready", "language": "en"},
+                {"id": 43, "name": "Minh", "status": "failed", "language": "vi"}
+            ]),
+        )
+        .await;
+        let context = ctx(&server).await;
+        let show_id = create_show(&context).await;
+
+        for voice_id in [42, 43] {
+            let response = request(
+                &context,
+                Method::GET,
+                &format!("/shows/{show_id}/voices/vi/preview?voice_id={voice_id}"),
+                None,
+                TOKEN,
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[tokio::test]
+    async fn preview_proxy_rejects_a_missing_show() {
+        let server = MockServer::start().await;
+        let context = ctx(&server).await;
+        let response = request(
+            &context,
+            Method::GET,
+            "/shows/999/voices/vi/preview?voice_id=42",
+            None,
+            TOKEN,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

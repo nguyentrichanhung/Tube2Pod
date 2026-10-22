@@ -11,16 +11,20 @@
     <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));">
       {% for card in cards %}
       <article class="card stack">
+        {% if card.has_cover %}
         <img class="cover" src="/shows/{{ card.show.id }}/cover" alt="Bìa {{ card.show.title }}">
+        {% else %}
+        <div class="cover-fallback" role="img" aria-label="Chưa có ảnh bìa cho {{ card.show.title }}">{{ card.initial }}</div>
+        {% endif %}
         <div class="row between">
           <h2 style="margin:0"><a href="/shows/{{ card.show.id }}">{{ card.show.title }}</a></h2>
-          {% if card.show.feed_enabled %}<span class="pill ok">Feed bật</span>{% else %}<span class="pill">Feed tắt</span>{% endif %}
+          {% if card.show.feed_enabled %}<span class="badge badge-ok">Feed bật</span>{% else %}<span class="badge">Feed tắt</span>{% endif %}
         </div>
-        <div class="muted">{{ card.episode_count }} tập · {{ card.show.language }}</div>
+        <div class="muted">{{ card.show.category }} · {{ self.language_label(card.show.language.as_str()) }} · {{ card.episode_count }} tập</div>
         {% if card.last_episode.is_some() %}<div class="muted">Mới nhất: {{ card.last_episode.as_deref().unwrap_or_default() }}</div>{% endif %}
         <div class="row">
-          <a class="btn btn-secondary" href="/?show={{ card.show.id }}">Tạo tập</a>
-          <a class="btn btn-secondary" href="/shows/{{ card.show.id }}?tab=feed">Feed</a>
+          <a class="btn" href="/?show={{ card.show.id }}">Tạo tập</a>
+          <a class="btn btn-secondary" href="/shows/{{ card.show.id }}">Quản lý show</a>
         </div>
       </article>
       {% endfor %}
