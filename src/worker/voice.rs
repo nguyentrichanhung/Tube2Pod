@@ -36,11 +36,9 @@ pub async fn resolve_voice(
         .list_voices()
         .await
         .map_err(|e| PipelineError::new("tts_unavailable", e.to_string(), true))?;
-    let ready = voices.iter().any(|voice| {
-        voice.id == voice_id
-            && voice.status == "ready"
-            && voice.language.as_deref() == Some(language)
-    });
+    let ready = voices
+        .iter()
+        .any(|voice| voice.id == voice_id && voice.is_ready_for(language));
     if !ready {
         return Err(PipelineError::new(
             "voice_not_selected",

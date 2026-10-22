@@ -23,6 +23,7 @@
     </label>
     <span class="badge badge-ok">Sẵn sàng</span>
     <button type="button" class="voice-preview-button"
+            aria-label="Nghe thử giọng {{ voice.name.as_deref().unwrap_or("đọc") }}"
             data-preview-url="/shows/{{ show_id }}/voices/{{ language }}/preview?voice_id={{ voice.id }}"
             data-voice-name="{{ voice.name.as_deref().unwrap_or("Giọng đọc") }}">Nghe</button>
   </div>

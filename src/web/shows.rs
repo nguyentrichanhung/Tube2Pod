@@ -110,23 +110,23 @@ pub fn build_voice_rows(
     catalog: Option<&[Voice]>,
     show_id: i64,
 ) -> Vec<VoiceRow> {
-    [("vi", "Tiếng Việt"), ("en", "English"), ("ko", "한국어")]
+    ["vi", "en", "ko"]
         .into_iter()
-        .map(|(language, language_label)| {
+        .map(|language| {
             let stored = selected.iter().find(|(lang, _, _)| lang == language);
             let catalog_voice = stored.and_then(|(_, voice_id, _)| {
                 catalog.and_then(|voices| {
-                    voices.iter().find(|voice| {
-                        voice.id == *voice_id && voice.language.as_deref() == Some(language)
-                    })
+                    voices
+                        .iter()
+                        .find(|voice| voice.id == *voice_id && voice.is_ready_for(language))
                 })
             });
             let ready = stored.and_then(|_| {
-                catalog.map(|_| catalog_voice.is_some_and(|voice| voice.status == "ready"))
+                catalog.map(|_| catalog_voice.is_some_and(|voice| voice.is_ready_for(language)))
             });
             VoiceRow {
                 language,
-                language_label,
+                language_label: crate::models::language_label(language),
                 voice_name: stored.map(|(_, _, name)| name.clone()),
                 voice_id: stored.map(|(_, id, _)| *id),
                 gender: catalog_voice
@@ -137,7 +137,7 @@ pub fn build_voice_rows(
                     .and_then(|design| design.age.clone()),
                 ready,
                 preview_url: catalog_voice
-                    .filter(|voice| voice.status == "ready")
+                    .filter(|voice| voice.is_ready_for(language))
                     .map(|voice| {
                         format!(
                             "/shows/{show_id}/voices/{language}/preview?voice_id={}",
@@ -162,6 +162,7 @@ pub struct ShowDetailTemplate {
     feed_url: String,
     cover_url: String,
     voice_rows: Vec<VoiceRow>,
+    has_playable_voice: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -344,6 +345,7 @@ pub async fn detail(
             .ok()
     };
     let voice_rows = build_voice_rows(&selected, catalog.as_deref(), id);
+    let has_playable_voice = voice_rows.iter().any(|row| row.preview_url.is_some());
     Ok(Html(
         ShowDetailTemplate {
             csrf: token.0,
@@ -356,6 +358,7 @@ pub async fn detail(
             feed_url,
             cover_url,
             voice_rows,
+            has_playable_voice,
         }
         .render()?,
     ))
@@ -909,6 +912,34 @@ mod tests {
         let en = rows.iter().find(|row| row.language == "en").unwrap();
         assert_eq!(en.voice_name, None);
         assert_eq!(en.ready, None);
+    }
+
+    #[test]
+    fn marks_a_stored_voice_not_ready_without_a_preview() {
+        let selected = vec![("en".to_string(), 43, "Minh".to_string())];
+        let catalog = vec![Voice {
+            id: 43,
+            name: Some("Minh".into()),
+            status: "failed".into(),
+            language: Some("en".into()),
+            ..Default::default()
+        }];
+
+        let rows = build_voice_rows(&selected, Some(&catalog), 7);
+        let en = rows.iter().find(|row| row.language == "en").unwrap();
+        assert_eq!(en.ready, Some(false));
+        assert_eq!(en.preview_url, None);
+    }
+
+    #[test]
+    fn leaves_readiness_unknown_when_the_catalog_is_unavailable() {
+        let selected = vec![("vi".to_string(), 42, "Phượng".to_string())];
+
+        let rows = build_voice_rows(&selected, None, 7);
+        let vi = rows.iter().find(|row| row.language == "vi").unwrap();
+        assert_eq!(vi.voice_name.as_deref(), Some("Phượng"));
+        assert_eq!(vi.ready, None);
+        assert_eq!(vi.preview_url, None);
     }
 
     #[tokio::test]

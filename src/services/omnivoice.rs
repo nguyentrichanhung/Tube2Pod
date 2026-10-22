@@ -44,6 +44,10 @@ pub struct VoicePreview {
 }
 
 impl Voice {
+    pub fn is_ready_for(&self, language: &str) -> bool {
+        self.status == "ready" && self.language.as_deref() == Some(language)
+    }
+
     pub fn gender_label(&self) -> &'static str {
         crate::models::voice_gender_label(
             self.design
@@ -752,6 +756,19 @@ mod tests {
         let text = "a".repeat(MAX_SPEECH_CHARS + 1);
         let error = client.create_speech(&text, 7).await.unwrap_err();
         assert!(matches!(error, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn voice_readiness_requires_ready_status_and_matching_language() {
+        let mut voice = Voice {
+            status: "ready".into(),
+            language: Some("vi".into()),
+            ..Default::default()
+        };
+        assert!(voice.is_ready_for("vi"));
+        assert!(!voice.is_ready_for("en"));
+        voice.status = "failed".into();
+        assert!(!voice.is_ready_for("vi"));
     }
 
     #[test]

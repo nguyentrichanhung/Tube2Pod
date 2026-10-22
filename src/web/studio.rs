@@ -245,11 +245,9 @@ async fn load_preview(
                         .list_voices()
                         .await
                         .map(|voices| {
-                            voices.iter().any(|voice| {
-                                voice.id == voice_id
-                                    && voice.status == "ready"
-                                    && voice.language.as_deref() == Some(language)
-                            })
+                            voices
+                                .iter()
+                                .any(|voice| voice.id == voice_id && voice.is_ready_for(language))
                         })
                         .unwrap_or(false);
                     (Some(name), !ready)
