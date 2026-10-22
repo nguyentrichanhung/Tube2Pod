@@ -1,12 +1,16 @@
 use crate::db::episodes::{self, EpisodeFilter};
 use crate::db::shows;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::models::{status, Episode, Show};
+use crate::services::omnivoice::OmnivoiceClient;
 use crate::state::AppState;
-use crate::web::csrf::CsrfToken;
+use crate::web::csrf::{self, CsrfToken};
+use crate::web::shows::purge_episode_files;
 use askama::Template;
+use axum::body::Bytes;
 use axum::extract::{Query, State};
-use axum::response::{Html, IntoResponse};
+use axum::http::HeaderMap;
+use axum::response::{Html, IntoResponse, Redirect};
 use axum::Extension;
 use serde::Deserialize;
 
@@ -159,6 +163,86 @@ pub async fn rows(
         }
         .render()?,
     ))
+}
+
+const BULK_DELETE_MAX: usize = 200;
+
+fn form_values(body: &[u8], key: &str) -> Vec<String> {
+    url::form_urlencoded::parse(body)
+        .filter(|(name, _)| name == key)
+        .map(|(_, value)| value.into_owned())
+        .collect()
+}
+
+fn form_value(body: &[u8], key: &str) -> Option<String> {
+    form_values(body, key).into_iter().next()
+}
+
+pub async fn bulk_delete(
+    State(state): State<AppState>,
+    Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
+    Query(query): Query<LibraryQuery>,
+    body: Bytes,
+) -> AppResult<Redirect> {
+    let provided = form_value(&body, "_csrf").unwrap_or_default();
+    csrf::verify(&token, &headers, &provided)?;
+    let confirm = form_value(&body, "confirm").unwrap_or_default();
+    if !confirm.trim().eq_ignore_ascii_case("XOA") {
+        return Err(AppError::BadRequest("Gõ XOA để xác nhận xoá.".into()));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let uuids: Vec<String> = form_values(&body, "uuid")
+        .into_iter()
+        .filter(|uuid| !uuid.trim().is_empty() && seen.insert(uuid.clone()))
+        .collect();
+    if uuids.is_empty() {
+        return Err(AppError::BadRequest("Chưa chọn tập nào.".into()));
+    }
+    if uuids.len() > BULK_DELETE_MAX {
+        return Err(AppError::BadRequest(
+            "Chỉ xoá được tối đa 200 tập mỗi lần.".into(),
+        ));
+    }
+    let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+    let mut deleted = 0usize;
+    let mut skipped = 0usize;
+    for uuid in uuids {
+        let Some(episode) = episodes::get(&state.pool, &uuid).await? else {
+            skipped += 1;
+            continue;
+        };
+        if !deletable_status(&episode.status) {
+            skipped += 1;
+            continue;
+        }
+        if let Some(take_id) = episode.active_take_id {
+            let _ = client.delete_speech(take_id).await;
+        }
+        purge_episode_files(&state.cfg.data_dir, &episode).await;
+        episodes::delete(&state.pool, &uuid).await?;
+        deleted += 1;
+    }
+    if deleted > 0 {
+        state.notify.notify_one();
+    }
+    Ok(library_redirect(&query, deleted, skipped))
+}
+
+fn library_redirect(query: &LibraryQuery, deleted: usize, skipped: usize) -> Redirect {
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    if let Some(show_id) = query.show_id {
+        serializer.append_pair("show_id", &show_id.to_string());
+    }
+    if let Some(value) = query.status.as_deref().filter(|value| !value.is_empty()) {
+        serializer.append_pair("status", value);
+    }
+    if let Some(value) = query.q.as_deref().filter(|value| !value.is_empty()) {
+        serializer.append_pair("q", value);
+    }
+    serializer.append_pair("deleted", &deleted.to_string());
+    serializer.append_pair("skipped", &skipped.to_string());
+    Redirect::to(&format!("/library?{}", serializer.finish()))
 }
 
 async fn load_rows(
@@ -454,5 +538,148 @@ mod tests {
         let filter = query.filter();
         assert_eq!(filter.status, None);
         assert_eq!(filter.query.as_deref(), Some("rust"));
+    }
+
+    #[tokio::test]
+    async fn bulk_delete_removes_terminal_episodes_and_skips_active() {
+        let context = ctx().await;
+        let show_id = create_show(&context).await;
+        let mut deletable = Vec::new();
+        for (index, value) in [
+            status::PUBLISHED,
+            status::READY,
+            status::FAILED,
+            status::CANCELLED,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let episode = create_episode(
+                &context,
+                show_id,
+                &format!("del{index}"),
+                &format!("Delete {index}"),
+            )
+            .await;
+            set_status(&context, &episode.uuid, value).await;
+            deletable.push(episode.uuid);
+        }
+        let running = create_episode(&context, show_id, "run", "Running").await;
+        set_status(&context, &running.uuid, status::RUNNING).await;
+        let queued = create_episode(&context, show_id, "que", "Queued").await;
+
+        let audio_path = context
+            .state
+            .cfg
+            .data_dir
+            .join("audio")
+            .join(format!("{}-1.mp3", deletable[0]));
+        tokio::fs::create_dir_all(audio_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&audio_path, b"ID3fake").await.unwrap();
+        episodes::set_audio(
+            &context.state.pool,
+            &deletable[0],
+            &audio_path.display().to_string(),
+            7,
+            1,
+            "hash",
+            1,
+        )
+        .await
+        .unwrap();
+
+        let mut body = form(&[("_csrf", TOKEN), ("confirm", "XOA")]);
+        for uuid in deletable.iter().chain([&running.uuid, &queued.uuid]) {
+            body.push('&');
+            body.push_str(&form(&[("uuid", uuid.as_str())]));
+        }
+
+        let response = send_form(&context, "/library/bulk-delete?status=published", body).await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(location.contains("deleted=4"), "{location}");
+        assert!(location.contains("skipped=2"), "{location}");
+        assert!(location.contains("status=published"), "{location}");
+
+        for uuid in &deletable {
+            assert!(episodes::get(&context.state.pool, uuid)
+                .await
+                .unwrap()
+                .is_none());
+        }
+        assert!(episodes::get(&context.state.pool, &running.uuid)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(episodes::get(&context.state.pool, &queued.uuid)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(!audio_path.exists());
+    }
+
+    #[tokio::test]
+    async fn bulk_delete_rejects_bad_csrf_confirm_and_empty_selection() {
+        let context = ctx().await;
+        let show_id = create_show(&context).await;
+        let episode = create_episode(&context, show_id, "one", "One").await;
+        set_status(&context, &episode.uuid, status::PUBLISHED).await;
+
+        let bad_csrf = send_form(
+            &context,
+            "/library/bulk-delete",
+            form(&[
+                ("_csrf", "deadbeef"),
+                ("confirm", "XOA"),
+                ("uuid", &episode.uuid),
+            ]),
+        )
+        .await;
+        assert_eq!(bad_csrf.status(), StatusCode::FORBIDDEN);
+
+        let bad_confirm = send_form(
+            &context,
+            "/library/bulk-delete",
+            form(&[
+                ("_csrf", TOKEN),
+                ("confirm", "sai"),
+                ("uuid", &episode.uuid),
+            ]),
+        )
+        .await;
+        assert_eq!(bad_confirm.status(), StatusCode::BAD_REQUEST);
+
+        let empty = send_form(
+            &context,
+            "/library/bulk-delete",
+            form(&[("_csrf", TOKEN), ("confirm", "XOA")]),
+        )
+        .await;
+        assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
+
+        assert!(episodes::get(&context.state.pool, &episode.uuid)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn bulk_delete_rejects_more_than_two_hundred_uuids() {
+        let context = ctx().await;
+        let mut body = form(&[("_csrf", TOKEN), ("confirm", "XOA")]);
+        for index in 0..201 {
+            body.push('&');
+            body.push_str(&form(&[("uuid", &format!("missing-{index}"))]));
+        }
+        let response = send_form(&context, "/library/bulk-delete", body).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
