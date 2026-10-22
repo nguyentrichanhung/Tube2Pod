@@ -74,12 +74,34 @@
   </aside>
 </div>
 {% else if tab == "voices" %}
-<section class="card stack">
+<section class="card stack" data-voice-preview>
   <h2>Giọng đọc theo ngôn ngữ</h2>
+  <div class="voice-preview-bar">
+    <span class="voice-preview-label">Chọn “Nghe thử” để nghe giọng đã chọn.</span>
+    <audio controls preload="none" aria-label="Nghe thử giọng đọc"></audio>
+  </div>
   {% for row in voice_rows %}
   <div class="voice-row">
-    <div><strong>{{ row.language_label }}</strong><div class="muted">{{ row.voice_name.as_deref().unwrap_or("Chưa chọn giọng") }}{% if row.ready == Some(true) %} <span class="badge badge-ok">Sẵn sàng</span>{% else if row.ready == Some(false) %} <span class="badge badge-err">Chưa sẵn sàng</span>{% endif %}</div></div>
-    <button class="btn btn-secondary" hx-get="/shows/{{ show.id }}/voices/{{ row.language }}" hx-target="#voice-picker" hx-swap="innerHTML">Chọn giọng</button>
+    <div>
+      <strong>{{ row.language_label }}</strong>
+      <div class="muted">
+        {{ row.voice_name.as_deref().unwrap_or("Chưa chọn giọng") }}
+        {% if row.ready == Some(true) %}<span class="badge badge-ok">Sẵn sàng</span>{% else if row.ready == Some(false) %}<span class="badge badge-err">Chưa sẵn sàng</span>{% endif %}
+      </div>
+      {% if row.voice_id.is_some() %}
+      <div class="voice-row-meta">{{ row.gender_label() }} · {{ row.age_label() }}</div>
+      {% endif %}
+    </div>
+    <div class="row">
+      {% if row.preview_url.is_some() %}
+      <button type="button" class="voice-preview-button"
+              data-preview-url="{{ row.preview_url.as_deref().unwrap_or("") }}"
+              data-voice-name="{{ row.voice_name.as_deref().unwrap_or("Giọng đọc") }}">Nghe thử</button>
+      {% endif %}
+      <button class="btn btn-secondary"
+              hx-get="/shows/{{ show.id }}/voices/{{ row.language }}"
+              hx-target="#voice-picker" hx-swap="innerHTML">Chọn giọng</button>
+    </div>
   </div>
   {% endfor %}
   <div id="voice-picker"></div>

@@ -2,7 +2,7 @@ use crate::db::{episodes, settings, shows};
 use crate::error::{AppError, AppResult};
 use crate::models::{Episode, Show};
 use crate::services::cover;
-use crate::services::omnivoice::OmnivoiceClient;
+use crate::services::omnivoice::{OmnivoiceClient, Voice};
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
 use crate::web::library::LibraryRow;
@@ -71,7 +71,66 @@ pub struct VoiceRow {
     pub language: &'static str,
     pub language_label: &'static str,
     pub voice_name: Option<String>,
+    pub voice_id: Option<i64>,
+    pub gender: Option<String>,
+    pub age: Option<String>,
     pub ready: Option<bool>,
+    pub preview_url: Option<String>,
+}
+
+impl VoiceRow {
+    pub fn gender_label(&self) -> &'static str {
+        crate::models::voice_gender_label(self.gender.as_deref())
+    }
+
+    pub fn age_label(&self) -> &'static str {
+        crate::models::voice_age_label(self.age.as_deref())
+    }
+}
+
+pub fn build_voice_rows(
+    selected: &[(String, i64, String)],
+    catalog: Option<&[Voice]>,
+    show_id: i64,
+) -> Vec<VoiceRow> {
+    [("vi", "Tiếng Việt"), ("en", "English"), ("ko", "한국어")]
+        .into_iter()
+        .map(|(language, language_label)| {
+            let stored = selected.iter().find(|(lang, _, _)| lang == language);
+            let catalog_voice = stored.and_then(|(_, voice_id, _)| {
+                catalog.and_then(|voices| {
+                    voices.iter().find(|voice| {
+                        voice.id == *voice_id
+                            && voice.language.as_deref() == Some(language)
+                    })
+                })
+            });
+            let ready = stored.and_then(|_| {
+                catalog.map(|_| catalog_voice.is_some_and(|voice| voice.status == "ready"))
+            });
+            VoiceRow {
+                language,
+                language_label,
+                voice_name: stored.map(|(_, _, name)| name.clone()),
+                voice_id: stored.map(|(_, id, _)| *id),
+                gender: catalog_voice
+                    .and_then(|voice| voice.design.as_ref())
+                    .and_then(|design| design.gender.clone()),
+                age: catalog_voice
+                    .and_then(|voice| voice.design.as_ref())
+                    .and_then(|design| design.age.clone()),
+                ready,
+                preview_url: catalog_voice
+                    .filter(|voice| voice.status == "ready")
+                    .map(|voice| {
+                        format!(
+                            "/shows/{show_id}/voices/{language}/preview?voice_id={}",
+                            voice.id
+                        )
+                    }),
+            }
+        })
+        .collect()
 }
 
 #[derive(Template)]
@@ -261,28 +320,7 @@ pub async fn detail(
             .await
             .ok()
     };
-    let voice_rows = [("vi", "Tiếng Việt"), ("en", "English"), ("ko", "한국어")]
-        .into_iter()
-        .map(|(language, language_label)| {
-            let stored = selected.iter().find(|(lang, _, _)| lang == language);
-            let voice_name = stored.map(|(_, _, name)| name.clone());
-            let ready = stored.and_then(|(_, voice_id, _)| {
-                catalog.as_ref().map(|voices| {
-                    voices.iter().any(|voice| {
-                        voice.id == *voice_id
-                            && voice.status == "ready"
-                            && voice.language.as_deref() == Some(language)
-                    })
-                })
-            });
-            VoiceRow {
-                language,
-                language_label,
-                voice_name,
-                ready,
-            }
-        })
-        .collect();
+    let voice_rows = build_voice_rows(&selected, catalog.as_deref(), id);
     Ok(Html(
         ShowDetailTemplate {
             csrf: token.0,
@@ -643,6 +681,7 @@ mod tests {
     use crate::config::Config;
     use crate::db::{episodes, shows};
     use crate::models::{stage, status, Show};
+    use crate::services::omnivoice::{Voice, VoiceDesignInfo};
     use crate::state::AppState;
     use axum::body::{to_bytes, Body};
     use axum::http::{header, Method, Request, StatusCode};
@@ -815,6 +854,38 @@ mod tests {
         assert!(feed_checklist(&missing)
             .iter()
             .any(|item| !item.ok && item.label == "Email chủ sở hữu"));
+    }
+
+    #[test]
+    fn builds_voice_rows_with_metadata_readiness_and_preview() {
+        let selected = vec![("vi".to_string(), 42, "Phượng".to_string())];
+        let catalog = vec![Voice {
+            id: 42,
+            name: Some("Phượng".into()),
+            status: "ready".into(),
+            language: Some("vi".into()),
+            preview_url: Some("/api/voices/42/preview".into()),
+            design: Some(VoiceDesignInfo {
+                gender: Some("female".into()),
+                age: Some("middle_aged".into()),
+                ..Default::default()
+            }),
+        }];
+
+        let rows = build_voice_rows(&selected, Some(&catalog), 7);
+        let vi = rows.iter().find(|row| row.language == "vi").unwrap();
+        assert_eq!(vi.voice_name.as_deref(), Some("Phượng"));
+        assert_eq!(vi.gender_label(), "Nữ");
+        assert_eq!(vi.age_label(), "Trung niên");
+        assert_eq!(vi.ready, Some(true));
+        assert_eq!(
+            vi.preview_url.as_deref(),
+            Some("/shows/7/voices/vi/preview?voice_id=42")
+        );
+
+        let en = rows.iter().find(|row| row.language == "en").unwrap();
+        assert_eq!(en.voice_name, None);
+        assert_eq!(en.ready, None);
     }
 
     #[tokio::test]
@@ -1492,6 +1563,29 @@ mod tests {
         )
         .unwrap();
         assert!(html.contains(&format!("src=\"/shows/{}/cover\"", show.id)));
+    }
+
+    #[tokio::test]
+    async fn voices_tab_renders_missing_voice_state() {
+        let context = ctx().await;
+        let show = complete_show(&context, "Show").await;
+        let response = send(
+            &context,
+            Method::GET,
+            &format!("/shows/{}?tab=voices", show.id),
+            "",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains("Chưa chọn giọng"));
     }
 
     #[tokio::test]
