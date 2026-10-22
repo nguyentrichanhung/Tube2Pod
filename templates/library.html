@@ -57,6 +57,24 @@
     const submit = document.getElementById("bulk-submit");
     const confirmInput = form.querySelector("input[name='confirm']");
     const boxes = () => Array.from(form.querySelectorAll("input[name='uuid']:not([disabled])"));
+    function setFilter(name, value) {
+      let input = form.querySelector(`input[name='${name}']`);
+      if (!input) {
+        input = document.createElement("input");
+        input.type = "hidden";
+        input.name = name;
+        form.appendChild(input);
+      }
+      input.value = value;
+    }
+    function syncFilters() {
+      const filterForm = document.querySelector("form[action='/library']");
+      if (!filterForm) return;
+      const data = new FormData(filterForm);
+      setFilter("show_id", data.get("show_id") || "");
+      setFilter("status", data.get("status") || "");
+      setFilter("q", data.get("q") || "");
+    }
     function refresh() {
       const checked = boxes().filter((box) => box.checked).length;
       count.textContent = checked;
@@ -71,6 +89,12 @@
       refresh();
     });
     form.addEventListener("input", refresh);
+    const filterForm = document.querySelector("form[action='/library']");
+    if (filterForm) {
+      filterForm.addEventListener("change", syncFilters);
+      filterForm.addEventListener("input", syncFilters);
+    }
+    syncFilters();
     refresh();
   })();
 </script>
