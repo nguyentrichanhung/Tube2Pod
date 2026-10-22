@@ -1,11 +1,22 @@
 {% if rows.is_empty() %}
-<div class="empty">Không có tập phù hợp.</div>
+<div class="empty-state">Không có tập phù hợp.</div>
 {% else %}
+<div class="table-wrap">
 <table>
-  <thead><tr><th>Tập</th><th>Show</th><th>Trạng thái</th><th>Thời lượng</th><th>Tạo lúc</th></tr></thead>
+  <thead><tr>
+    {% if selectable %}<th class="select-col"><input type="checkbox" id="select-all" aria-label="Chọn tất cả tập có thể xoá"></th>{% endif %}
+    <th>Tập</th><th>Show</th><th>Trạng thái</th><th>Thời lượng</th><th>Tạo lúc</th>
+  </tr></thead>
   <tbody>
   {% for row in rows %}
     <tr>
+      {% if selectable %}
+      <td class="select-col">
+        <input type="checkbox" name="uuid" value="{{ row.episode.uuid }}"
+               aria-label="Chọn {{ row.episode.source_title }}"
+               {% if !row.deletable() %}disabled title="Không thể xoá tập đang xử lý"{% endif %}>
+      </td>
+      {% endif %}
       <td><a href="/episodes/{{ row.episode.uuid }}">{{ row.episode.source_title }}</a></td>
       <td>{{ row.show_title }}</td>
       <td>
@@ -21,4 +32,5 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}

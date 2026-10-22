@@ -40,6 +40,10 @@ pub struct LibraryQuery {
     pub status: Option<String>,
     #[serde(default, deserialize_with = "empty_as_none")]
     pub q: Option<String>,
+    #[serde(default, deserialize_with = "empty_as_none")]
+    pub deleted: Option<i64>,
+    #[serde(default, deserialize_with = "empty_as_none")]
+    pub skipped: Option<i64>,
 }
 
 impl LibraryQuery {
@@ -64,9 +68,22 @@ impl LibraryQuery {
     }
 }
 
+pub fn deletable_status(value: &str) -> bool {
+    matches!(
+        value,
+        status::PUBLISHED | status::READY | status::FAILED | status::CANCELLED
+    )
+}
+
 pub struct LibraryRow {
     pub episode: Episode,
     pub show_title: String,
+}
+
+impl LibraryRow {
+    pub fn deletable(&self) -> bool {
+        deletable_status(&self.episode.status)
+    }
 }
 
 #[derive(Template)]
@@ -78,6 +95,8 @@ pub struct LibraryTemplate {
     selected_show: Option<i64>,
     selected_status: String,
     query: String,
+    selectable: bool,
+    bulk_message: Option<String>,
 }
 
 impl LibraryTemplate {
@@ -94,6 +113,7 @@ impl LibraryTemplate {
 #[template(path = "partials/episode_rows.html")]
 pub struct RowsTemplate {
     rows: Vec<LibraryRow>,
+    selectable: bool,
 }
 
 pub async fn index(
@@ -104,6 +124,14 @@ pub async fn index(
     let filter = query.filter();
     let selected_status = filter.status.clone().unwrap_or_default();
     let (rows, shows) = load_rows(&state, &filter).await?;
+    let bulk_message = query.deleted.map(|deleted| {
+        let skipped = query.skipped.unwrap_or(0);
+        if skipped > 0 {
+            format!("Đã xoá {deleted} tập, bỏ qua {skipped} tập.")
+        } else {
+            format!("Đã xoá {deleted} tập.")
+        }
+    });
     Ok(Html(
         LibraryTemplate {
             csrf: token.0,
@@ -112,6 +140,8 @@ pub async fn index(
             selected_show: query.show_id,
             selected_status,
             query: query.q.clone().unwrap_or_default(),
+            selectable: true,
+            bulk_message,
         }
         .render()?,
     ))
@@ -122,7 +152,13 @@ pub async fn rows(
     Query(query): Query<LibraryQuery>,
 ) -> AppResult<impl IntoResponse> {
     let (rows, _) = load_rows(&state, &query.filter()).await?;
-    Ok(Html(RowsTemplate { rows }.render()?))
+    Ok(Html(
+        RowsTemplate {
+            rows,
+            selectable: true,
+        }
+        .render()?,
+    ))
 }
 
 async fn load_rows(
@@ -155,6 +191,8 @@ fn build_rows(episodes: Vec<Episode>, shows: &[Show]) -> Vec<LibraryRow> {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::db::episodes;
+    use crate::models::{status, Episode};
     use axum::body::{to_bytes, Body};
     use axum::http::{header, Method, Request, StatusCode};
     use std::sync::Arc;
@@ -208,6 +246,118 @@ mod tests {
         String::from_utf8(body.to_vec()).unwrap()
     }
 
+    async fn create_show(context: &Ctx) -> i64 {
+        crate::db::shows::create(
+            &context.state.pool,
+            crate::db::shows::NewShow {
+                title: "Show".into(),
+                ..crate::db::shows::NewShow::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    async fn create_episode(context: &Ctx, show_id: i64, video_id: &str, title: &str) -> Episode {
+        episodes::create(
+            &context.state.pool,
+            episodes::NewEpisode {
+                show_id,
+                video_id: video_id.into(),
+                source_url: format!("https://www.youtube.com/watch?v={video_id}"),
+                source_title: title.into(),
+                source_channel: "Channel".into(),
+                source_duration_s: Some(600),
+                source_thumbnail_url: None,
+                source_upload_date: None,
+                language: "vi".into(),
+                target_minutes: 10,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn set_status(context: &Ctx, uuid: &str, new_status: &str) {
+        sqlx::query("UPDATE episodes SET status = ?1, stage = ?2 WHERE uuid = ?3")
+            .bind(new_status)
+            .bind(new_status)
+            .bind(uuid)
+            .execute(&context.state.pool)
+            .await
+            .unwrap();
+    }
+
+    fn form(pairs: &[(&str, &str)]) -> String {
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        for (key, value) in pairs {
+            serializer.append_pair(key, value);
+        }
+        serializer.finish()
+    }
+
+    async fn send_form(context: &Ctx, path: &str, body: String) -> axum::response::Response {
+        crate::web::admin_router(context.state.clone())
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::COOKIE, format!("t2p_csrf={TOKEN}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn library_renders_bulk_selection_ui() {
+        let context = ctx().await;
+        let show_id = create_show(&context).await;
+        let published = create_episode(&context, show_id, "pub", "Published").await;
+        set_status(&context, &published.uuid, status::PUBLISHED).await;
+        let running = create_episode(&context, show_id, "run", "Running").await;
+        set_status(&context, &running.uuid, status::RUNNING).await;
+
+        let response = send(&context, Method::GET, "/library").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_string(response).await;
+        assert!(html.contains("bulk-form"));
+        assert!(html.contains("name=\"uuid\""));
+        assert!(html.contains("Gõ XOA"));
+        assert!(html.contains("Xoá đã chọn"));
+        assert!(html.contains("disabled"));
+    }
+
+    #[tokio::test]
+    async fn show_detail_rows_are_not_selectable() {
+        let context = ctx().await;
+        let show_id = create_show(&context).await;
+        create_episode(&context, show_id, "one", "One").await;
+
+        let response = send(
+            &context,
+            Method::GET,
+            &format!("/shows/{show_id}?tab=episodes"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_string(response).await;
+        assert!(!html.contains("name=\"uuid\""));
+    }
+
+    #[test]
+    fn deletable_status_covers_finished_work_only() {
+        for value in [status::PUBLISHED, status::READY, status::FAILED, status::CANCELLED] {
+            assert!(deletable_status(value), "{value} should be deletable");
+        }
+        for value in [status::QUEUED, status::RUNNING] {
+            assert!(!deletable_status(value), "{value} must not be deletable");
+        }
+    }
+
     #[tokio::test]
     async fn library_rows_use_labels_and_relative_time() {
         let context = ctx().await;
@@ -258,6 +408,8 @@ mod tests {
             show_id: Some(3),
             status: Some("failed".into()),
             q: Some("rust".into()),
+            deleted: None,
+            skipped: None,
         };
         let filter = query.filter();
         assert_eq!(filter.show_id, Some(3));
