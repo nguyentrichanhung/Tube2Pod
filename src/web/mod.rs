@@ -78,6 +78,10 @@ pub fn admin_router(state: AppState) -> Router {
             "/shows/{id}/voices/{language}",
             get(voices::picker).post(voices::select),
         )
+        .route(
+            "/shows/{id}/voices/{language}/preview",
+            get(voices::preview),
+        )
         .route("/shows/{id}/feed/toggle", post(shows::toggle_feed))
         .route("/shows/{id}/feed/rotate", post(shows::rotate_feed))
         .route("/shows/{id}/publish-ready", post(shows::publish_ready))

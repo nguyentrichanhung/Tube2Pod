@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 const MAX_SPEECH_CHARS: usize = 5000;
+const MAX_PREVIEW_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Voice {
@@ -34,6 +35,12 @@ pub struct VoiceDesignInfo {
     pub pitch: Option<String>,
     #[serde(default)]
     pub style: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct VoicePreview {
+    pub content_type: String,
+    pub bytes: Vec<u8>,
 }
 
 impl Voice {
@@ -348,6 +355,49 @@ impl OmnivoiceClient {
         }
     }
 
+    pub async fn preview_voice(&self, id: i64) -> AppResult<VoicePreview> {
+        let path = format!("/api/voices/{id}/preview");
+        let mut retried = false;
+        loop {
+            let response = self
+                .request(Method::GET, &path)
+                .send()
+                .await
+                .map_err(|e| AppError::Upstream(e.to_string()))?;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED
+                && !retried
+                && matches!(self.auth_mode, AuthMode::Password { .. })
+            {
+                self.login().await?;
+                retried = true;
+                continue;
+            }
+            if !response.status().is_success() {
+                return Err(AppError::Upstream(format!(
+                    "Omnivoice preview HTTP {}",
+                    response.status()
+                )));
+            }
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("audio/mpeg")
+                .to_string();
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| AppError::Upstream(e.to_string()))?;
+            if bytes.len() > MAX_PREVIEW_BYTES {
+                return Err(AppError::Upstream("Omnivoice preview is too large".into()));
+            }
+            return Ok(VoicePreview {
+                content_type,
+                bytes: bytes.to_vec(),
+            });
+        }
+    }
+
     pub async fn delete_speech(&self, id: i64) -> AppResult<()> {
         self.send::<Value>(Method::DELETE, &format!("/api/speech/{id}"), None)
             .await
@@ -572,6 +622,41 @@ mod tests {
         let bytes = client.download_mp3(91).await.unwrap();
         assert_eq!(bytes, b"mp3-bytes".to_vec());
         server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn fetches_voice_preview_audio() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/voices/7/preview"))
+            .and(header("tailscale-user-login", "owner@example.com"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "audio/mpeg")
+                    .set_body_bytes(b"ID3fake".to_vec()),
+            )
+            .mount(&server)
+            .await;
+
+        let client = OmnivoiceClient::new(&cfg(&server.uri()));
+        let preview = client.preview_voice(7).await.unwrap();
+        assert_eq!(preview.content_type, "audio/mpeg");
+        assert_eq!(preview.bytes, b"ID3fake");
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_voice_previews() {
+        let server = MockServer::start().await;
+        let body = vec![0u8; MAX_PREVIEW_BYTES + 1];
+        Mock::given(method("GET"))
+            .and(path("/api/voices/7/preview"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+            .mount(&server)
+            .await;
+
+        let client = OmnivoiceClient::new(&cfg(&server.uri()));
+        let error = client.preview_voice(7).await.unwrap_err();
+        assert!(matches!(error, AppError::Upstream(_)));
     }
 
     #[tokio::test]
