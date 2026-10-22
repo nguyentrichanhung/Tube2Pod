@@ -178,11 +178,16 @@ fn form_value(body: &[u8], key: &str) -> Option<String> {
     form_values(body, key).into_iter().next()
 }
 
+fn trimmed_form_value(body: &[u8], key: &str) -> Option<String> {
+    form_value(body, key)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 pub async fn bulk_delete(
     State(state): State<AppState>,
     Extension(token): Extension<CsrfToken>,
     headers: HeaderMap,
-    Query(query): Query<LibraryQuery>,
     body: Bytes,
 ) -> AppResult<Redirect> {
     let provided = form_value(&body, "_csrf").unwrap_or_default();
@@ -191,10 +196,15 @@ pub async fn bulk_delete(
     if !confirm.trim().eq_ignore_ascii_case("XOA") {
         return Err(AppError::BadRequest("Gõ XOA để xác nhận xoá.".into()));
     }
+    let filter_show_id =
+        trimmed_form_value(&body, "show_id").and_then(|value| value.parse::<i64>().ok());
+    let filter_status = trimmed_form_value(&body, "status");
+    let filter_q = trimmed_form_value(&body, "q");
     let mut seen = std::collections::HashSet::new();
     let uuids: Vec<String> = form_values(&body, "uuid")
         .into_iter()
-        .filter(|uuid| !uuid.trim().is_empty() && seen.insert(uuid.clone()))
+        .map(|uuid| uuid.trim().to_string())
+        .filter(|uuid| !uuid.is_empty() && seen.insert(uuid.clone()))
         .collect();
     if uuids.is_empty() {
         return Err(AppError::BadRequest("Chưa chọn tập nào.".into()));
@@ -226,18 +236,30 @@ pub async fn bulk_delete(
     if deleted > 0 {
         state.notify.notify_one();
     }
-    Ok(library_redirect(&query, deleted, skipped))
+    Ok(library_redirect(
+        filter_show_id,
+        filter_status.as_deref(),
+        filter_q.as_deref(),
+        deleted,
+        skipped,
+    ))
 }
 
-fn library_redirect(query: &LibraryQuery, deleted: usize, skipped: usize) -> Redirect {
+fn library_redirect(
+    show_id: Option<i64>,
+    status: Option<&str>,
+    q: Option<&str>,
+    deleted: usize,
+    skipped: usize,
+) -> Redirect {
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    if let Some(show_id) = query.show_id {
+    if let Some(show_id) = show_id {
         serializer.append_pair("show_id", &show_id.to_string());
     }
-    if let Some(value) = query.status.as_deref().filter(|value| !value.is_empty()) {
+    if let Some(value) = status.filter(|value| !value.is_empty()) {
         serializer.append_pair("status", value);
     }
-    if let Some(value) = query.q.as_deref().filter(|value| !value.is_empty()) {
+    if let Some(value) = q.filter(|value| !value.is_empty()) {
         serializer.append_pair("q", value);
     }
     serializer.append_pair("deleted", &deleted.to_string());
@@ -434,7 +456,12 @@ mod tests {
 
     #[test]
     fn deletable_status_covers_finished_work_only() {
-        for value in [status::PUBLISHED, status::READY, status::FAILED, status::CANCELLED] {
+        for value in [
+            status::PUBLISHED,
+            status::READY,
+            status::FAILED,
+            status::CANCELLED,
+        ] {
             assert!(deletable_status(value), "{value} should be deletable");
         }
         for value in [status::QUEUED, status::RUNNING] {
@@ -590,13 +617,20 @@ mod tests {
         .await
         .unwrap();
 
-        let mut body = form(&[("_csrf", TOKEN), ("confirm", "XOA")]);
+        let show_value = show_id.to_string();
+        let mut body = form(&[
+            ("_csrf", TOKEN),
+            ("confirm", "XOA"),
+            ("show_id", &show_value),
+            ("status", "published"),
+            ("q", "delete"),
+        ]);
         for uuid in deletable.iter().chain([&running.uuid, &queued.uuid]) {
             body.push('&');
-            body.push_str(&form(&[("uuid", uuid.as_str())]));
+            body.push_str(&form(&[("uuid", &format!(" {uuid} "))]));
         }
 
-        let response = send_form(&context, "/library/bulk-delete?status=published", body).await;
+        let response = send_form(&context, "/library/bulk-delete", body).await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         let location = response
             .headers()
@@ -608,6 +642,11 @@ mod tests {
         assert!(location.contains("deleted=4"), "{location}");
         assert!(location.contains("skipped=2"), "{location}");
         assert!(location.contains("status=published"), "{location}");
+        assert!(
+            location.contains(&format!("show_id={show_id}")),
+            "{location}"
+        );
+        assert!(location.contains("q=delete"), "{location}");
 
         for uuid in &deletable {
             assert!(episodes::get(&context.state.pool, uuid)

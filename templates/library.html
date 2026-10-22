@@ -31,6 +31,9 @@
 {% endif %}
 <form method="post" action="/library/bulk-delete" class="stack" id="bulk-form">
   <input type="hidden" name="_csrf" value="{{ csrf }}">
+  {% if selected_show.is_some() %}<input type="hidden" name="show_id" value="{{ selected_show.unwrap() }}">{% endif %}
+  {% if !selected_status.is_empty() %}<input type="hidden" name="status" value="{{ selected_status }}">{% endif %}
+  {% if !query.is_empty() %}<input type="hidden" name="q" value="{{ query }}">{% endif %}
   <div class="row between">
     <p class="muted">{{ rows.len() }} tập</p>
     <a class="btn btn-secondary" href="/library">Xoá bộ lọc</a>
