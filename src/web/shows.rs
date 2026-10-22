@@ -58,6 +58,17 @@ pub struct ShowCard {
     pub show: Show,
     pub episode_count: i64,
     pub last_episode: Option<String>,
+    pub has_cover: bool,
+    pub initial: String,
+}
+
+pub fn card_initial(title: &str) -> String {
+    title
+        .trim()
+        .chars()
+        .next()
+        .map(|ch| ch.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".into())
 }
 
 #[derive(Template)]
@@ -65,6 +76,12 @@ pub struct ShowCard {
 pub struct ShowsTemplate {
     csrf: String,
     cards: Vec<ShowCard>,
+}
+
+impl ShowsTemplate {
+    pub fn language_label(&self, language: &str) -> &'static str {
+        crate::models::language_label(language)
+    }
 }
 
 pub struct VoiceRow {
@@ -213,10 +230,17 @@ pub async fn index(
         .bind(show.id)
         .fetch_optional(&state.pool)
         .await?;
+        let has_cover = show
+            .cover_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty());
+        let initial = card_initial(&show.title);
         cards.push(ShowCard {
             show,
             episode_count: count,
             last_episode,
+            has_cover,
+            initial,
         });
     }
     Ok(Html(
@@ -1717,5 +1741,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn show_list_renders_cover_fallback_metadata_and_actions() {
+        let context = ctx().await;
+        let show = shows::create(
+            &context.state.pool,
+            shows::NewShow {
+                title: "Lich Su".into(),
+                category: "Technology".into(),
+                language: "vi".into(),
+                ..shows::NewShow::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = send(&context, Method::GET, "/shows", "", Vec::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains("cover-fallback"));
+        assert!(html.contains(">L<"));
+        assert!(html.contains("Technology"));
+        assert!(html.contains("Tiếng Việt"));
+        assert!(html.contains("Quản lý show"));
+        assert!(html.contains("Tạo tập"));
+        assert!(!html.contains(&format!("src=\"/shows/{}/cover\"", show.id)));
+
+        shows::set_cover(&context.state.pool, show.id, "/tmp/cover.jpg", false, false)
+            .await
+            .unwrap();
+        let response = send(&context, Method::GET, "/shows", "", Vec::new()).await;
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains(&format!("src=\"/shows/{}/cover\"", show.id)));
+    }
+
+    #[test]
+    fn show_card_initial_is_uppercase_first_character() {
+        assert_eq!(card_initial("  lich su"), "L");
+        assert_eq!(card_initial("한국어"), "한");
+        assert_eq!(card_initial("   "), "?");
     }
 }
