@@ -71,7 +71,7 @@ impl From<&PreviewData> for PreviewTemplate {
             channel: data.channel.clone().unwrap_or_default(),
             duration: duration_label(data.duration_s),
             language: data.language.unwrap_or("không xác định").to_string(),
-            language_label: language_label(data.language),
+            language_label: language_label(data.language.unwrap_or_default()).to_string(),
             has_captions: data.has_captions,
             thumbnail: data.thumbnail.clone().unwrap_or_default(),
             has_thumbnail: data.thumbnail.is_some(),
@@ -285,13 +285,8 @@ fn duration_label(seconds: Option<i64>) -> String {
     }
 }
 
-fn language_label(language: Option<&str>) -> String {
-    match language {
-        Some("vi") => "Tiếng Việt".into(),
-        Some("en") => "English".into(),
-        Some("ko") => "한국어".into(),
-        _ => "ngôn ngữ này".into(),
-    }
+fn language_label(language: &str) -> &'static str {
+    crate::models::language_label(language)
 }
 
 fn preview_error_message(error: &AppError) -> String {

@@ -1,5 +1,6 @@
 use crate::db::shows;
 use crate::error::{AppError, AppResult};
+use crate::models::language_label;
 use crate::services::omnivoice::{OmnivoiceClient, Voice};
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
@@ -41,15 +42,6 @@ pub fn filter_ready_voices<'a>(voices: &'a [Voice], language: &str) -> Vec<&'a V
         .iter()
         .filter(|voice| voice.status == "ready" && voice.language.as_deref() == Some(language))
         .collect()
-}
-
-fn language_label(language: &str) -> &'static str {
-    match language {
-        "vi" => "Tiếng Việt",
-        "en" => "English",
-        "ko" => "한국어",
-        _ => "Không xác định",
-    }
 }
 
 pub async fn picker(
@@ -229,6 +221,7 @@ mod tests {
             name: Some(format!("Voice {id}")),
             status: status.into(),
             language: language.map(str::to_string),
+            ..Voice::default()
         }
     }
 

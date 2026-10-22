@@ -329,6 +329,32 @@ pub fn supported_language(value: &str) -> Option<&'static str> {
     }
 }
 
+pub fn language_label(value: &str) -> &'static str {
+    match supported_language(value) {
+        Some("vi") => "Tiếng Việt",
+        Some("en") => "English",
+        Some("ko") => "한국어",
+        _ => "Không xác định",
+    }
+}
+
+pub fn voice_gender_label(value: Option<&str>) -> &'static str {
+    match value {
+        Some("female") => "Nữ",
+        Some("male") => "Nam",
+        _ => "Không rõ",
+    }
+}
+
+pub fn voice_age_label(value: Option<&str>) -> &'static str {
+    match value {
+        Some("young") => "Trẻ",
+        Some("middle_aged") => "Trung niên",
+        Some("old") => "Lớn tuổi",
+        _ => "Không rõ",
+    }
+}
+
 pub fn rate_cps(language: &str) -> f64 {
     match supported_language(language).unwrap_or(LANG_VI) {
         LANG_VI => 17.4,
@@ -437,5 +463,22 @@ mod tests {
             Some("Không xử lý được tập này. Vui lòng liên hệ admin.")
         );
         assert_eq!(error_label_for(None), None);
+    }
+
+    #[test]
+    fn language_voice_gender_and_age_labels_are_user_facing() {
+        assert_eq!(language_label("vi"), "Tiếng Việt");
+        assert_eq!(language_label("en-US"), "English");
+        assert_eq!(language_label("ko"), "한국어");
+        assert_eq!(language_label("ja"), "Không xác định");
+
+        assert_eq!(voice_gender_label(Some("female")), "Nữ");
+        assert_eq!(voice_gender_label(Some("male")), "Nam");
+        assert_eq!(voice_gender_label(None), "Không rõ");
+
+        assert_eq!(voice_age_label(Some("young")), "Trẻ");
+        assert_eq!(voice_age_label(Some("middle_aged")), "Trung niên");
+        assert_eq!(voice_age_label(Some("old")), "Lớn tuổi");
+        assert_eq!(voice_age_label(Some("unknown")), "Không rõ");
     }
 }

@@ -11,13 +11,47 @@ use std::time::Duration;
 
 const MAX_SPEECH_CHARS: usize = 5000;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Voice {
     pub id: i64,
     pub name: Option<String>,
     pub status: String,
     #[serde(default)]
     pub language: Option<String>,
+    #[serde(default)]
+    pub preview_url: Option<String>,
+    #[serde(default)]
+    pub design: Option<VoiceDesignInfo>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct VoiceDesignInfo {
+    #[serde(default)]
+    pub gender: Option<String>,
+    #[serde(default)]
+    pub age: Option<String>,
+    #[serde(default)]
+    pub pitch: Option<String>,
+    #[serde(default)]
+    pub style: Option<String>,
+}
+
+impl Voice {
+    pub fn gender_label(&self) -> &'static str {
+        crate::models::voice_gender_label(
+            self.design
+                .as_ref()
+                .and_then(|design| design.gender.as_deref()),
+        )
+    }
+
+    pub fn age_label(&self) -> &'static str {
+        crate::models::voice_age_label(
+            self.design
+                .as_ref()
+                .and_then(|design| design.age.as_deref()),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -633,5 +667,35 @@ mod tests {
         let text = "a".repeat(MAX_SPEECH_CHARS + 1);
         let error = client.create_speech(&text, 7).await.unwrap_err();
         assert!(matches!(error, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn deserializes_voice_design_metadata() {
+        let voice: Voice = serde_json::from_str(
+            r#"{
+                "id": 7,
+                "name": "Phượng",
+                "status": "ready",
+                "language": "vi",
+                "preview_url": "/api/voices/7/preview",
+                "design": {
+                    "gender": "female",
+                    "age": "middle_aged",
+                    "pitch": "low",
+                    "style": "warm",
+                    "seed": 1,
+                    "params": {}
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(voice.preview_url.as_deref(), Some("/api/voices/7/preview"));
+        let design = voice.design.unwrap();
+        assert_eq!(design.gender.as_deref(), Some("female"));
+        assert_eq!(design.age.as_deref(), Some("middle_aged"));
+        assert_eq!(
+            crate::models::voice_age_label(design.age.as_deref()),
+            "Trung niên"
+        );
     }
 }
