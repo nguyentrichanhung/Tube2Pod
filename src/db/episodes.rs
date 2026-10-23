@@ -14,6 +14,7 @@ pub struct NewEpisode {
     pub source_upload_date: Option<String>,
     pub language: String,
     pub target_minutes: i64,
+    pub review_required: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -32,8 +33,8 @@ pub async fn create(pool: &SqlitePool, new: NewEpisode) -> AppResult<Episode> {
         "INSERT INTO episodes (
             uuid, show_id, video_id, source_url, source_title, source_channel,
             source_duration_s, source_thumbnail_url, source_upload_date, language,
-            target_minutes, stage, status, created_at, updated_at
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?14)
+            target_minutes, review_required, stage, status, created_at, updated_at
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15)
          RETURNING *",
     )
     .bind(uuid)
@@ -47,6 +48,7 @@ pub async fn create(pool: &SqlitePool, new: NewEpisode) -> AppResult<Episode> {
     .bind(new.source_upload_date)
     .bind(new.language)
     .bind(new.target_minutes)
+    .bind(new.review_required)
     .bind(stage::QUEUED)
     .bind(status::QUEUED)
     .bind(now)
@@ -221,14 +223,21 @@ pub async fn set_fetched(pool: &SqlitePool, uuid: &str, meta: FetchedMeta<'_>) -
     Ok(())
 }
 
-pub async fn set_summary(pool: &SqlitePool, uuid: &str, text: &str, hash: &str) -> AppResult<()> {
+pub async fn set_summary(
+    pool: &SqlitePool,
+    uuid: &str,
+    display_summary: &str,
+    audio_script: &str,
+    audio_hash: &str,
+) -> AppResult<()> {
     sqlx::query(
-        "UPDATE episodes SET summary_text = ?1, summary_hash = ?2, summary_edited_at = NULL,
-            updated_at = ?3
-         WHERE uuid = ?4",
+        "UPDATE episodes SET summary_text = ?1, audio_script = ?2, summary_hash = ?3,
+            summary_edited_at = NULL, updated_at = ?4
+         WHERE uuid = ?5",
     )
-    .bind(text)
-    .bind(hash)
+    .bind(display_summary)
+    .bind(audio_script)
+    .bind(audio_hash)
     .bind(now_ts())
     .bind(uuid)
     .execute(pool)
@@ -236,24 +245,36 @@ pub async fn set_summary(pool: &SqlitePool, uuid: &str, text: &str, hash: &str) 
     Ok(())
 }
 
-pub async fn set_summary_edit(
-    pool: &SqlitePool,
-    uuid: &str,
-    text: &str,
-    hash: &str,
-) -> AppResult<()> {
+pub async fn set_review(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
     sqlx::query(
-        "UPDATE episodes SET summary_text = ?1, summary_hash = ?2,
-            summary_edited_at = ?3, updated_at = ?3
-         WHERE uuid = ?4",
+        "UPDATE episodes SET status = ?1, stage = ?2, progress_json = ?3,
+            attempts = 0, next_attempt_at = NULL, updated_at = ?4
+         WHERE uuid = ?5",
     )
-    .bind(text)
-    .bind(hash)
+    .bind(status::REVIEW)
+    .bind(stage::REVIEW)
+    .bind(r#"{"percent":45}"#)
     .bind(now_ts())
     .bind(uuid)
     .execute(pool)
     .await?;
     Ok(())
+}
+
+pub async fn approve_review(pool: &SqlitePool, uuid: &str) -> AppResult<bool> {
+    let result = sqlx::query(
+        "UPDATE episodes SET status = ?1, stage = ?2, next_attempt_at = NULL,
+            error_code = NULL, error_message = NULL, updated_at = ?3
+         WHERE uuid = ?4 AND status = ?5",
+    )
+    .bind(status::QUEUED)
+    .bind(stage::VOICING)
+    .bind(now_ts())
+    .bind(uuid)
+    .bind(status::REVIEW)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 pub async fn voice_usage_count(pool: &SqlitePool, voice_id: i64) -> AppResult<i64> {
@@ -538,13 +559,14 @@ pub async fn delete(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
 
 pub async fn delete_if_terminal(pool: &SqlitePool, uuid: &str) -> AppResult<Option<Episode>> {
     Ok(sqlx::query_as::<_, Episode>(
-        "DELETE FROM episodes WHERE uuid = ?1 AND status IN (?2,?3,?4,?5) RETURNING *",
+        "DELETE FROM episodes WHERE uuid = ?1 AND status IN (?2,?3,?4,?5,?6) RETURNING *",
     )
     .bind(uuid)
     .bind(status::PUBLISHED)
     .bind(status::READY)
     .bind(status::FAILED)
     .bind(status::CANCELLED)
+    .bind(status::REVIEW)
     .fetch_optional(pool)
     .await?)
 }
@@ -581,6 +603,7 @@ mod tests {
             source_upload_date: None,
             language: "vi".into(),
             target_minutes: 10,
+            review_required: false,
         }
     }
 
@@ -613,6 +636,25 @@ mod tests {
         let recovered = get(&pool, &claimed.uuid).await.unwrap().unwrap();
         assert_eq!(recovered.status, status::QUEUED);
         assert_eq!(recover_running(&pool).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn review_episodes_are_not_claimable() {
+        let (pool, show_id) = setup().await;
+        let mut new = episode(show_id, "review1");
+        new.review_required = true;
+        let ep = create(&pool, new).await.unwrap();
+        sqlx::query("UPDATE episodes SET attempts = 2, next_attempt_at = ?1 WHERE uuid = ?2")
+            .bind(now_ts() + 60)
+            .bind(&ep.uuid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        set_review(&pool, &ep.uuid).await.unwrap();
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.attempts, 0);
+        assert!(got.next_attempt_at.is_none());
+        assert!(claim_next(&pool).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -873,21 +915,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generated_summary_clears_manual_edit_timestamp() {
+    async fn stores_review_flag_and_separate_audio_script() {
         let (pool, show_id) = setup().await;
-        let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
-        set_summary_edit(&pool, &ep.uuid, "Bản đã sửa", "hash-edit")
-            .await
-            .unwrap();
-        let edited = get(&pool, &ep.uuid).await.unwrap().unwrap();
-        assert!(edited.summary_edited_at.is_some());
+        let mut new = episode(show_id, "script1");
+        new.review_required = true;
+        let ep = create(&pool, new).await.unwrap();
+        assert!(ep.review_required);
+        assert_eq!(ep.audio_script, None);
 
-        set_summary(&pool, &ep.uuid, "Bản tạo mới", "hash-new")
-            .await
-            .unwrap();
+        set_summary(
+            &pool,
+            &ep.uuid,
+            "Tóm tắt ngắn.",
+            "Script đầy đủ để đọc.",
+            "hash",
+        )
+        .await
+        .unwrap();
         let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
-        assert_eq!(got.summary_text.as_deref(), Some("Bản tạo mới"));
-        assert_eq!(got.summary_edited_at, None);
+        assert_eq!(got.summary_text.as_deref(), Some("Tóm tắt ngắn."));
+        assert_eq!(got.audio_script.as_deref(), Some("Script đầy đủ để đọc."));
+        assert_eq!(got.summary_hash.as_deref(), Some("hash"));
     }
 
     #[tokio::test]
@@ -921,10 +969,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_if_terminal_removes_review_episode() {
+        let (pool, show_id) = setup().await;
+        let review = create(&pool, episode(show_id, "review-del")).await.unwrap();
+        set_review(&pool, &review.uuid).await.unwrap();
+
+        let deleted = delete_if_terminal(&pool, &review.uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(deleted.uuid, review.uuid);
+        assert!(get(&pool, &review.uuid).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn reset_for_reread_keeps_old_audio_hash() {
         let (pool, show_id) = setup().await;
         let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
-        set_summary(&pool, &ep.uuid, "Bản mới", "hash-new")
+        set_summary(&pool, &ep.uuid, "Bản mới", "Bản mới", "hash-new")
             .await
             .unwrap();
         set_audio(
@@ -995,6 +1057,7 @@ mod tests {
                 source_upload_date: None,
                 language: "vi".into(),
                 target_minutes: 10,
+                review_required: false,
             },
         )
         .await

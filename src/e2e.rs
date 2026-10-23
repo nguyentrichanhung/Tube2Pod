@@ -127,6 +127,7 @@ async fn youtube_url_becomes_a_published_feed_item() {
             source_upload_date: None,
             language: "vi".into(),
             target_minutes: 10,
+            review_required: false,
         },
     )
     .await

@@ -147,6 +147,36 @@ fn detect_language(text: &str) -> &'static str {
     }
 }
 
+pub fn cap_words(text: &str, max_words: usize) -> String {
+    if max_words == 0 {
+        return String::new();
+    }
+    let mut kept: Vec<String> = Vec::new();
+    let mut count = 0usize;
+    for block in text.split("\n\n") {
+        let words: Vec<&str> = block.split_whitespace().collect();
+        if words.is_empty() {
+            continue;
+        }
+        if count + words.len() <= max_words {
+            kept.push(block.trim().to_string());
+            count += words.len();
+        } else if kept.is_empty() {
+            kept.push(
+                block
+                    .split_whitespace()
+                    .take(max_words)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+            break;
+        } else {
+            break;
+        }
+    }
+    kept.join("\n\n")
+}
+
 pub fn build_script(
     show_title: &str,
     video_title: &str,
@@ -574,6 +604,17 @@ mod tests {
         let chunks = split_chunks(text, 12);
         assert!(chunks.iter().all(|chunk| chunk.chars().count() <= 12));
         assert_eq!(chunks, vec!["Câu một.", "Câu hai.", "Câu ba!", "Câu bốn?"]);
+    }
+
+    #[test]
+    fn caps_display_summary_at_two_hundred_words() {
+        let text = (0..250)
+            .map(|i| format!("câu {i}."))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let capped = cap_words(&text, 200);
+        assert!(capped.split_whitespace().count() <= 200);
+        assert!(!capped.trim().is_empty());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::db::{episodes, shows};
 use crate::error::{AppError, AppResult};
-use crate::models::{sha256_hex, status, Episode, Show};
+use crate::models::{status, Episode, Show};
 use crate::services::omnivoice::OmnivoiceClient;
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
@@ -38,12 +38,6 @@ pub struct ProgressTemplate {
 #[derive(Debug, Default, Deserialize)]
 pub struct DetailQuery {
     pub duplicate: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SummaryForm {
-    pub _csrf: String,
-    pub summary_text: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,23 +125,6 @@ pub async fn audio(
     Ok(response)
 }
 
-pub async fn update_summary(
-    State(state): State<AppState>,
-    Extension(token): Extension<CsrfToken>,
-    headers: HeaderMap,
-    Path(uuid): Path<String>,
-    Form(form): Form<SummaryForm>,
-) -> AppResult<Response> {
-    csrf::verify(&token, &headers, &form._csrf)?;
-    let text = validate_summary(&form.summary_text)?;
-    let hash = sha256_hex(&text);
-    episodes::get(&state.pool, &uuid)
-        .await?
-        .ok_or(AppError::NotFound)?;
-    episodes::set_summary_edit(&state.pool, &uuid, &text, &hash).await?;
-    Ok(redirect_response(&headers, &format!("/episodes/{uuid}")))
-}
-
 pub async fn reread(
     State(state): State<AppState>,
     Extension(token): Extension<CsrfToken>,
@@ -159,9 +136,15 @@ pub async fn reread(
     let episode = episodes::get(&state.pool, &uuid)
         .await?
         .ok_or(AppError::NotFound)?;
-    if episode.summary().trim().is_empty() {
+    if episode
+        .audio_script
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+    {
         return Err(AppError::BadRequest(
-            "Cần có bản tóm tắt trước khi đọc lại.".into(),
+            "Cần có script audio trước khi đọc lại.".into(),
         ));
     }
     if !matches!(
@@ -252,6 +235,26 @@ pub async fn publish(
     Ok(redirect_response(&headers, &format!("/episodes/{uuid}")))
 }
 
+pub async fn approve(
+    State(state): State<AppState>,
+    Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
+    Path(uuid): Path<String>,
+    Form(form): Form<CsrfForm>,
+) -> AppResult<Response> {
+    csrf::verify(&token, &headers, &form._csrf)?;
+    episodes::get(&state.pool, &uuid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if !episodes::approve_review(&state.pool, &uuid).await? {
+        return Err(AppError::Conflict(
+            "Chỉ duyệt được tập đang chờ duyệt.".into(),
+        ));
+    }
+    state.notify.notify_one();
+    Ok(redirect_response(&headers, &format!("/episodes/{uuid}")))
+}
+
 pub async fn delete(
     State(state): State<AppState>,
     Extension(token): Extension<CsrfToken>,
@@ -279,16 +282,6 @@ pub async fn delete(
     purge_episode_files(&state.cfg.data_dir, &episode).await;
     episodes::delete(&state.pool, &uuid).await?;
     Ok(redirect_response(&headers, "/library"))
-}
-
-fn validate_summary(text: &str) -> AppResult<String> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Err(AppError::BadRequest(
-            "Bản tóm tắt không được để trống.".into(),
-        ));
-    }
-    Ok(text.to_string())
 }
 
 async fn read_transcript(episode: &Episode) -> String {
@@ -328,7 +321,6 @@ fn redirect_response(headers: &HeaderMap, location: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::config::Config;
     use crate::db::{episodes, shows};
     use crate::models::{stage, status, Episode, Show};
@@ -401,6 +393,7 @@ mod tests {
                 source_upload_date: None,
                 language: "vi".into(),
                 target_minutes: 10,
+                review_required: false,
             },
         )
         .await
@@ -448,6 +441,63 @@ mod tests {
             .unwrap()
     }
 
+    #[tokio::test]
+    async fn approve_resumes_only_a_review_episode() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        sqlx::query("UPDATE episodes SET status = 'review', stage = 'review' WHERE uuid = ?1")
+            .bind(&episode.uuid)
+            .execute(&context.state.pool)
+            .await
+            .unwrap();
+
+        let response = send(
+            &context,
+            Method::POST,
+            &format!("/episodes/{}/approve", episode.uuid),
+            Some(form(&[("_csrf", TOKEN)]).into_bytes()),
+            &[],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let got = episodes::get(&context.state.pool, &episode.uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.status, status::QUEUED);
+        assert_eq!(got.stage, stage::VOICING);
+
+        let again = send(
+            &context,
+            Method::POST,
+            &format!("/episodes/{}/approve", episode.uuid),
+            Some(form(&[("_csrf", TOKEN)]).into_bytes()),
+            &[],
+        )
+        .await;
+        assert_eq!(again.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn review_episode_renders_read_only_summary_and_continue() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        sqlx::query("UPDATE episodes SET status = 'review', stage = 'review', summary_text = 'Tóm tắt ngắn.' WHERE uuid = ?1")
+            .bind(&episode.uuid)
+            .execute(&context.state.pool)
+            .await
+            .unwrap();
+
+        let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
+        assert!(html.contains("Chờ duyệt tóm tắt"));
+        assert!(html.contains("Tiếp tục tạo audio"));
+        assert!(html.contains("Tóm tắt ngắn."));
+        assert!(html.contains(&format!("action=\"/episodes/{}/approve\"", episode.uuid)));
+        assert!(!html.contains("name=\"summary_text\""));
+    }
+
     async fn get(context: &Ctx, path: &str) -> axum::response::Response {
         send(context, Method::GET, path, None, &[]).await
     }
@@ -461,28 +511,6 @@ mod tests {
         form(&[("_csrf", TOKEN)])
     }
 
-    async fn patch_summary(context: &Ctx, uuid: &str, text: &str) -> axum::response::Response {
-        send(
-            context,
-            Method::PATCH,
-            &format!("/episodes/{uuid}"),
-            Some(form(&[("_csrf", TOKEN), ("summary_text", text)]).into_bytes()),
-            &[],
-        )
-        .await
-    }
-
-    #[test]
-    fn summary_must_not_be_blank_and_hash_is_stable() {
-        assert!(validate_summary("   ").is_err());
-        let value = validate_summary("  Nội dung mới.  ").unwrap();
-        assert_eq!(value, "Nội dung mới.");
-        assert_eq!(
-            crate::models::sha256_hex(&value),
-            crate::models::sha256_hex("Nội dung mới.")
-        );
-    }
-
     #[tokio::test]
     async fn detail_renders_duplicate_notice_and_escapes_html() {
         let context = ctx().await;
@@ -493,13 +521,13 @@ mod tests {
         let response = get(&context, &format!("/episodes/{}", episode.uuid)).await;
         assert_eq!(response.status(), StatusCode::OK);
         let html = body(response).await;
-        assert!(html.contains("Bản tóm tắt"));
+        assert!(html.contains("<h2>Tóm tắt</h2>"));
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert!(!html.contains("<script>alert(1)</script>"));
         assert!(!html.contains("không tạo thêm bản sao"));
-        assert!(html.contains(&format!("hx-post=\"/episodes/{}/delete\"", episode.uuid)));
+        assert!(html.contains(&format!("action=\"/episodes/{}/delete\"", episode.uuid)));
         assert!(!html.contains("hx-delete"));
-        assert!(html.contains(&format!("hx-post=\"/episodes/{}/reread\"", episode.uuid)));
+        assert!(html.contains(&format!("action=\"/episodes/{}/reread\"", episode.uuid)));
 
         let duplicate = get(&context, &format!("/episodes/{}?duplicate=1", episode.uuid)).await;
         assert_eq!(duplicate.status(), StatusCode::OK);
@@ -524,9 +552,70 @@ mod tests {
             .find("</details>")
             .expect("advanced disclosure end");
         let advanced = &html[start..start + end];
+        assert!(advanced.contains(&format!("action=\"/episodes/{}/reread\"", episode.uuid)));
         assert!(advanced.contains(&format!("hx-post=\"/episodes/{}/reread\"", episode.uuid)));
+        assert!(advanced.contains("hx-confirm=\"Bắt đầu tạo audio mới từ script hiện tại?\""));
         assert!(advanced.contains(&format!("action=\"/episodes/{}/publish\"", episode.uuid)));
-        assert!(html.contains("<summary>Nâng cao: Transcript</summary>"));
+        assert!(!advanced.contains(&format!("action=\"/episodes/{}/delete\"", episode.uuid)));
+        assert!(!advanced.contains(&format!("hx-post=\"/episodes/{}/delete\"", episode.uuid)));
+        assert!(html.contains(&format!("action=\"/episodes/{}/delete\"", episode.uuid)));
+        assert!(html.contains(&format!("hx-post=\"/episodes/{}/delete\"", episode.uuid)));
+        assert!(html.contains("hx-confirm=\"Xoá vĩnh viễn tập này, transcript và mọi bản audio?\""));
+        assert!(html.contains("<h2>Transcript</h2>"));
+        assert!(!advanced.contains("<h2>Transcript</h2>"));
+    }
+
+    #[tokio::test]
+    async fn detail_warns_when_audio_was_generated_from_an_older_script() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        sqlx::query(
+            "UPDATE episodes SET status = 'ready', stage = 'ready', summary_hash = 'new', audio_summary_hash = 'old', audio_path = '/tmp/audio.mp3' WHERE uuid = ?1",
+        )
+        .bind(&episode.uuid)
+        .execute(&context.state.pool)
+        .await
+        .unwrap();
+
+        let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
+        assert!(html.contains("Cần đọc lại"));
+    }
+
+    #[tokio::test]
+    async fn review_episode_without_audio_does_not_warn_about_stale_audio() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        sqlx::query(
+            "UPDATE episodes SET status = 'review', stage = 'review', summary_hash = 'new', audio_summary_hash = NULL WHERE uuid = ?1",
+        )
+        .bind(&episode.uuid)
+        .execute(&context.state.pool)
+        .await
+        .unwrap();
+
+        let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
+        assert!(!html.contains("Cần đọc lại"));
+        assert!(!html.contains("Audio khớp"));
+    }
+
+    #[tokio::test]
+    async fn approve_rejects_a_bad_csrf_token() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        set_status(&context, &episode.uuid, status::REVIEW, stage::REVIEW).await;
+
+        let response = send(
+            &context,
+            Method::POST,
+            &format!("/episodes/{}/approve", episode.uuid),
+            Some(form(&[("_csrf", "bad-token")]).into_bytes()),
+            &[],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -636,124 +725,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_summary_trims_persists_and_flags_audio_for_reread() {
-        let context = ctx().await;
-        let show = create_show(&context, "Show").await;
-        let episode = create_episode(&context, show.id, "Tập").await;
-        set_status(&context, &episode.uuid, status::READY, stage::READY).await;
-        episodes::set_summary(&context.state.pool, &episode.uuid, "Cũ", "old-hash")
-            .await
-            .unwrap();
-        episodes::set_audio(
-            &context.state.pool,
-            &episode.uuid,
-            "/tmp/old.mp3",
-            10,
-            5,
-            "old-hash",
-            1,
-        )
-        .await
-        .unwrap();
-
-        let response = patch_summary(&context, &episode.uuid, "  Nội dung mới.  ").await;
-
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert_eq!(
-            response
-                .headers()
-                .get(header::LOCATION)
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            format!("/episodes/{}", episode.uuid)
-        );
-        let updated = episodes::get(&context.state.pool, &episode.uuid)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(updated.summary(), "Nội dung mới.");
-        assert!(updated.summary_edited_at.is_some());
-        assert!(updated.audio_needs_reread());
-        assert_eq!(updated.audio_path.as_deref(), Some("/tmp/old.mp3"));
-
-        let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
-        assert!(html.contains("Cần đọc lại"));
-    }
-
-    #[tokio::test]
-    async fn update_summary_uses_hx_redirect_for_htmx_requests() {
-        let context = ctx().await;
-        let show = create_show(&context, "Show").await;
-        let episode = create_episode(&context, show.id, "Tập").await;
-        set_status(&context, &episode.uuid, status::READY, stage::READY).await;
-
-        let response = send(
-            &context,
-            Method::PATCH,
-            &format!("/episodes/{}", episode.uuid),
-            Some(form(&[("_csrf", TOKEN), ("summary_text", "Mới")]).into_bytes()),
-            &[("hx-request", "true")],
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert!(response.headers().get(header::LOCATION).is_none());
-        assert_eq!(
-            response
-                .headers()
-                .get("hx-redirect")
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            format!("/episodes/{}", episode.uuid)
-        );
-    }
-
-    #[tokio::test]
-    async fn update_summary_allows_running_edits_but_rejects_blank_and_cross_site() {
-        let context = ctx().await;
-        let show = create_show(&context, "Show").await;
-        let episode = create_episode(&context, show.id, "Tập").await;
-
-        let blank = patch_summary(&context, &episode.uuid, "   ").await;
-        assert_eq!(blank.status(), StatusCode::BAD_REQUEST);
-
-        set_status(&context, &episode.uuid, status::RUNNING, stage::VOICING).await;
-        let running = patch_summary(&context, &episode.uuid, "Nội dung").await;
-        assert_eq!(running.status(), StatusCode::SEE_OTHER);
-        let edited = episodes::get(&context.state.pool, &episode.uuid)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(edited.summary(), "Nội dung");
-        assert!(edited.summary_edited_at.is_some());
-
-        set_status(&context, &episode.uuid, status::READY, stage::READY).await;
-        let cross_site = send(
-            &context,
-            Method::PATCH,
-            &format!("/episodes/{}", episode.uuid),
-            Some(form(&[("_csrf", TOKEN), ("summary_text", "Bị đổi")]).into_bytes()),
-            &[("sec-fetch-site", "cross-site")],
-        )
-        .await;
-        assert_eq!(cross_site.status(), StatusCode::FORBIDDEN);
-        let unchanged = episodes::get(&context.state.pool, &episode.uuid)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(unchanged.summary(), "Nội dung");
-    }
-
-    #[tokio::test]
     async fn reread_keeps_guid_published_at_and_old_audio() {
         let context = ctx().await;
         let show = create_show(&context, "Show").await;
         let episode = create_episode(&context, show.id, "Tập").await;
-        episodes::set_summary(&context.state.pool, &episode.uuid, "Nội dung", "old-hash")
-            .await
-            .unwrap();
+        episodes::set_summary(
+            &context.state.pool,
+            &episode.uuid,
+            "Nội dung",
+            "Nội dung",
+            "old-hash",
+        )
+        .await
+        .unwrap();
         episodes::set_audio(
             &context.state.pool,
             &episode.uuid,
@@ -802,11 +786,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reread_requires_a_summary_and_a_settled_status() {
+    async fn reread_requires_an_audio_script_and_a_settled_status() {
         let context = ctx().await;
         let show = create_show(&context, "Show").await;
         let blank = create_episode(&context, show.id, "Trống").await;
         set_status(&context, &blank.uuid, status::READY, stage::READY).await;
+        sqlx::query("UPDATE episodes SET summary_text = 'Tóm tắt' WHERE uuid = ?1")
+            .bind(&blank.uuid)
+            .execute(&context.state.pool)
+            .await
+            .unwrap();
 
         let rejected = send(
             &context,
@@ -819,9 +808,15 @@ mod tests {
         assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
 
         let busy = create_episode(&context, show.id, "Đang chạy").await;
-        episodes::set_summary(&context.state.pool, &busy.uuid, "Nội dung", "hash")
-            .await
-            .unwrap();
+        episodes::set_summary(
+            &context.state.pool,
+            &busy.uuid,
+            "Nội dung",
+            "Nội dung",
+            "hash",
+        )
+        .await
+        .unwrap();
         let rejected = send(
             &context,
             Method::POST,

@@ -17,7 +17,7 @@
   <label>Trạng thái
     <select name="status">
       <option value="">Tất cả</option>
-      {% for status in ["queued", "running", "ready", "published", "failed", "cancelled"] %}
+      {% for status in ["queued", "running", "ready", "published", "failed", "cancelled", "review"] %}
       <option value="{{ status }}" {% if self.status_selected(status) %}selected{% endif %}>{{ self.status_label(status) }}</option>
       {% endfor %}
     </select>

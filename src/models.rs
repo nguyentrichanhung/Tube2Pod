@@ -15,6 +15,7 @@ pub mod stage {
     pub const PUBLISHING: &str = "publishing";
     pub const PUBLISHED: &str = "published";
     pub const READY: &str = "ready";
+    pub const REVIEW: &str = "review";
 }
 
 pub mod status {
@@ -24,6 +25,7 @@ pub mod status {
     pub const PUBLISHED: &str = "published";
     pub const FAILED: &str = "failed";
     pub const CANCELLED: &str = "cancelled";
+    pub const REVIEW: &str = "review";
 }
 
 #[derive(Clone, sqlx::FromRow, Serialize)]
@@ -114,7 +116,9 @@ pub struct Episode {
     pub transcript_kind: Option<String>,
     pub transcript_chars: Option<i64>,
     pub summary_text: Option<String>,
+    pub audio_script: Option<String>,
     pub summary_edited_at: Option<i64>,
+    pub review_required: bool,
     pub summary_hash: Option<String>,
     pub target_minutes: i64,
     pub stage: String,
@@ -165,6 +169,7 @@ pub fn progress_percent_for(
             }
         }
         stage::ASSEMBLING => 85,
+        stage::REVIEW => 45,
         stage::PUBLISHING => 95,
         stage::READY | stage::PUBLISHED => 100,
         _ => 0,
@@ -182,6 +187,7 @@ pub fn stage_label_for(stage: &str) -> &'static str {
         stage::PUBLISHING => "Đang phát hành",
         stage::READY => "Sẵn sàng",
         stage::PUBLISHED => "Đã đăng",
+        stage::REVIEW => "Chờ duyệt tóm tắt",
         _ => "Đang xử lý",
     }
 }
@@ -194,6 +200,7 @@ pub fn status_label_for(status: &str) -> &'static str {
         status::PUBLISHED => "Đã đăng",
         status::FAILED => "Lỗi",
         status::CANCELLED => "Đã huỷ",
+        status::REVIEW => "Chờ duyệt",
         _ => "Không xác định",
     }
 }
@@ -284,6 +291,14 @@ impl Episode {
 
     pub fn summary(&self) -> &str {
         self.summary_text.as_deref().unwrap_or("")
+    }
+
+    pub fn summary_words(&self) -> usize {
+        self.summary_text
+            .as_deref()
+            .unwrap_or("")
+            .split_whitespace()
+            .count()
     }
 
     pub fn audio_needs_reread(&self) -> bool {
@@ -416,6 +431,53 @@ mod tests {
     }
 
     #[test]
+    fn summary_words_counts_words_in_the_display_summary() {
+        let episode = Episode {
+            uuid: "u1".into(),
+            show_id: 1,
+            video_id: "v1".into(),
+            source_url: "https://example.test/v1".into(),
+            source_title: "Video".into(),
+            source_channel: "Channel".into(),
+            source_duration_s: None,
+            source_thumbnail_url: None,
+            source_upload_date: None,
+            language: "vi".into(),
+            transcript_path: None,
+            transcript_kind: None,
+            transcript_chars: None,
+            summary_text: Some("Một hai ba.".into()),
+            audio_script: None,
+            summary_edited_at: None,
+            summary_hash: None,
+            review_required: false,
+            target_minutes: 10,
+            stage: stage::READY.into(),
+            status: status::READY.into(),
+            progress_json: None,
+            error_code: None,
+            error_message: None,
+            attempts: 0,
+            next_attempt_at: None,
+            voice_id: None,
+            voice_design_id: None,
+            active_take_id: None,
+            take_ids_json: None,
+            chunk_count: None,
+            chunk_done: 0,
+            audio_version: 1,
+            audio_path: None,
+            audio_bytes: None,
+            audio_duration_s: None,
+            audio_summary_hash: None,
+            published_at: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        assert_eq!(episode.summary_words(), 3);
+    }
+
+    #[test]
     fn summary_hash_is_sha256_hex() {
         assert_eq!(
             sha256_hex("abc"),
@@ -435,6 +497,7 @@ mod tests {
         assert_eq!(progress_percent_for("synthesizing", 2, Some(4), None), 67);
         assert_eq!(progress_percent_for("synthesizing", 4, Some(4), None), 80);
         assert_eq!(progress_percent_for("assembling", 0, None, None), 85);
+        assert_eq!(progress_percent_for("review", 0, None, None), 45);
         assert_eq!(progress_percent_for("publishing", 0, None, None), 95);
         assert_eq!(progress_percent_for("published", 0, None, None), 100);
         assert_eq!(progress_percent_for("ready", 0, None, None), 100);
@@ -451,6 +514,8 @@ mod tests {
     #[test]
     fn labels_and_errors_are_user_facing() {
         assert_eq!(stage_label_for("synthesizing"), "Đang tạo audio");
+        assert_eq!(stage_label_for("review"), "Chờ duyệt tóm tắt");
+        assert_eq!(status_label_for("review"), "Chờ duyệt");
         assert_eq!(status_label_for("ready"), "Sẵn sàng");
         assert_eq!(status_label_for("cancelled"), "Đã huỷ");
         assert_eq!(

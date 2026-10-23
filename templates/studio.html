@@ -38,6 +38,11 @@
       </fieldset>
     </div>
 
+    <label class="row">
+      <input type="checkbox" name="review_required" value="on" style="width:auto">
+      Dừng sau tóm tắt để duyệt
+    </label>
+
     <div class="row between">
       <span></span>
       <button type="submit" data-no-shows="{% if shows.is_empty() %}true{% else %}false{% endif %}" {% if shows.is_empty() %}disabled{% endif %}>Tạo tập</button>

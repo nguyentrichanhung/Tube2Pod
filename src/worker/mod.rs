@@ -122,6 +122,7 @@ impl Pipeline {
                     let parts = synth::parts_dir(&self.cfg, &episode.uuid);
                     let _ = tokio::fs::remove_dir_all(parts).await;
                 }
+                stage::REVIEW => return Ok(()),
                 stage::READY | stage::PUBLISHED => return Ok(()),
                 other => {
                     return Err(PipelineError::new(
@@ -279,6 +280,7 @@ mod tests {
                 source_upload_date: None,
                 language: "vi".into(),
                 target_minutes: 10,
+                review_required: false,
             },
         )
         .await

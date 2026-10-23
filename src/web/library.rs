@@ -14,13 +14,14 @@ use axum::response::{Html, IntoResponse, Redirect};
 use axum::Extension;
 use serde::Deserialize;
 
-const STATUSES: [&str; 6] = [
+const STATUSES: [&str; 7] = [
     status::QUEUED,
     status::RUNNING,
     status::READY,
     status::PUBLISHED,
     status::FAILED,
     status::CANCELLED,
+    status::REVIEW,
 ];
 
 fn empty_as_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -75,7 +76,7 @@ impl LibraryQuery {
 pub fn deletable_status(value: &str) -> bool {
     matches!(
         value,
-        status::PUBLISHED | status::READY | status::FAILED | status::CANCELLED
+        status::PUBLISHED | status::READY | status::FAILED | status::CANCELLED | status::REVIEW
     )
 }
 
@@ -387,6 +388,7 @@ mod tests {
                 source_upload_date: None,
                 language: "vi".into(),
                 target_minutes: 10,
+                review_required: false,
             },
         )
         .await
@@ -443,6 +445,8 @@ mod tests {
         assert!(html.contains("Gõ XOA"));
         assert!(html.contains("Xoá đã chọn"));
         assert!(html.contains("disabled"));
+        assert!(html.contains("value=\"review\""));
+        assert!(html.contains("Chờ duyệt"));
     }
 
     #[tokio::test]
@@ -469,6 +473,7 @@ mod tests {
             status::READY,
             status::FAILED,
             status::CANCELLED,
+            status::REVIEW,
         ] {
             assert!(deletable_status(value), "{value} should be deletable");
         }
@@ -502,6 +507,7 @@ mod tests {
                 source_upload_date: None,
                 language: "vi".into(),
                 target_minutes: 10,
+                review_required: false,
             },
         )
         .await
