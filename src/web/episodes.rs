@@ -555,14 +555,49 @@ mod tests {
         assert!(advanced.contains(&format!("action=\"/episodes/{}/reread\"", episode.uuid)));
         assert!(advanced.contains(&format!("hx-post=\"/episodes/{}/reread\"", episode.uuid)));
         assert!(advanced.contains("hx-confirm=\"Bắt đầu tạo audio mới từ script hiện tại?\""));
-        assert!(advanced.contains(&format!("action=\"/episodes/{}/delete\"", episode.uuid)));
-        assert!(advanced.contains(&format!("hx-post=\"/episodes/{}/delete\"", episode.uuid)));
-        assert!(
-            advanced.contains("hx-confirm=\"Xoá vĩnh viễn tập này, transcript và mọi bản audio?\"")
-        );
         assert!(advanced.contains(&format!("action=\"/episodes/{}/publish\"", episode.uuid)));
+        assert!(!advanced.contains(&format!("action=\"/episodes/{}/delete\"", episode.uuid)));
+        assert!(!advanced.contains(&format!("hx-post=\"/episodes/{}/delete\"", episode.uuid)));
+        assert!(html.contains(&format!("action=\"/episodes/{}/delete\"", episode.uuid)));
+        assert!(html.contains(&format!("hx-post=\"/episodes/{}/delete\"", episode.uuid)));
+        assert!(html.contains("hx-confirm=\"Xoá vĩnh viễn tập này, transcript và mọi bản audio?\""));
         assert!(html.contains("<h2>Transcript</h2>"));
         assert!(!advanced.contains("<h2>Transcript</h2>"));
+    }
+
+    #[tokio::test]
+    async fn detail_warns_when_audio_was_generated_from_an_older_script() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        sqlx::query(
+            "UPDATE episodes SET status = 'ready', stage = 'ready', summary_hash = 'new', audio_summary_hash = 'old' WHERE uuid = ?1",
+        )
+        .bind(&episode.uuid)
+        .execute(&context.state.pool)
+        .await
+        .unwrap();
+
+        let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
+        assert!(html.contains("Cần đọc lại"));
+    }
+
+    #[tokio::test]
+    async fn approve_rejects_a_bad_csrf_token() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        set_status(&context, &episode.uuid, status::REVIEW, stage::REVIEW).await;
+
+        let response = send(
+            &context,
+            Method::POST,
+            &format!("/episodes/{}/approve", episode.uuid),
+            Some(form(&[("_csrf", "bad-token")]).into_bytes()),
+            &[],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

@@ -37,6 +37,7 @@
       </div>
       <p class="muted">Audio chưa được tạo. Kiểm tra tóm tắt rồi tiếp tục.</p>
       <div class="summary-text">{{ episode.summary_text.as_deref().unwrap_or("") }}</div>
+      <div class="muted">{{ episode.summary_words() }} từ</div>
       <form method="post" action="/episodes/{{ episode.uuid }}/approve">
         <input type="hidden" name="_csrf" value="{{ csrf }}">
         <button class="btn" type="submit">Tiếp tục tạo audio</button>
@@ -49,6 +50,11 @@
       <audio controls preload="metadata" src="/episodes/{{ episode.uuid }}/audio" style="width:100%" aria-label="Audio tập {{ episode.source_title }}"></audio>
       {% else %}
       <div class="empty-state">Audio chưa sẵn sàng.</div>
+      {% endif %}
+      {% if episode.audio_needs_reread() %}
+      <div class="row" style="margin-top:.75rem"><span class="badge badge-err">Cần đọc lại</span></div>
+      {% else if audio_url.is_some() %}
+      <div class="row" style="margin-top:.75rem"><span class="badge badge-ok">Audio khớp</span></div>
       {% endif %}
       <div class="row between" style="margin-top:.75rem">
         <a href="{{ feed_url }}" target="_blank" rel="noreferrer">Feed URL</a>
@@ -100,11 +106,11 @@
         {% if episode.status == "ready" %}
         <form method="post" action="/episodes/{{ episode.uuid }}/publish"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="btn" type="submit">Phát hành</button></form>
         {% endif %}
-        <form method="post" action="/episodes/{{ episode.uuid }}/delete" hx-post="/episodes/{{ episode.uuid }}/delete" hx-confirm="Xoá vĩnh viễn tập này, transcript và mọi bản audio?">
-          <input type="hidden" name="_csrf" value="{{ csrf }}">
-          <button class="btn btn-danger" type="submit">Xoá tập</button>
-        </form>
       </details>
+      <form method="post" action="/episodes/{{ episode.uuid }}/delete" hx-post="/episodes/{{ episode.uuid }}/delete" hx-confirm="Xoá vĩnh viễn tập này, transcript và mọi bản audio?">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <button class="btn btn-danger" type="submit">Xoá tập</button>
+      </form>
     </div>
   </aside>
 </div>

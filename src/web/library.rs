@@ -76,7 +76,7 @@ impl LibraryQuery {
 pub fn deletable_status(value: &str) -> bool {
     matches!(
         value,
-        status::PUBLISHED | status::READY | status::FAILED | status::CANCELLED
+        status::PUBLISHED | status::READY | status::FAILED | status::CANCELLED | status::REVIEW
     )
 }
 
@@ -473,6 +473,7 @@ mod tests {
             status::READY,
             status::FAILED,
             status::CANCELLED,
+            status::REVIEW,
         ] {
             assert!(deletable_status(value), "{value} should be deletable");
         }

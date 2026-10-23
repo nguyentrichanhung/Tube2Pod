@@ -300,6 +300,14 @@ impl Episode {
             .split_whitespace()
             .count()
     }
+
+    pub fn audio_needs_reread(&self) -> bool {
+        match (&self.summary_hash, &self.audio_summary_hash) {
+            (Some(summary), Some(audio)) => summary != audio,
+            (Some(_), None) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

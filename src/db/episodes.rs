@@ -559,13 +559,14 @@ pub async fn delete(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
 
 pub async fn delete_if_terminal(pool: &SqlitePool, uuid: &str) -> AppResult<Option<Episode>> {
     Ok(sqlx::query_as::<_, Episode>(
-        "DELETE FROM episodes WHERE uuid = ?1 AND status IN (?2,?3,?4,?5) RETURNING *",
+        "DELETE FROM episodes WHERE uuid = ?1 AND status IN (?2,?3,?4,?5,?6) RETURNING *",
     )
     .bind(uuid)
     .bind(status::PUBLISHED)
     .bind(status::READY)
     .bind(status::FAILED)
     .bind(status::CANCELLED)
+    .bind(status::REVIEW)
     .fetch_optional(pool)
     .await?)
 }
@@ -965,6 +966,20 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(get(&pool, &running.uuid).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_if_terminal_removes_review_episode() {
+        let (pool, show_id) = setup().await;
+        let review = create(&pool, episode(show_id, "review-del")).await.unwrap();
+        set_review(&pool, &review.uuid).await.unwrap();
+
+        let deleted = delete_if_terminal(&pool, &review.uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(deleted.uuid, review.uuid);
+        assert!(get(&pool, &review.uuid).await.unwrap().is_none());
     }
 
     #[tokio::test]
