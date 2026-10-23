@@ -12,7 +12,7 @@
 <form method="post" action="/voices/designs/{{ design.id }}/save" class="stack">
   <input type="hidden" name="_csrf" value="{{ csrf }}">
   {% if show_id.is_some() %}<input type="hidden" name="show_id" value="{{ show_id.unwrap() }}">{% endif %}
-  {% if language.is_some() %}<input type="hidden" name="language" value="{{ language.as_deref().unwrap_or("") }}">{% endif %}
+  {% if show_id.is_some() %}<input type="hidden" name="language" value="{{ language.as_deref().unwrap_or("") }}">{% endif %}
   {% for candidate in design.candidates %}
   <div class="voice-option">
     <label class="voice-option-main">

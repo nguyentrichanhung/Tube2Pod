@@ -594,9 +594,13 @@ pub async fn save_design(
     if !design.candidates.iter().any(|c| c.index == form.candidate) {
         return Err(AppError::BadRequest("Bản thử không hợp lệ.".into()));
     }
-    let assignment = match (form.show_id, form.language.as_deref()) {
-        (None, None) => None,
-        (Some(show_id), Some(language)) => {
+    let assignment = match form.show_id {
+        None => None,
+        Some(show_id) => {
+            let language = form
+                .language
+                .as_deref()
+                .ok_or_else(|| AppError::BadRequest("Thiếu ngôn ngữ để gán.".into()))?;
             if !matches!(language, "vi" | "en" | "ko") {
                 return Err(AppError::BadRequest("Ngôn ngữ không được hỗ trợ.".into()));
             }
@@ -611,11 +615,6 @@ pub async fn save_design(
                 }
             }
             Some((show_id, language))
-        }
-        _ => {
-            return Err(AppError::BadRequest(
-                "Thiếu show hoặc ngôn ngữ để gán.".into(),
-            ))
         }
     };
     let voice = client.save_design(id, &name, form.candidate).await?;
@@ -1220,6 +1219,44 @@ mod tests {
                 .unwrap(),
             Some((11, "Giọng mới".to_string()))
         );
+    }
+
+    #[tokio::test]
+    async fn save_design_without_show_saves_unassigned() {
+        let server = MockServer::start().await;
+        mount_ready_design(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/api/voice-designs/3/save"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {"id": 11, "name": "Giọng mới", "status": "measuring", "language": "vi", "preview_url": null, "design": null},
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+        let context = ctx(&server).await;
+
+        let response = request(
+            &context,
+            Method::POST,
+            "/voices/designs/3/save",
+            Some(form(&[
+                ("_csrf", TOKEN),
+                ("name", "Giọng mới"),
+                ("candidate", "1"),
+                ("language", "vi"),
+            ])),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/voices/11"
+        );
+        assert!(shows::voice_assignments(&context.state.pool)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
