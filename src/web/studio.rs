@@ -96,6 +96,7 @@ pub struct CreateForm {
     pub url: String,
     pub show_id: i64,
     pub minutes: i64,
+    pub voice_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,6 +153,22 @@ pub async fn create(
     if let Some(existing) = episodes::get_by_video_id(&state.pool, &video.id).await? {
         return Ok(duplicate_redirect(&existing.uuid));
     }
+    if let Some(voice_id) = form.voice_id {
+        let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+        let voices = client
+            .list_voices()
+            .await
+            .map_err(|e| AppError::Upstream(e.to_string()))?;
+        voices
+            .iter()
+            .find(|voice| {
+                voice.id == voice_id
+                    && voice.status == "ready"
+                    && crate::models::supported_language(voice.language.as_deref().unwrap_or(""))
+                        .is_some()
+            })
+            .ok_or_else(|| AppError::BadRequest("Giọng đọc không còn khả dụng.".into()))?;
+    }
     let episode = match episodes::create(
         &state.pool,
         episodes::NewEpisode {
@@ -177,6 +194,9 @@ pub async fn create(
             return Err(error);
         }
     };
+    if let Some(voice_id) = form.voice_id {
+        episodes::set_voice(&state.pool, &episode.uuid, voice_id).await?;
+    }
     state.notify.notify_one();
     Ok(Redirect::to(&format!("/episodes/{}", episode.uuid)))
 }
@@ -379,6 +399,8 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Notify;
     use tower::ServiceExt;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const WATCH: &str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
@@ -397,6 +419,37 @@ mod tests {
             cfg: Arc::new(cfg),
             notify: Arc::new(Notify::new()),
         }
+    }
+
+    async fn state_with_omnivoice(server: &MockServer) -> AppState {
+        let cfg = Config::from_lookup({
+            let base = server.uri();
+            move |key| match key {
+                "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
+                "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
+                "OMNIVOICE_BASE_URL" => Some(base.clone()),
+                "DATA_DIR" => Some("/tmp/t2p-studio".into()),
+                _ => None,
+            }
+        })
+        .unwrap();
+        AppState {
+            pool: crate::db::test_pool().await,
+            cfg: Arc::new(cfg),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    async fn mount_ready_voice(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/api/voices"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": [{"id": 42, "name": "Phượng", "status": "ready", "language": "vi"}],
+                "error": null
+            })))
+            .mount(server)
+            .await;
     }
 
     async fn create_show(state: &AppState) -> i64 {
@@ -536,6 +589,51 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn create_stores_a_ready_voice_override() {
+        let server = MockServer::start().await;
+        mount_ready_voice(&server).await;
+        let state = state_with_omnivoice(&server).await;
+        let show_id = create_show(&state).await;
+        let body = form(&[
+            ("_csrf", TOKEN),
+            ("url", WATCH),
+            ("show_id", &show_id.to_string()),
+            ("minutes", "10"),
+            ("voice_id", "42"),
+        ]);
+
+        let response = post(&state, "/episodes", body, &[]).await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let episodes = episodes::list(&state.pool, &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(episodes.len(), 1);
+        assert_eq!(episodes[0].voice_id, Some(42));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_an_invalid_voice_without_creating_an_episode() {
+        let server = MockServer::start().await;
+        mount_ready_voice(&server).await;
+        let state = state_with_omnivoice(&server).await;
+        let show_id = create_show(&state).await;
+        let body = form(&[
+            ("_csrf", TOKEN),
+            ("url", WATCH),
+            ("show_id", &show_id.to_string()),
+            ("minutes", "10"),
+            ("voice_id", "99"),
+        ]);
+
+        let response = post(&state, "/episodes", body, &[]).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(episodes::list(&state.pool, &Default::default())
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

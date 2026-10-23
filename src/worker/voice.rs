@@ -22,30 +22,41 @@ pub async fn resolve_voice(
             false,
         )
     })?;
-    let (voice_id, _name) = shows::get_voice(pool, episode.show_id, language)
+    let voices = client
+        .list_voices()
         .await
-        .map_err(|e| PipelineError::from_app(e, "internal"))?
-        .ok_or_else(|| {
+        .map_err(|e| PipelineError::new("tts_unavailable", e.to_string(), true))?;
+    let show_voice = shows::get_voice(pool, episode.show_id, language)
+        .await
+        .map_err(|e| PipelineError::from_app(e, "internal"))?;
+    let override_ready = episode.voice_id.filter(|voice_id| {
+        voices
+            .iter()
+            .any(|voice| voice.id == *voice_id && voice.is_ready_for(language))
+    });
+    let show_ready = show_voice
+        .as_ref()
+        .map(|(voice_id, _)| *voice_id)
+        .filter(|voice_id| {
+            voices
+                .iter()
+                .any(|voice| voice.id == *voice_id && voice.is_ready_for(language))
+        });
+    let voice_id = override_ready.or(show_ready).ok_or_else(|| {
+        if episode.voice_id.is_some() || show_voice.is_some() {
+            PipelineError::new(
+                "voice_not_selected",
+                "Giọng đọc đã chọn không còn khả dụng. Liên hệ admin.",
+                false,
+            )
+        } else {
             PipelineError::new(
                 "voice_not_selected",
                 "Chưa chọn giọng đọc cho ngôn ngữ này. Liên hệ admin.",
                 false,
             )
-        })?;
-    let voices = client
-        .list_voices()
-        .await
-        .map_err(|e| PipelineError::new("tts_unavailable", e.to_string(), true))?;
-    let ready = voices
-        .iter()
-        .any(|voice| voice.id == voice_id && voice.is_ready_for(language));
-    if !ready {
-        return Err(PipelineError::new(
-            "voice_not_selected",
-            "Giọng đọc đã chọn không còn khả dụng. Liên hệ admin.",
-            false,
-        ));
-    }
+        }
+    })?;
     if crate::worker::is_cancelled(pool, &episode.uuid).await {
         return Ok(existing_voice_id);
     }
@@ -164,6 +175,80 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(got.stage, crate::models::stage::SYNTHESIZING);
+    }
+
+    #[tokio::test]
+    async fn uses_the_episode_voice_override_when_ready() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/voices"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": [{"id": 99, "name": "Override", "status": "ready", "language": "vi"}],
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+
+        let pool = db::test_pool().await;
+        let (show, episode) = seed_episode(&pool).await;
+        db::episodes::set_voice(&pool, &episode.uuid, 99)
+            .await
+            .unwrap();
+        shows::upsert_voice(&pool, show.id, "vi", 42, "Show voice")
+            .await
+            .unwrap();
+        let episode = db::episodes::get(&pool, &episode.uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        let client = OmnivoiceClient::new(&omni_cfg(&server));
+        let id = resolve_voice(
+            &pool,
+            &app_cfg(std::path::Path::new("/tmp/t2p-voice-test")),
+            &episode,
+            &client,
+        )
+        .await
+        .unwrap();
+        assert_eq!(id, 99);
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_the_show_voice_when_the_override_is_not_ready() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/voices"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": [{"id": 42, "name": "Show voice", "status": "ready", "language": "vi"}],
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+
+        let pool = db::test_pool().await;
+        let (show, episode) = seed_episode(&pool).await;
+        db::episodes::set_voice(&pool, &episode.uuid, 99)
+            .await
+            .unwrap();
+        shows::upsert_voice(&pool, show.id, "vi", 42, "Show voice")
+            .await
+            .unwrap();
+        let episode = db::episodes::get(&pool, &episode.uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        let client = OmnivoiceClient::new(&omni_cfg(&server));
+        let id = resolve_voice(
+            &pool,
+            &app_cfg(std::path::Path::new("/tmp/t2p-voice-test")),
+            &episode,
+            &client,
+        )
+        .await
+        .unwrap();
+        assert_eq!(id, 42);
     }
 
     #[tokio::test]
