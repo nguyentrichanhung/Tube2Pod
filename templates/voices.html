@@ -44,7 +44,7 @@
                     data-voice-name="{{ row.voice.name.as_deref().unwrap_or("Giọng đọc") }}">Nghe</button>
             {% endif %}
             {% if row.deletable() %}
-            <form method="post" action="/voices/{{ row.voice.id }}/delete" hx-confirm="Xoá giọng này khỏi Omnivoice?">
+            <form method="post" action="/voices/{{ row.voice.id }}/delete" onsubmit="return confirm('Xoá giọng này khỏi Omnivoice?')">
               <input type="hidden" name="_csrf" value="{{ csrf }}">
               <button class="btn btn-danger" type="submit">Xoá</button>
             </form>

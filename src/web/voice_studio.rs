@@ -57,11 +57,16 @@ pub struct VoiceDetailTemplate {
     active: bool,
 }
 
+impl VoiceDetailTemplate {
+    pub fn language_label(&self, language: &str) -> &'static str {
+        language_label(language)
+    }
+}
+
 #[derive(Template)]
 #[template(path = "partials/voice_detail_card.html")]
 pub struct VoiceDetailCardTemplate {
     voice: Voice,
-    #[allow(dead_code)]
     active: bool,
 }
 
@@ -80,6 +85,7 @@ pub async fn index(
         .await
         .map_err(|e| AppError::Upstream(e.to_string()))?;
     let assignments = shows::voice_assignments(&state.pool).await?;
+    let usage = episodes::voice_usage_counts(&state.pool).await?;
     let mut rows = Vec::with_capacity(voices.len());
     for voice in voices {
         let assigned = assignments
@@ -88,7 +94,11 @@ pub async fn index(
             .map(|(_, show_id, language)| (*show_id, String::new(), language.clone()))
             .collect::<Vec<_>>();
         let assigned = enrich_assignments(&state, assigned).await?;
-        let used_by_episodes = episodes::voice_usage_count(&state.pool, voice.id).await?;
+        let used_by_episodes = usage
+            .iter()
+            .find(|(voice_id, _)| *voice_id == voice.id)
+            .map(|(_, count)| *count)
+            .unwrap_or(0);
         rows.push(VoiceRow {
             voice,
             assignments: assigned,
@@ -450,5 +460,41 @@ mod tests {
             response.headers().get(header::CONTENT_TYPE).unwrap(),
             "audio/mpeg"
         );
+    }
+
+    #[tokio::test]
+    async fn detail_card_polls_while_measuring() {
+        let server = MockServer::start().await;
+        mount_voices(
+            &server,
+            serde_json::json!([{"id": 42, "name": "Phượng", "status": "measuring", "language": "vi"}]),
+        )
+        .await;
+        let context = ctx(&server).await;
+
+        let response = request(&context, Method::GET, "/voices/42/card", None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_text(response).await;
+        assert!(html.contains("id=\"voice-detail-card\""));
+        assert!(html.contains("hx-get=\"/voices/42/card\""));
+        assert!(html.contains("hx-trigger=\"every 3s\""));
+        assert!(html.contains("data-voice-preview"));
+    }
+
+    #[tokio::test]
+    async fn detail_card_stops_polling_when_ready() {
+        let server = MockServer::start().await;
+        mount_voices(
+            &server,
+            serde_json::json!([{"id": 42, "name": "Phượng", "status": "ready", "language": "vi"}]),
+        )
+        .await;
+        let context = ctx(&server).await;
+
+        let response = request(&context, Method::GET, "/voices/42/card", None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_text(response).await;
+        assert!(html.contains("id=\"voice-detail-card\""));
+        assert!(!html.contains("hx-trigger"));
     }
 }
