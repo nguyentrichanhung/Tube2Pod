@@ -90,12 +90,27 @@ pub struct StudioQuery {
     pub show: Option<i64>,
 }
 
+fn empty_as_none<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    match value.as_deref().map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(raw) => raw
+            .parse::<i64>()
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateForm {
     pub _csrf: String,
     pub url: String,
     pub show_id: i64,
     pub minutes: i64,
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub voice_id: Option<i64>,
 }
 
@@ -104,6 +119,7 @@ pub struct PreviewForm {
     pub _csrf: String,
     pub url: String,
     pub show_id: Option<i64>,
+    #[serde(default, deserialize_with = "empty_as_none")]
     pub voice_id: Option<i64>,
 }
 
@@ -589,6 +605,21 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn create_accepts_an_empty_voice_override() {
+        let state = test_state().await;
+        let show_id = create_show(&state).await;
+        let body = format!("{}&voice_id=", create_form(show_id));
+
+        let response = post(&state, "/episodes", body, &[]).await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let episodes = episodes::list(&state.pool, &Default::default())
+            .await
+            .unwrap();
+        assert_eq!(episodes.len(), 1);
+        assert_eq!(episodes[0].voice_id, None);
     }
 
     #[tokio::test]
