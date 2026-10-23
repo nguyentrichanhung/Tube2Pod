@@ -108,7 +108,6 @@ struct RawDesignLanguage {
     sample_text: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct DesignLanguageOptions {
     pub min_chars: usize,
@@ -116,7 +115,6 @@ pub struct DesignLanguageOptions {
     pub sample_text: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct DesignCatalog {
     pub genders: Vec<String>,
@@ -129,7 +127,6 @@ pub struct DesignCatalog {
     pub languages: HashMap<String, DesignLanguageOptions>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct DesignRequest {
     pub language: String,
@@ -142,7 +139,6 @@ pub struct DesignRequest {
     pub seed: Option<i64>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct VoiceDesign {
     pub id: i64,
@@ -155,10 +151,10 @@ pub struct VoiceDesign {
     pub candidates: Vec<DesignCandidate>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct DesignCandidate {
     pub index: i64,
+    #[allow(dead_code)]
     #[serde(default)]
     pub audio_url: Option<String>,
 }
@@ -337,7 +333,6 @@ impl OmnivoiceClient {
         })
     }
 
-    #[allow(dead_code)]
     pub async fn create_design(&self, request: &DesignRequest) -> AppResult<VoiceDesign> {
         let mut body = json!({
             "language": request.language,
@@ -365,13 +360,11 @@ impl OmnivoiceClient {
             .await
     }
 
-    #[allow(dead_code)]
     pub async fn design_status(&self, id: i64) -> AppResult<VoiceDesign> {
         self.call(Method::GET, &format!("/api/voice-designs/{id}"), None)
             .await
     }
 
-    #[allow(dead_code)]
     pub async fn candidate_audio(&self, design_id: i64, index: i64) -> AppResult<VoicePreview> {
         self.get_audio(&format!(
             "/api/voice-designs/{design_id}/candidates/{index}/audio"
@@ -379,7 +372,6 @@ impl OmnivoiceClient {
         .await
     }
 
-    #[allow(dead_code)]
     pub async fn save_design(&self, id: i64, name: &str, candidate: i64) -> AppResult<Voice> {
         self.call(
             Method::POST,
@@ -389,7 +381,6 @@ impl OmnivoiceClient {
         .await
     }
 
-    #[allow(dead_code)]
     pub async fn delete_voice(&self, id: i64) -> AppResult<()> {
         self.send::<Value>(Method::DELETE, &format!("/api/voices/{id}"), None)
             .await
