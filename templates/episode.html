@@ -30,10 +30,10 @@
 <div class="grid two">
   <section class="stack">
     {% if episode.status == "review" %}
-    <div class="card stack" role="status">
+    <div class="card stack">
       <div class="row between">
         <h2>Chờ duyệt tóm tắt</h2>
-        <span class="badge">45%</span>
+        <span class="badge">{{ episode.progress_percent() }}%</span>
       </div>
       <p class="muted">Audio chưa được tạo. Kiểm tra tóm tắt rồi tiếp tục.</p>
       <div class="summary-text">{{ episode.summary_text.as_deref().unwrap_or("") }}</div>
@@ -95,12 +95,12 @@
       <details class="stack">
         <summary>Nâng cao</summary>
         {% if episode.status == "published" || episode.status == "ready" || episode.status == "failed" %}
-        <form method="post" action="/episodes/{{ episode.uuid }}/reread" hx-confirm="Bắt đầu tạo audio mới từ script hiện tại?"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="btn btn-secondary" type="submit">Đọc lại</button></form>
+        <form method="post" action="/episodes/{{ episode.uuid }}/reread" hx-post="/episodes/{{ episode.uuid }}/reread" hx-confirm="Bắt đầu tạo audio mới từ script hiện tại?"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="btn btn-secondary" type="submit">Đọc lại</button></form>
         {% endif %}
         {% if episode.status == "ready" %}
         <form method="post" action="/episodes/{{ episode.uuid }}/publish"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="btn" type="submit">Phát hành</button></form>
         {% endif %}
-        <form method="post" action="/episodes/{{ episode.uuid }}/delete" hx-confirm="Xoá vĩnh viễn tập này?">
+        <form method="post" action="/episodes/{{ episode.uuid }}/delete" hx-post="/episodes/{{ episode.uuid }}/delete" hx-confirm="Xoá vĩnh viễn tập này, transcript và mọi bản audio?">
           <input type="hidden" name="_csrf" value="{{ csrf }}">
           <button class="btn btn-danger" type="submit">Xoá tập</button>
         </form>

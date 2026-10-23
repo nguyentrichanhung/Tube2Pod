@@ -553,6 +553,13 @@ mod tests {
             .expect("advanced disclosure end");
         let advanced = &html[start..start + end];
         assert!(advanced.contains(&format!("action=\"/episodes/{}/reread\"", episode.uuid)));
+        assert!(advanced.contains(&format!("hx-post=\"/episodes/{}/reread\"", episode.uuid)));
+        assert!(advanced.contains("hx-confirm=\"Bắt đầu tạo audio mới từ script hiện tại?\""));
+        assert!(advanced.contains(&format!("action=\"/episodes/{}/delete\"", episode.uuid)));
+        assert!(advanced.contains(&format!("hx-post=\"/episodes/{}/delete\"", episode.uuid)));
+        assert!(
+            advanced.contains("hx-confirm=\"Xoá vĩnh viễn tập này, transcript và mọi bản audio?\"")
+        );
         assert!(advanced.contains(&format!("action=\"/episodes/{}/publish\"", episode.uuid)));
         assert!(html.contains("<h2>Transcript</h2>"));
         assert!(!advanced.contains("<h2>Transcript</h2>"));
