@@ -293,21 +293,12 @@ impl Episode {
         self.summary_text.as_deref().unwrap_or("")
     }
 
-    #[allow(dead_code)]
     pub fn summary_words(&self) -> usize {
         self.summary_text
             .as_deref()
             .unwrap_or("")
             .split_whitespace()
             .count()
-    }
-
-    pub fn audio_needs_reread(&self) -> bool {
-        match (&self.summary_hash, &self.audio_summary_hash) {
-            (Some(summary), Some(audio)) => summary != audio,
-            (Some(_), None) => true,
-            _ => false,
-        }
     }
 }
 

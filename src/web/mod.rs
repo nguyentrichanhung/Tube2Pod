@@ -45,9 +45,7 @@ pub fn admin_router(state: AppState) -> Router {
         .route("/episodes", post(studio::create))
         .route(
             "/episodes/{uuid}",
-            get(episodes::detail)
-                .patch(episodes::update_summary)
-                .delete(episodes::delete),
+            get(episodes::detail).delete(episodes::delete),
         )
         .route("/episodes/{uuid}/audio", get(episodes::audio))
         .route("/episodes/{uuid}/progress", get(episodes::progress))
