@@ -118,6 +118,7 @@ pub struct CreateForm {
     pub minutes: i64,
     #[serde(default, deserialize_with = "empty_as_none")]
     pub voice_id: Option<i64>,
+    pub review_required: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,7 +209,7 @@ pub async fn create(
             source_upload_date: None,
             language: show.language.clone(),
             target_minutes: form.minutes,
-            review_required: false,
+            review_required: form.review_required.is_some(),
         },
     )
     .await
@@ -641,6 +642,25 @@ mod tests {
             .unwrap();
         assert_eq!(episodes.len(), 1);
         assert_eq!(episodes[0].voice_id, None);
+    }
+
+    #[tokio::test]
+    async fn create_persists_the_review_checkbox() {
+        let state = test_state().await;
+        let show_id = create_show(&state).await;
+        let body = form(&[
+            ("_csrf", TOKEN),
+            ("url", WATCH),
+            ("show_id", &show_id.to_string()),
+            ("minutes", "10"),
+            ("review_required", "on"),
+        ]);
+        let response = post(&state, "/episodes", body, &[]).await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let episodes = episodes::list(&state.pool, &Default::default())
+            .await
+            .unwrap();
+        assert!(episodes[0].review_required);
     }
 
     #[tokio::test]
