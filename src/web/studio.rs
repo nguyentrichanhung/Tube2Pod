@@ -1,7 +1,7 @@
 use crate::db::{episodes, shows};
 use crate::error::{AppError, AppResult};
 use crate::models::Episode;
-use crate::services::omnivoice::OmnivoiceClient;
+use crate::services::omnivoice::{OmnivoiceClient, Voice};
 use crate::services::ytdlp;
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
@@ -38,6 +38,7 @@ pub struct PreviewTemplate {
     title: String,
     channel: String,
     duration: String,
+    #[allow(dead_code)]
     language: String,
     language_label: String,
     has_captions: bool,
@@ -45,6 +46,7 @@ pub struct PreviewTemplate {
     has_thumbnail: bool,
     voice_name: Option<String>,
     voice_missing: bool,
+    voices: Vec<Voice>,
 }
 
 #[derive(Template)]
@@ -62,6 +64,7 @@ struct PreviewData {
     thumbnail: Option<String>,
     voice_name: Option<String>,
     voice_missing: bool,
+    voices: Vec<Voice>,
 }
 
 impl From<&PreviewData> for PreviewTemplate {
@@ -77,6 +80,7 @@ impl From<&PreviewData> for PreviewTemplate {
             has_thumbnail: data.thumbnail.is_some(),
             voice_name: data.voice_name.clone(),
             voice_missing: data.voice_missing,
+            voices: data.voices.clone(),
         }
     }
 }
@@ -202,6 +206,7 @@ pub async fn preview(
                     "thumbnail": data.thumbnail,
                     "voice_name": data.voice_name,
                     "voice_missing": data.voice_missing,
+                    "voices": data.voices,
                 }))
                 .into_response())
             }
@@ -237,25 +242,26 @@ async fn load_preview(
     let has_captions = language
         .and_then(|lang| ytdlp::choose_caption(&meta, lang))
         .is_some();
-    let (voice_name, voice_missing) = match (form.show_id, language) {
+    let (voice_name, voice_missing, voices) = match (form.show_id, language) {
         (Some(show_id), Some(language)) => {
-            match shows::get_voice(&state.pool, show_id, language).await? {
-                Some((voice_id, name)) => {
-                    let ready = OmnivoiceClient::new(&state.cfg.omnivoice)
-                        .list_voices()
-                        .await
-                        .map(|voices| {
-                            voices
-                                .iter()
-                                .any(|voice| voice.id == voice_id && voice.is_ready_for(language))
-                        })
-                        .unwrap_or(false);
-                    (Some(name), !ready)
-                }
-                None => (None, true),
-            }
+            let catalog = OmnivoiceClient::new(&state.cfg.omnivoice)
+                .list_voices()
+                .await
+                .unwrap_or_default();
+            let selected = shows::get_voice(&state.pool, show_id, language).await?;
+            let voice_name = selected.as_ref().map(|(_, name)| name.clone());
+            let ready = selected.as_ref().is_some_and(|(voice_id, _)| {
+                catalog
+                    .iter()
+                    .any(|voice| voice.id == *voice_id && voice.is_ready_for(language))
+            });
+            let voices = catalog
+                .into_iter()
+                .filter(|voice| voice.is_ready_for(language))
+                .collect();
+            (voice_name, !ready, voices)
         }
-        _ => (None, false),
+        _ => (None, false, Vec::new()),
     };
     Ok(PreviewData {
         title: meta.title,
@@ -266,6 +272,7 @@ async fn load_preview(
         thumbnail: meta.thumbnail,
         voice_name,
         voice_missing,
+        voices,
     })
 }
 
@@ -693,6 +700,42 @@ mod tests {
                 "Không xem trước được video. Vui lòng thử lại sau."
             );
         }
+    }
+
+    #[test]
+    fn preview_renders_the_detected_language_voice_options() {
+        use crate::services::omnivoice::{Voice, VoiceDesignInfo};
+
+        let template = PreviewTemplate {
+            title: "Video".into(),
+            channel: "Channel".into(),
+            duration: "10:00".into(),
+            language: "vi".into(),
+            language_label: "Tiếng Việt".into(),
+            has_captions: true,
+            thumbnail: String::new(),
+            has_thumbnail: false,
+            voice_name: Some("Phượng".into()),
+            voice_missing: false,
+            voices: vec![Voice {
+                id: 42,
+                name: Some("Phượng".into()),
+                status: "ready".into(),
+                language: Some("vi".into()),
+                preview_url: None,
+                design: Some(VoiceDesignInfo {
+                    gender: Some("female".into()),
+                    age: Some("middle_aged".into()),
+                    ..Default::default()
+                }),
+            }],
+        };
+        let html = template.render().unwrap();
+        assert!(html.contains("name=\"voice_id\""));
+        assert!(html.contains("Theo show"));
+        assert!(html.contains("Phượng"));
+        assert!(html.contains("Nữ"));
+        assert!(html.contains("Trung niên"));
     }
 
     #[tokio::test]
