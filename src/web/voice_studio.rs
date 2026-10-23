@@ -148,6 +148,8 @@ pub struct DesignPageTemplate {
     language_label: &'static str,
     show_id: Option<i64>,
     show_title: Option<String>,
+    poll_url: String,
+    retry_url: String,
 }
 
 #[derive(Template)]
@@ -157,6 +159,8 @@ pub struct DesignCardTemplate {
     design: VoiceDesign,
     show_id: Option<i64>,
     language: Option<String>,
+    poll_url: String,
+    retry_url: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -446,6 +450,41 @@ pub async fn create_design(
     Ok(Redirect::to(&location))
 }
 
+fn design_card_url(id: i64, show_id: Option<i64>, language: &str) -> String {
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("language", language);
+    if let Some(show_id) = show_id {
+        serializer.append_pair("show", &show_id.to_string());
+    }
+    format!("/voices/designs/{id}/card?{}", serializer.finish())
+}
+
+fn design_retry_url(show_id: Option<i64>, language: Option<&str>) -> String {
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    if let Some(show_id) = show_id {
+        serializer.append_pair("show", &show_id.to_string());
+    }
+    if let Some(language) = language {
+        serializer.append_pair("language", language);
+    }
+    let query = serializer.finish();
+    if query.is_empty() {
+        "/voices/new".into()
+    } else {
+        format!("/voices/new?{query}")
+    }
+}
+
+fn log_design_failure(design: &VoiceDesign) {
+    if design.status == "failed" {
+        tracing::warn!(
+            design_id = design.id,
+            error = ?design.error,
+            "voice design failed"
+        );
+    }
+}
+
 pub async fn design(
     State(state): State<AppState>,
     Extension(token): Extension<CsrfToken>,
@@ -462,6 +501,9 @@ pub async fn design(
         .clone()
         .or_else(|| design.language.clone())
         .unwrap_or_else(|| "vi".into());
+    log_design_failure(&design);
+    let poll_url = design_card_url(design.id, query.show, &language);
+    let retry_url = design_retry_url(query.show, Some(&language));
     let show_title = match query.show {
         Some(show_id) => shows::get(&state.pool, show_id)
             .await?
@@ -476,6 +518,8 @@ pub async fn design(
             language_label: language_label(&language),
             show_id: query.show,
             show_title,
+            poll_url,
+            retry_url,
         }
         .render()?,
     ))
@@ -492,12 +536,18 @@ pub async fn design_card(
         .design_status(id)
         .await
         .map_err(|e| AppError::Upstream(e.to_string()))?;
+    let language = query.language.clone().or_else(|| design.language.clone());
+    log_design_failure(&design);
+    let poll_url = design_card_url(design.id, query.show, language.as_deref().unwrap_or("vi"));
+    let retry_url = design_retry_url(query.show, language.as_deref());
     Ok(Html(
         DesignCardTemplate {
             csrf: token.0,
             design,
             show_id: query.show,
-            language: query.language,
+            language,
+            poll_url,
+            retry_url,
         }
         .render()?,
     ))
@@ -544,14 +594,32 @@ pub async fn save_design(
     if !design.candidates.iter().any(|c| c.index == form.candidate) {
         return Err(AppError::BadRequest("Bản thử không hợp lệ.".into()));
     }
-    let voice = client.save_design(id, &name, form.candidate).await?;
-    if let (Some(show_id), Some(language)) = (form.show_id, form.language.as_deref()) {
-        if !matches!(language, "vi" | "en" | "ko") {
-            return Err(AppError::BadRequest("Ngôn ngữ không được hỗ trợ.".into()));
+    let assignment = match (form.show_id, form.language.as_deref()) {
+        (None, None) => None,
+        (Some(show_id), Some(language)) => {
+            if !matches!(language, "vi" | "en" | "ko") {
+                return Err(AppError::BadRequest("Ngôn ngữ không được hỗ trợ.".into()));
+            }
+            shows::get(&state.pool, show_id)
+                .await?
+                .ok_or(AppError::NotFound)?;
+            if let Some(expected) = design.language.as_deref() {
+                if expected != language {
+                    return Err(AppError::BadRequest(
+                        "Ngôn ngữ không khớp với thiết kế.".into(),
+                    ));
+                }
+            }
+            Some((show_id, language))
         }
-        shows::get(&state.pool, show_id)
-            .await?
-            .ok_or(AppError::NotFound)?;
+        _ => {
+            return Err(AppError::BadRequest(
+                "Thiếu show hoặc ngôn ngữ để gán.".into(),
+            ))
+        }
+    };
+    let voice = client.save_design(id, &name, form.candidate).await?;
+    if let Some((show_id, language)) = assignment {
         shows::upsert_voice(&state.pool, show_id, language, voice.id, &name).await?;
     }
     Ok(Redirect::to(&format!("/voices/{}", voice.id)))
@@ -1172,5 +1240,115 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn save_design_validates_assignment_before_creating_voice() {
+        let server = MockServer::start().await;
+        mount_ready_design(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/api/voice-designs/3/save"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {"id": 11, "name": "Giọng mới", "status": "measuring", "language": "vi", "preview_url": null, "design": null},
+                "error": null
+            })))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let context = ctx(&server).await;
+        let show = shows::create(
+            &context.state.pool,
+            shows::NewShow {
+                title: "Show".into(),
+                ..shows::NewShow::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let missing_language = request(
+            &context,
+            Method::POST,
+            "/voices/designs/3/save",
+            Some(form(&[
+                ("_csrf", TOKEN),
+                ("name", "Giọng mới"),
+                ("candidate", "1"),
+                ("show_id", &show.id.to_string()),
+            ])),
+        )
+        .await;
+        assert_eq!(missing_language.status(), StatusCode::BAD_REQUEST);
+
+        let unknown_show = request(
+            &context,
+            Method::POST,
+            "/voices/designs/3/save",
+            Some(form(&[
+                ("_csrf", TOKEN),
+                ("name", "Giọng mới"),
+                ("candidate", "1"),
+                ("show_id", "999999"),
+                ("language", "vi"),
+            ])),
+        )
+        .await;
+        assert_eq!(unknown_show.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn save_design_rejects_not_ready_design() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/voice-designs/3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {
+                    "id": 3, "status": "queued", "error": null, "language": "vi",
+                    "candidates": []
+                },
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+        let context = ctx(&server).await;
+
+        let response = request(
+            &context,
+            Method::POST,
+            "/voices/designs/3/save",
+            Some(form(&[
+                ("_csrf", TOKEN),
+                ("name", "Giọng mới"),
+                ("candidate", "0"),
+            ])),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn failed_design_card_hides_upstream_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/voice-designs/3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {
+                    "id": 3, "status": "failed", "error": "upstream internal detail",
+                    "language": "vi", "candidates": []
+                },
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+        let context = ctx(&server).await;
+
+        let response = request(&context, Method::GET, "/voices/designs/3/card", None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_text(response).await;
+        assert!(!html.contains("upstream internal detail"));
+        assert!(html.contains("Không tạo được giọng. Vui lòng thử lại hoặc liên hệ admin."));
     }
 }

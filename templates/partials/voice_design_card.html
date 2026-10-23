@@ -1,8 +1,8 @@
 <div id="design-card" class="card stack" data-voice-preview
-     {% if design.status != "ready" && design.status != "failed" %}hx-get="/voices/designs/{{ design.id }}/card?language={{ language.as_deref().unwrap_or("vi") }}{% if show_id.is_some() %}&show={{ show_id.unwrap() }}{% endif %}" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+     {% if design.status != "ready" && design.status != "failed" %}hx-get="{{ poll_url }}" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
 {% if design.status == "failed" %}
-<div class="notice error" role="alert">Không tạo được giọng. {{ design.error.as_deref().unwrap_or("Vui lòng thử lại.") }}</div>
-<a class="btn btn-secondary" href="/voices/new">Tạo lại</a>
+<div class="notice error" role="alert">Không tạo được giọng. Vui lòng thử lại hoặc liên hệ admin.</div>
+<a class="btn btn-secondary" href="{{ retry_url }}">Tạo lại</a>
 {% else if design.status == "ready" %}
 <h2>Chọn một bản thử</h2>
 <div class="voice-preview-bar">
