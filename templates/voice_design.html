@@ -53,15 +53,14 @@
   </label>
   <label>Mức sáng tạo
     <select name="level">
-      <option value="stable">Ổn định</option>
-      <option value="balanced" selected>Cân bằng</option>
-      <option value="creative">Sáng tạo</option>
-      <option value="wild">Tự do</option>
+      {% for level in levels %}
+      <option value="{{ level }}" {% if level.as_str() == default_level.as_str() %}selected{% endif %}>{{ self.level_label(level) }}</option>
+      {% endfor %}
     </select>
   </label>
   <label>Nội dung mẫu
-    <textarea name="text" id="design-text" required>{{ languages[0].sample_text }}</textarea>
-    <span class="field-help" id="design-limits">Từ {{ languages[0].min_chars }} đến {{ languages[0].max_chars }} ký tự.</span>
+    <textarea name="text" id="design-text" required>{{ sample_text }}</textarea>
+    <span class="field-help" id="design-limits">Từ {{ min_chars }} đến {{ max_chars }} ký tự.</span>
   </label>
   <div class="row between">
     <span class="muted">Tên gợi ý: {{ default_name }}</span>
@@ -80,6 +79,7 @@
       if (limits) limits.textContent = "Từ " + option.dataset.min + " đến " + option.dataset.max + " ký tự.";
     }
     select.addEventListener("change", refresh);
+    refresh();
   })();
 </script>
 {% endblock %}

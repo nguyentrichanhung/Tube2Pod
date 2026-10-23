@@ -108,8 +108,26 @@ pub struct DesignFormTemplate {
     csrf: String,
     languages: Vec<LanguageChoice>,
     selected_language: String,
+    sample_text: String,
+    min_chars: usize,
+    max_chars: usize,
+    levels: Vec<String>,
+    default_level: String,
     default_name: String,
     show_id: Option<i64>,
+}
+
+impl DesignFormTemplate {
+    pub fn level_label(&self, level: &str) -> String {
+        match level {
+            "stable" => "Ổn định",
+            "balanced" => "Cân bằng",
+            "creative" => "Sáng tạo",
+            "wild" => "Tự do",
+            other => other,
+        }
+        .to_string()
+    }
 }
 
 pub async fn index(
@@ -281,6 +299,11 @@ pub async fn new_design(
             .map(|show| show.title),
         None => None,
     };
+    let selected = catalog
+        .languages
+        .get(&selected_language)
+        .cloned()
+        .unwrap_or_default();
     let languages = ["vi", "en", "ko"]
         .into_iter()
         .map(|code| {
@@ -306,6 +329,11 @@ pub async fn new_design(
             csrf: token.0,
             languages,
             selected_language,
+            sample_text: selected.sample_text,
+            min_chars: selected.min_chars,
+            max_chars: selected.max_chars,
+            levels: catalog.levels,
+            default_level: catalog.default_level,
             default_name,
             show_id: query.show,
         }
@@ -358,6 +386,9 @@ pub async fn create_design(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(catalog.default_level.as_str());
+    if !catalog.level_params.contains_key(level) {
+        return Err(AppError::BadRequest("Mức sáng tạo không hợp lệ.".into()));
+    }
     let params = catalog.level_params.get(level).cloned();
     let request = DesignRequest {
         language: form.language.clone(),
@@ -784,5 +815,83 @@ mod tests {
         )
         .await;
         assert_eq!(bad_csrf.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn design_form_uses_selected_language_sample() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/voice-designs/options"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {
+                    "genders": ["female"], "ages": ["middle_aged"], "pitches": ["low"], "styles": ["whisper"],
+                    "levels": {"balanced": {"position_temperature": 5.0}},
+                    "default_level": "balanced",
+                    "languages": {
+                        "vi": {"min_chars": 5, "max_chars": 50, "sample_text": "Xin chào"},
+                        "en": {"min_chars": 12, "max_chars": 40, "sample_text": "English sample"},
+                        "ko": {"min_chars": 3, "max_chars": 20, "sample_text": "안녕"}
+                    }
+                },
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+        let context = ctx(&server).await;
+
+        let response = request(&context, Method::GET, "/voices/new?language=en", None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_text(response).await;
+        assert!(html.contains("required>English sample</textarea>"));
+        assert!(html.contains("Từ 12 đến 40 ký tự."));
+    }
+
+    #[tokio::test]
+    async fn create_design_rejects_unknown_level_without_creating() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/voice-designs/options"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {
+                    "genders": ["female"], "ages": ["middle_aged"], "pitches": ["low"], "styles": ["whisper"],
+                    "levels": {"balanced": {"position_temperature": 5.0}},
+                    "default_level": "balanced",
+                    "languages": {"vi": {"min_chars": 5, "max_chars": 50, "sample_text": "Xin chào"}}
+                },
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/voice-designs"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {"id": 3, "status": "queued", "error": null, "language": "vi", "candidates": []},
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+        let context = ctx(&server).await;
+
+        let response = request(
+            &context,
+            Method::POST,
+            "/voices/designs",
+            Some(form(&[
+                ("_csrf", TOKEN),
+                ("language", "vi"),
+                ("level", "wild"),
+                ("text", "Xin chào các bạn"),
+            ])),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let requests = server.received_requests().await.unwrap();
+        assert!(!requests
+            .iter()
+            .any(|request| request.method.as_str() == "POST"
+                && request.url.path() == "/api/voice-designs"));
     }
 }
