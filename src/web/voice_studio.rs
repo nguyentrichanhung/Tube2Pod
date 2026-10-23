@@ -1,12 +1,12 @@
 use crate::db::{episodes, shows};
 use crate::error::{AppError, AppResult};
 use crate::models::language_label;
-use crate::services::omnivoice::{OmnivoiceClient, Voice};
+use crate::services::omnivoice::{DesignRequest, OmnivoiceClient, Voice};
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
 use askama::Template;
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue};
 use axum::response::{Html, Redirect, Response};
 use axum::Extension;
@@ -73,6 +73,43 @@ pub struct VoiceDetailCardTemplate {
 #[derive(Debug, Deserialize)]
 pub struct DeleteVoiceForm {
     pub _csrf: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DesignForm {
+    pub _csrf: String,
+    pub language: String,
+    pub gender: Option<String>,
+    pub age: Option<String>,
+    pub pitch: Option<String>,
+    pub style: Option<String>,
+    pub level: Option<String>,
+    pub text: String,
+    pub show_id: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct DesignQuery {
+    pub show: Option<i64>,
+    pub language: Option<String>,
+}
+
+pub struct LanguageChoice {
+    pub code: &'static str,
+    pub label: &'static str,
+    pub sample_text: String,
+    pub min_chars: usize,
+    pub max_chars: usize,
+}
+
+#[derive(Template)]
+#[template(path = "voice_design.html")]
+pub struct DesignFormTemplate {
+    csrf: String,
+    languages: Vec<LanguageChoice>,
+    selected_language: String,
+    default_name: String,
+    show_id: Option<i64>,
 }
 
 pub async fn index(
@@ -220,6 +257,127 @@ pub async fn delete(
     let client = OmnivoiceClient::new(&state.cfg.omnivoice);
     client.delete_voice(id).await?;
     Ok(Redirect::to("/voices?deleted=1"))
+}
+
+pub async fn new_design(
+    State(state): State<AppState>,
+    Extension(token): Extension<CsrfToken>,
+    Query(query): Query<DesignQuery>,
+) -> AppResult<Html<String>> {
+    let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+    let catalog = client
+        .design_catalog()
+        .await
+        .map_err(|e| AppError::Upstream(e.to_string()))?;
+    let selected_language = query
+        .language
+        .as_deref()
+        .filter(|value| matches!(*value, "vi" | "en" | "ko"))
+        .unwrap_or("vi")
+        .to_string();
+    let show_title = match query.show {
+        Some(show_id) => shows::get(&state.pool, show_id)
+            .await?
+            .map(|show| show.title),
+        None => None,
+    };
+    let languages = ["vi", "en", "ko"]
+        .into_iter()
+        .map(|code| {
+            let options = catalog.languages.get(code).cloned().unwrap_or_default();
+            LanguageChoice {
+                code,
+                label: language_label(code),
+                sample_text: options.sample_text,
+                min_chars: options.min_chars,
+                max_chars: options.max_chars,
+            }
+        })
+        .collect();
+    let default_name = match &show_title {
+        Some(title) => format!(
+            "Tube2Pod · {title} · {}",
+            language_label(&selected_language)
+        ),
+        None => format!("Tube2Pod · {}", language_label(&selected_language)),
+    };
+    Ok(Html(
+        DesignFormTemplate {
+            csrf: token.0,
+            languages,
+            selected_language,
+            default_name,
+            show_id: query.show,
+        }
+        .render()?,
+    ))
+}
+
+pub async fn create_design(
+    State(state): State<AppState>,
+    Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
+    Form(form): Form<DesignForm>,
+) -> AppResult<Redirect> {
+    csrf::verify(&token, &headers, &form._csrf)?;
+    if !matches!(form.language.as_str(), "vi" | "en" | "ko") {
+        return Err(AppError::BadRequest("Ngôn ngữ không được hỗ trợ.".into()));
+    }
+    let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+    let catalog = client
+        .design_catalog()
+        .await
+        .map_err(|e| AppError::Upstream(e.to_string()))?;
+    let language = catalog
+        .languages
+        .get(&form.language)
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("Ngôn ngữ không được hỗ trợ.".into()))?;
+    let text = form.text.trim().to_string();
+    let length = text.chars().count();
+    if length < language.min_chars || length > language.max_chars {
+        return Err(AppError::BadRequest(format!(
+            "Nội dung mẫu phải từ {} đến {} ký tự.",
+            language.min_chars, language.max_chars
+        )));
+    }
+    for (label, allowed, value) in [
+        ("giới tính", &catalog.genders, &form.gender),
+        ("độ tuổi", &catalog.ages, &form.age),
+        ("cao độ", &catalog.pitches, &form.pitch),
+        ("phong cách", &catalog.styles, &form.style),
+    ] {
+        if let Some(value) = value {
+            if !value.trim().is_empty() && !allowed.contains(value) {
+                return Err(AppError::BadRequest(format!("{label} không hợp lệ.")));
+            }
+        }
+    }
+    let level = form
+        .level
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(catalog.default_level.as_str());
+    let params = catalog.level_params.get(level).cloned();
+    let request = DesignRequest {
+        language: form.language.clone(),
+        text,
+        gender: form.gender.filter(|value| !value.trim().is_empty()),
+        age: form.age.filter(|value| !value.trim().is_empty()),
+        pitch: form.pitch.filter(|value| !value.trim().is_empty()),
+        style: form.style.filter(|value| !value.trim().is_empty()),
+        params,
+        seed: None,
+    };
+    let design = client
+        .create_design(&request)
+        .await
+        .map_err(|e| AppError::Upstream(e.to_string()))?;
+    let mut location = format!("/voices/designs/{}", design.id);
+    if let Some(show_id) = form.show_id {
+        location.push_str(&format!("?show={show_id}&language={}", form.language));
+    }
+    Ok(Redirect::to(&location))
 }
 
 pub fn audio_response(preview: crate::services::omnivoice::VoicePreview) -> AppResult<Response> {
@@ -496,5 +654,135 @@ mod tests {
         let html = body_text(response).await;
         assert!(html.contains("id=\"voice-detail-card\""));
         assert!(!html.contains("hx-trigger"));
+    }
+
+    #[tokio::test]
+    async fn design_form_renders_language_samples() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/voice-designs/options"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {
+                    "genders": ["male", "female"],
+                    "ages": ["young_adult", "middle_aged"],
+                    "pitches": ["low", "moderate"],
+                    "styles": ["whisper"],
+                    "levels": {"balanced": {"position_temperature": 5.0}},
+                    "default_level": "balanced",
+                    "languages": {
+                        "vi": {"min_chars": 10, "max_chars": 200, "sample_text": "Xin chào"},
+                        "en": {"min_chars": 10, "max_chars": 200, "sample_text": "Hello"},
+                        "ko": {"min_chars": 5, "max_chars": 100, "sample_text": "안녕"}
+                    }
+                },
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+        let context = ctx(&server).await;
+
+        let response = request(&context, Method::GET, "/voices/new", None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_text(response).await;
+        assert!(html.contains("Xin chào"));
+        assert!(html.contains("balanced"));
+        assert!(html.contains("Tạo giọng"));
+    }
+
+    #[tokio::test]
+    async fn create_design_validates_and_redirects() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/voice-designs/options"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {
+                    "genders": ["female"], "ages": ["middle_aged"], "pitches": ["low"], "styles": ["whisper"],
+                    "levels": {"balanced": {"position_temperature": 5.0}},
+                    "default_level": "balanced",
+                    "languages": {"vi": {"min_chars": 5, "max_chars": 50, "sample_text": "Xin chào"}}
+                },
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/voice-designs"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {"id": 3, "status": "queued", "error": null, "language": "vi", "candidates": []},
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+        let context = ctx(&server).await;
+
+        let response = request(
+            &context,
+            Method::POST,
+            "/voices/designs",
+            Some(form(&[
+                ("_csrf", TOKEN),
+                ("language", "vi"),
+                ("gender", "female"),
+                ("age", "middle_aged"),
+                ("pitch", "low"),
+                ("style", "whisper"),
+                ("level", "balanced"),
+                ("text", "Xin chào các bạn"),
+            ])),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/voices/designs/3"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_design_rejects_bad_text_and_csrf() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/voice-designs/options"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {
+                    "genders": ["female"], "ages": ["middle_aged"], "pitches": ["low"], "styles": [],
+                    "levels": {"balanced": {}}, "default_level": "balanced",
+                    "languages": {"vi": {"min_chars": 5, "max_chars": 10, "sample_text": "Xin chào"}}
+                },
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+        let context = ctx(&server).await;
+
+        let too_long = request(
+            &context,
+            Method::POST,
+            "/voices/designs",
+            Some(form(&[
+                ("_csrf", TOKEN),
+                ("language", "vi"),
+                ("text", "nội dung quá dài cho giới hạn"),
+            ])),
+        )
+        .await;
+        assert_eq!(too_long.status(), StatusCode::BAD_REQUEST);
+
+        let bad_csrf = request(
+            &context,
+            Method::POST,
+            "/voices/designs",
+            Some(form(&[
+                ("_csrf", "deadbeef"),
+                ("language", "vi"),
+                ("text", "Xin chào"),
+            ])),
+        )
+        .await;
+        assert_eq!(bad_csrf.status(), StatusCode::FORBIDDEN);
     }
 }

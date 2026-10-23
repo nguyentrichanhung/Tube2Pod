@@ -61,6 +61,8 @@ pub fn admin_router(state: AppState) -> Router {
         .route("/library", get(library::index))
         .route("/api/library/rows", get(library::rows))
         .route("/voices", get(voice_studio::index))
+        .route("/voices/new", get(voice_studio::new_design))
+        .route("/voices/designs", post(voice_studio::create_design))
         .route("/voices/{id}", get(voice_studio::detail))
         .route("/voices/{id}/card", get(voice_studio::detail_card))
         .route("/voices/{id}/preview", get(voice_studio::preview))

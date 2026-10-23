@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="eyebrow">Voice Studio</div>
+    <h1>Tạo giọng mới</h1>
+    <p class="muted">Chọn ngôn ngữ, giọng và mẫu đọc. Omnivoice sẽ tạo 3 bản thử.</p>
+  </div>
+  <a class="btn btn-secondary" href="/voices">Về danh sách</a>
+</div>
+<form method="post" action="/voices/designs" class="card stack">
+  <input type="hidden" name="_csrf" value="{{ csrf }}">
+  {% if show_id.is_some() %}<input type="hidden" name="show_id" value="{{ show_id.unwrap() }}">{% endif %}
+  <label>Ngôn ngữ
+    <select name="language" id="design-language">
+      {% for language in languages %}
+      <option value="{{ language.code }}" data-sample="{{ language.sample_text }}" data-min="{{ language.min_chars }}" data-max="{{ language.max_chars }}" {% if language.code == selected_language %}selected{% endif %}>{{ language.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Giới tính
+    <select name="gender">
+      <option value="">Mặc định</option>
+      <option value="female">Nữ</option>
+      <option value="male">Nam</option>
+    </select>
+  </label>
+  <label>Độ tuổi
+    <select name="age">
+      <option value="">Mặc định</option>
+      <option value="child">Trẻ em</option>
+      <option value="teenager">Thiếu niên</option>
+      <option value="young_adult">Thanh niên</option>
+      <option value="middle_aged">Trung niên</option>
+      <option value="elderly">Lớn tuổi</option>
+    </select>
+  </label>
+  <label>Cao độ
+    <select name="pitch">
+      <option value="">Mặc định</option>
+      <option value="very_low">Rất thấp</option>
+      <option value="low">Thấp</option>
+      <option value="moderate">Vừa</option>
+      <option value="high">Cao</option>
+      <option value="very_high">Rất cao</option>
+    </select>
+  </label>
+  <label>Phong cách
+    <select name="style">
+      <option value="">Mặc định</option>
+      <option value="whisper">Thì thầm</option>
+    </select>
+  </label>
+  <label>Mức sáng tạo
+    <select name="level">
+      <option value="stable">Ổn định</option>
+      <option value="balanced" selected>Cân bằng</option>
+      <option value="creative">Sáng tạo</option>
+      <option value="wild">Tự do</option>
+    </select>
+  </label>
+  <label>Nội dung mẫu
+    <textarea name="text" id="design-text" required>{{ languages[0].sample_text }}</textarea>
+    <span class="field-help" id="design-limits">Từ {{ languages[0].min_chars }} đến {{ languages[0].max_chars }} ký tự.</span>
+  </label>
+  <div class="row between">
+    <span class="muted">Tên gợi ý: {{ default_name }}</span>
+    <button class="btn" type="submit">Tạo giọng</button>
+  </div>
+</form>
+<script>
+  (function () {
+    const select = document.getElementById("design-language");
+    const text = document.getElementById("design-text");
+    const limits = document.getElementById("design-limits");
+    if (!select || !text) return;
+    function refresh() {
+      const option = select.selectedOptions[0];
+      text.value = option.dataset.sample || "";
+      if (limits) limits.textContent = "Từ " + option.dataset.min + " đến " + option.dataset.max + " ký tự.";
+    }
+    select.addEventListener("change", refresh);
+  })();
+</script>
+{% endblock %}

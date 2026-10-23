@@ -104,6 +104,7 @@
       <button class="btn btn-secondary"
               hx-get="/shows/{{ show.id }}/voices/{{ row.language }}"
               hx-target="#voice-picker" hx-swap="innerHTML">Chọn giọng</button>
+      <a class="btn btn-secondary" href="/voices/new?show={{ show.id }}&language={{ row.language }}">Tạo giọng mới</a>
     </div>
   </div>
   {% endfor %}
