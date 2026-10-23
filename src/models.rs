@@ -114,7 +114,9 @@ pub struct Episode {
     pub transcript_kind: Option<String>,
     pub transcript_chars: Option<i64>,
     pub summary_text: Option<String>,
+    pub audio_script: Option<String>,
     pub summary_edited_at: Option<i64>,
+    pub review_required: bool,
     pub summary_hash: Option<String>,
     pub target_minutes: i64,
     pub stage: String,
@@ -286,6 +288,14 @@ impl Episode {
         self.summary_text.as_deref().unwrap_or("")
     }
 
+    pub fn summary_words(&self) -> usize {
+        self.summary_text
+            .as_deref()
+            .unwrap_or("")
+            .split_whitespace()
+            .count()
+    }
+
     pub fn audio_needs_reread(&self) -> bool {
         match (&self.summary_hash, &self.audio_summary_hash) {
             (Some(summary), Some(audio)) => summary != audio,
@@ -413,6 +423,53 @@ mod tests {
         let debug = format!("{show:?}");
         assert!(debug.contains("redacted"), "{debug}");
         assert!(!debug.contains("super-secret-token"), "{debug}");
+    }
+
+    #[test]
+    fn summary_words_counts_words_in_the_display_summary() {
+        let episode = Episode {
+            uuid: "u1".into(),
+            show_id: 1,
+            video_id: "v1".into(),
+            source_url: "https://example.test/v1".into(),
+            source_title: "Video".into(),
+            source_channel: "Channel".into(),
+            source_duration_s: None,
+            source_thumbnail_url: None,
+            source_upload_date: None,
+            language: "vi".into(),
+            transcript_path: None,
+            transcript_kind: None,
+            transcript_chars: None,
+            summary_text: Some("Một hai ba.".into()),
+            audio_script: None,
+            summary_edited_at: None,
+            summary_hash: None,
+            review_required: false,
+            target_minutes: 10,
+            stage: stage::READY.into(),
+            status: status::READY.into(),
+            progress_json: None,
+            error_code: None,
+            error_message: None,
+            attempts: 0,
+            next_attempt_at: None,
+            voice_id: None,
+            voice_design_id: None,
+            active_take_id: None,
+            take_ids_json: None,
+            chunk_count: None,
+            chunk_done: 0,
+            audio_version: 1,
+            audio_path: None,
+            audio_bytes: None,
+            audio_duration_s: None,
+            audio_summary_hash: None,
+            published_at: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        assert_eq!(episode.summary_words(), 3);
     }
 
     #[test]

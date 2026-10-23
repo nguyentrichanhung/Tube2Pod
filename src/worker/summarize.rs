@@ -67,7 +67,7 @@ pub async fn summarize_episode(
     );
     let script = summarize::sanitize_for_tts(&script);
     let hash = crate::models::sha256_hex(&script);
-    episodes::set_summary(pool, &episode.uuid, &script, &hash)
+    episodes::set_summary(pool, &episode.uuid, &script, &script, &hash)
         .await
         .map_err(|e| PipelineError::from_app(e, "internal"))?;
     episodes::set_stage(pool, &episode.uuid, stage::VOICING)
@@ -113,6 +113,7 @@ mod tests {
                 source_upload_date: None,
                 language: "vi".into(),
                 target_minutes: 10,
+                review_required: false,
             },
         )
         .await

@@ -14,6 +14,7 @@ pub struct NewEpisode {
     pub source_upload_date: Option<String>,
     pub language: String,
     pub target_minutes: i64,
+    pub review_required: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -32,8 +33,8 @@ pub async fn create(pool: &SqlitePool, new: NewEpisode) -> AppResult<Episode> {
         "INSERT INTO episodes (
             uuid, show_id, video_id, source_url, source_title, source_channel,
             source_duration_s, source_thumbnail_url, source_upload_date, language,
-            target_minutes, stage, status, created_at, updated_at
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?14)
+            target_minutes, review_required, stage, status, created_at, updated_at
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15)
          RETURNING *",
     )
     .bind(uuid)
@@ -47,6 +48,7 @@ pub async fn create(pool: &SqlitePool, new: NewEpisode) -> AppResult<Episode> {
     .bind(new.source_upload_date)
     .bind(new.language)
     .bind(new.target_minutes)
+    .bind(new.review_required)
     .bind(stage::QUEUED)
     .bind(status::QUEUED)
     .bind(now)
@@ -221,14 +223,21 @@ pub async fn set_fetched(pool: &SqlitePool, uuid: &str, meta: FetchedMeta<'_>) -
     Ok(())
 }
 
-pub async fn set_summary(pool: &SqlitePool, uuid: &str, text: &str, hash: &str) -> AppResult<()> {
+pub async fn set_summary(
+    pool: &SqlitePool,
+    uuid: &str,
+    display_summary: &str,
+    audio_script: &str,
+    audio_hash: &str,
+) -> AppResult<()> {
     sqlx::query(
-        "UPDATE episodes SET summary_text = ?1, summary_hash = ?2, summary_edited_at = NULL,
-            updated_at = ?3
-         WHERE uuid = ?4",
+        "UPDATE episodes SET summary_text = ?1, audio_script = ?2, summary_hash = ?3,
+            summary_edited_at = NULL, updated_at = ?4
+         WHERE uuid = ?5",
     )
-    .bind(text)
-    .bind(hash)
+    .bind(display_summary)
+    .bind(audio_script)
+    .bind(audio_hash)
     .bind(now_ts())
     .bind(uuid)
     .execute(pool)
@@ -581,6 +590,7 @@ mod tests {
             source_upload_date: None,
             language: "vi".into(),
             target_minutes: 10,
+            review_required: false,
         }
     }
 
@@ -882,12 +892,36 @@ mod tests {
         let edited = get(&pool, &ep.uuid).await.unwrap().unwrap();
         assert!(edited.summary_edited_at.is_some());
 
-        set_summary(&pool, &ep.uuid, "Bản tạo mới", "hash-new")
+        set_summary(&pool, &ep.uuid, "Bản tạo mới", "Bản tạo mới", "hash-new")
             .await
             .unwrap();
         let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
         assert_eq!(got.summary_text.as_deref(), Some("Bản tạo mới"));
         assert_eq!(got.summary_edited_at, None);
+    }
+
+    #[tokio::test]
+    async fn stores_review_flag_and_separate_audio_script() {
+        let (pool, show_id) = setup().await;
+        let mut new = episode(show_id, "script1");
+        new.review_required = true;
+        let ep = create(&pool, new).await.unwrap();
+        assert!(ep.review_required);
+        assert_eq!(ep.audio_script, None);
+
+        set_summary(
+            &pool,
+            &ep.uuid,
+            "Tóm tắt ngắn.",
+            "Script đầy đủ để đọc.",
+            "hash",
+        )
+        .await
+        .unwrap();
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.summary_text.as_deref(), Some("Tóm tắt ngắn."));
+        assert_eq!(got.audio_script.as_deref(), Some("Script đầy đủ để đọc."));
+        assert_eq!(got.summary_hash.as_deref(), Some("hash"));
     }
 
     #[tokio::test]
@@ -924,7 +958,7 @@ mod tests {
     async fn reset_for_reread_keeps_old_audio_hash() {
         let (pool, show_id) = setup().await;
         let ep = create(&pool, episode(show_id, "abc123")).await.unwrap();
-        set_summary(&pool, &ep.uuid, "Bản mới", "hash-new")
+        set_summary(&pool, &ep.uuid, "Bản mới", "Bản mới", "hash-new")
             .await
             .unwrap();
         set_audio(
@@ -995,6 +1029,7 @@ mod tests {
                 source_upload_date: None,
                 language: "vi".into(),
                 target_minutes: 10,
+                review_required: false,
             },
         )
         .await

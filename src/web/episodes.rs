@@ -401,6 +401,7 @@ mod tests {
                 source_upload_date: None,
                 language: "vi".into(),
                 target_minutes: 10,
+                review_required: false,
             },
         )
         .await
@@ -641,7 +642,7 @@ mod tests {
         let show = create_show(&context, "Show").await;
         let episode = create_episode(&context, show.id, "Tập").await;
         set_status(&context, &episode.uuid, status::READY, stage::READY).await;
-        episodes::set_summary(&context.state.pool, &episode.uuid, "Cũ", "old-hash")
+        episodes::set_summary(&context.state.pool, &episode.uuid, "Cũ", "Cũ", "old-hash")
             .await
             .unwrap();
         episodes::set_audio(
@@ -751,9 +752,15 @@ mod tests {
         let context = ctx().await;
         let show = create_show(&context, "Show").await;
         let episode = create_episode(&context, show.id, "Tập").await;
-        episodes::set_summary(&context.state.pool, &episode.uuid, "Nội dung", "old-hash")
-            .await
-            .unwrap();
+        episodes::set_summary(
+            &context.state.pool,
+            &episode.uuid,
+            "Nội dung",
+            "Nội dung",
+            "old-hash",
+        )
+        .await
+        .unwrap();
         episodes::set_audio(
             &context.state.pool,
             &episode.uuid,
@@ -819,9 +826,15 @@ mod tests {
         assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
 
         let busy = create_episode(&context, show.id, "Đang chạy").await;
-        episodes::set_summary(&context.state.pool, &busy.uuid, "Nội dung", "hash")
-            .await
-            .unwrap();
+        episodes::set_summary(
+            &context.state.pool,
+            &busy.uuid,
+            "Nội dung",
+            "Nội dung",
+            "hash",
+        )
+        .await
+        .unwrap();
         let rejected = send(
             &context,
             Method::POST,

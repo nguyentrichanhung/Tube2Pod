@@ -208,6 +208,7 @@ pub async fn create(
             source_upload_date: None,
             language: show.language.clone(),
             target_minutes: form.minutes,
+            review_required: false,
         },
     )
     .await
@@ -565,6 +566,7 @@ mod tests {
             source_upload_date: None,
             language: "vi".into(),
             target_minutes: 10,
+            review_required: false,
         }
     }
 

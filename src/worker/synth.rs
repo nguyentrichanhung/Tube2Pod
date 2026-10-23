@@ -15,13 +15,22 @@ pub fn parts_dir(cfg: &Config, uuid: &str) -> PathBuf {
     cfg.data_dir.join("tmp").join(uuid)
 }
 
+fn script_text(episode: &Episode) -> String {
+    episode
+        .audio_script
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| episode.summary_text.clone())
+        .unwrap_or_default()
+}
+
 pub async fn synthesize_episode(
     pool: &SqlitePool,
     cfg: &Config,
     episode: &Episode,
     client: &OmnivoiceClient,
 ) -> Result<(), PipelineError> {
-    let text = episode.summary_text.clone().unwrap_or_default();
+    let text = script_text(episode);
     let limit = cfg.omnivoice.chunk_chars.min(MAX_CHUNK_CHARS);
     let chunks = split_chunks(&text, limit);
     if chunks.is_empty() {
@@ -406,11 +415,12 @@ mod tests {
                 source_upload_date: None,
                 language: "vi".into(),
                 target_minutes: 10,
+                review_required: false,
             },
         )
         .await
         .unwrap();
-        db::episodes::set_summary(pool, &ep.uuid, summary, "hash")
+        db::episodes::set_summary(pool, &ep.uuid, summary, summary, "hash")
             .await
             .unwrap();
         db::episodes::set_voice(pool, &ep.uuid, 7).await.unwrap();
@@ -454,6 +464,42 @@ mod tests {
             .expect(takes)
             .mount(server)
             .await;
+    }
+
+    #[tokio::test]
+    async fn prefers_the_audio_script_for_synthesis() {
+        let pool = db::test_pool().await;
+        let episode = seed_episode(&pool, "Tóm tắt ngắn.").await;
+        db::episodes::set_summary(
+            &pool,
+            &episode.uuid,
+            "Tóm tắt ngắn.",
+            "Script đầy đủ để đọc.",
+            "hash",
+        )
+        .await
+        .unwrap();
+        let episode = db::episodes::get(&pool, &episode.uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(script_text(&episode), "Script đầy đủ để đọc.");
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_the_display_summary_for_legacy_rows() {
+        let pool = db::test_pool().await;
+        let episode = seed_episode(&pool, "Tóm tắt cũ.").await;
+        sqlx::query("UPDATE episodes SET audio_script = NULL WHERE uuid = ?1")
+            .bind(&episode.uuid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let episode = db::episodes::get(&pool, &episode.uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(script_text(&episode), "Tóm tắt cũ.");
     }
 
     #[tokio::test]
@@ -562,6 +608,7 @@ mod tests {
         db::episodes::set_summary(
             &pool,
             &ep.uuid,
+            "Câu một. Câu hai. Câu ba. Câu bốn.",
             "Câu một. Câu hai. Câu ba. Câu bốn.",
             "new-hash",
         )
