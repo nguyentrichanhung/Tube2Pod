@@ -247,7 +247,8 @@ pub async fn set_summary(
 
 pub async fn set_review(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
     sqlx::query(
-        "UPDATE episodes SET status = ?1, stage = ?2, progress_json = ?3, updated_at = ?4
+        "UPDATE episodes SET status = ?1, stage = ?2, progress_json = ?3,
+            attempts = 0, next_attempt_at = NULL, updated_at = ?4
          WHERE uuid = ?5",
     )
     .bind(status::REVIEW)
@@ -662,7 +663,16 @@ mod tests {
         let mut new = episode(show_id, "review1");
         new.review_required = true;
         let ep = create(&pool, new).await.unwrap();
+        sqlx::query("UPDATE episodes SET attempts = 2, next_attempt_at = ?1 WHERE uuid = ?2")
+            .bind(now_ts() + 60)
+            .bind(&ep.uuid)
+            .execute(&pool)
+            .await
+            .unwrap();
         set_review(&pool, &ep.uuid).await.unwrap();
+        let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.attempts, 0);
+        assert!(got.next_attempt_at.is_none());
         assert!(claim_next(&pool).await.unwrap().is_none());
     }
 

@@ -445,6 +445,8 @@ mod tests {
         assert!(html.contains("Gõ XOA"));
         assert!(html.contains("Xoá đã chọn"));
         assert!(html.contains("disabled"));
+        assert!(html.contains("value=\"review\""));
+        assert!(html.contains("Chờ duyệt"));
     }
 
     #[tokio::test]

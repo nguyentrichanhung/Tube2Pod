@@ -293,6 +293,7 @@ impl Episode {
         self.summary_text.as_deref().unwrap_or("")
     }
 
+    #[allow(dead_code)]
     pub fn summary_words(&self) -> usize {
         self.summary_text
             .as_deref()
