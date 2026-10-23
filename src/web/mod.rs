@@ -6,6 +6,7 @@ pub mod public;
 pub mod settings;
 pub mod shows;
 pub mod studio;
+pub mod voice_studio;
 pub mod voices;
 
 use crate::services::cover;
@@ -59,6 +60,11 @@ pub fn admin_router(state: AppState) -> Router {
         .route("/api/queue", get(studio::queue))
         .route("/library", get(library::index))
         .route("/api/library/rows", get(library::rows))
+        .route("/voices", get(voice_studio::index))
+        .route("/voices/{id}", get(voice_studio::detail))
+        .route("/voices/{id}/card", get(voice_studio::detail_card))
+        .route("/voices/{id}/preview", get(voice_studio::preview))
+        .route("/voices/{id}/delete", post(voice_studio::delete))
         .route("/shows", get(shows::index).post(shows::create))
         .route(
             "/shows/{id}",

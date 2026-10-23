@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="eyebrow">Voice Studio</div>
+    <h1>Giọng đọc</h1>
+    <p class="muted">Catalog Omnivoice, trạng thái và nơi đang dùng.</p>
+  </div>
+  <a class="btn" href="/voices/new">Tạo giọng mới</a>
+</div>
+{% if voices.is_empty() %}
+<div class="empty-state">Chưa có giọng đọc nào trong Omnivoice.</div>
+{% else %}
+<div class="card" data-voice-preview>
+  <div class="voice-preview-bar">
+    <span class="voice-preview-label">Chọn “Nghe” để nghe thử giọng.</span>
+    <audio controls preload="none" aria-label="Nghe thử giọng đọc"></audio>
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Giọng</th><th>Ngôn ngữ</th><th>Trạng thái</th><th>Đang dùng</th><th></th></tr></thead>
+    <tbody>
+    {% for row in voices %}
+      <tr>
+        <td>
+          <a href="/voices/{{ row.voice.id }}"><strong>{{ row.voice.name.as_deref().unwrap_or("Không tên") }}</strong></a>
+          <div class="voice-row-meta">{{ row.voice.gender_label() }} · {{ row.voice.age_label() }}</div>
+        </td>
+        <td>{{ self.language_label(row.voice.language.as_deref().unwrap_or("")) }}</td>
+        <td><span class="badge{% if row.voice.status == "ready" %} badge-ok{% else if row.voice.status == "failed" %} badge-err{% endif %}">{{ self.status_label(row.voice.status.as_str()) }}</span></td>
+        <td>
+          {% if row.assignments.is_empty() %}
+          <span class="muted">Chưa gán</span>
+          {% else %}
+          {% for item in row.assignments %}<div>{{ item.1 }} · {{ item.2 }}</div>{% endfor %}
+          {% endif %}
+          {% if row.used_by_episodes > 0 %}<div class="muted">{{ row.used_by_episodes }} tập đã dùng</div>{% endif %}
+        </td>
+        <td>
+          <div class="row">
+            {% if row.voice.status == "ready" %}
+            <button type="button" class="voice-preview-button"
+                    data-preview-url="/voices/{{ row.voice.id }}/preview"
+                    data-voice-name="{{ row.voice.name.as_deref().unwrap_or("Giọng đọc") }}">Nghe</button>
+            {% endif %}
+            {% if row.deletable() %}
+            <form method="post" action="/voices/{{ row.voice.id }}/delete" hx-confirm="Xoá giọng này khỏi Omnivoice?">
+              <input type="hidden" name="_csrf" value="{{ csrf }}">
+              <button class="btn btn-danger" type="submit">Xoá</button>
+            </form>
+            {% else %}
+            <span class="muted">Đang dùng</span>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

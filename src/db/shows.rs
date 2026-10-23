@@ -265,6 +265,29 @@ pub async fn list_voices(pool: &SqlitePool, show_id: i64) -> AppResult<Vec<(Stri
     .await?)
 }
 
+pub async fn voice_assignments(pool: &SqlitePool) -> AppResult<Vec<(i64, i64, String)>> {
+    Ok(
+        sqlx::query_as("SELECT omnivoice_voice_id, show_id, language FROM show_voices")
+            .fetch_all(pool)
+            .await?,
+    )
+}
+
+pub async fn voice_assignment_shows(
+    pool: &SqlitePool,
+    voice_id: i64,
+) -> AppResult<Vec<(i64, String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT shows.id, shows.title, show_voices.language
+         FROM show_voices JOIN shows ON shows.id = show_voices.show_id
+         WHERE show_voices.omnivoice_voice_id = ?1
+         ORDER BY shows.title COLLATE NOCASE",
+    )
+    .bind(voice_id)
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn delete(pool: &SqlitePool, id: i64) -> AppResult<()> {
     sqlx::query("DELETE FROM shows WHERE id = ?1")
         .bind(id)
@@ -380,5 +403,26 @@ mod tests {
             get_voice(&pool, show.id, "vi").await.unwrap().unwrap().0,
             42
         );
+    }
+
+    #[tokio::test]
+    async fn lists_voice_assignment_shows() {
+        let pool = crate::db::test_pool().await;
+        let show = create(
+            &pool,
+            NewShow {
+                title: "Show".into(),
+                ..NewShow::default()
+            },
+        )
+        .await
+        .unwrap();
+        upsert_voice(&pool, show.id, "vi", 42, "Phượng")
+            .await
+            .unwrap();
+
+        let rows = voice_assignment_shows(&pool, 42).await.unwrap();
+        assert_eq!(rows, vec![(show.id, "Show".to_string(), "vi".to_string())]);
+        assert!(voice_assignment_shows(&pool, 99).await.unwrap().is_empty());
     }
 }

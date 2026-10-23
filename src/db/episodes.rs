@@ -256,6 +256,15 @@ pub async fn set_summary_edit(
     Ok(())
 }
 
+pub async fn voice_usage_count(pool: &SqlitePool, voice_id: i64) -> AppResult<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT COUNT(*) FROM episodes WHERE voice_id = ?1")
+            .bind(voice_id)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
 pub async fn set_voice(pool: &SqlitePool, uuid: &str, voice_id: i64) -> AppResult<()> {
     sqlx::query(
         "UPDATE episodes SET voice_id = ?1, voice_design_id = NULL, updated_at = ?2 WHERE uuid = ?3",
@@ -908,5 +917,40 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(queued.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn counts_episodes_per_voice() {
+        let pool = crate::db::test_pool().await;
+        let show = crate::db::shows::create(
+            &pool,
+            crate::db::shows::NewShow {
+                title: "Show".into(),
+                ..crate::db::shows::NewShow::default()
+            },
+        )
+        .await
+        .unwrap();
+        let episode = create(
+            &pool,
+            NewEpisode {
+                show_id: show.id,
+                video_id: "v1".into(),
+                source_url: "https://www.youtube.com/watch?v=v1".into(),
+                source_title: "Video".into(),
+                source_channel: String::new(),
+                source_duration_s: None,
+                source_thumbnail_url: None,
+                source_upload_date: None,
+                language: "vi".into(),
+                target_minutes: 10,
+            },
+        )
+        .await
+        .unwrap();
+        set_voice(&pool, &episode.uuid, 42).await.unwrap();
+
+        assert_eq!(voice_usage_count(&pool, 42).await.unwrap(), 1);
+        assert_eq!(voice_usage_count(&pool, 99).await.unwrap(), 0);
     }
 }

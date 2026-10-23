@@ -26,6 +26,7 @@ h2 { font-size:1.3rem; margin:0 0 .45rem; }
 .grid.two { grid-template-columns:minmax(0,1.6fr) minmax(260px,1fr); }
 .row { display:flex; gap:.65rem; align-items:center; flex-wrap:wrap; }
 .row.between { justify-content:space-between; }
+.voice-library-actions { display:flex; gap:.4rem; align-items:center; }
 .card { background:var(--paper); border:1px solid var(--line); border-radius:var(--radius); padding:1.1rem; box-shadow:var(--shadow); }
 .page-header { display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; margin-bottom:1rem; }
 .eyebrow { font-size:.7rem; letter-spacing:.16em; text-transform:uppercase; color:var(--tera-d); font-weight:800; }
