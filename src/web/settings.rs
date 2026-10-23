@@ -450,6 +450,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn settings_page_hides_advanced_sections_in_a_disclosure() {
+        let context = ctx().await;
+        let response = send(
+            &context,
+            "GET",
+            "/settings",
+            "application/x-www-form-urlencoded",
+            Vec::new(),
+            &[],
+        )
+        .await;
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(html.contains("<details"));
+        assert!(html.contains("Nâng cao"));
+        assert!(html.contains("name=\"retention_old_audio_days\""));
+        assert!(html.contains("name=\"retention_tmp_hours\""));
+    }
+
+    #[tokio::test]
     async fn saves_valid_settings_and_redirects() {
         let context = ctx().await;
         let response = send(
