@@ -510,6 +510,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn episode_detail_hides_advanced_actions_in_a_disclosure() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        set_status(&context, &episode.uuid, status::READY, stage::READY).await;
+        let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
+        assert!(html.contains("<details"));
+        assert!(html.contains("Nâng cao"));
+        assert!(html.contains(&format!("hx-post=\"/episodes/{}/reread\"", episode.uuid)));
+        assert!(html.contains(&format!("action=\"/episodes/{}/publish\"", episode.uuid)));
+    }
+
+    #[tokio::test]
     async fn admin_audio_serves_ready_audio_even_when_the_feed_is_disabled() {
         let context = ctx().await;
         let show = create_show(&context, "Show").await;
