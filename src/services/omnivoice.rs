@@ -80,45 +80,87 @@ pub struct VoiceOptions {
     pub max_chars: usize,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
-struct RawVoiceOptions {
+struct RawDesignCatalog {
+    #[serde(default)]
+    genders: Vec<String>,
+    #[serde(default)]
+    ages: Vec<String>,
+    #[serde(default)]
+    pitches: Vec<String>,
+    #[serde(default)]
+    styles: Vec<String>,
+    #[serde(default)]
+    levels: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    default_level: Option<String>,
+    #[serde(default)]
+    languages: HashMap<String, RawDesignLanguage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawDesignLanguage {
     #[serde(default)]
     min_chars: Option<usize>,
     #[serde(default)]
     max_chars: Option<usize>,
     #[serde(default)]
-    languages: HashMap<String, RawLanguageOptions>,
+    sample_text: Option<String>,
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-struct RawLanguageOptions {
-    min_chars: usize,
-    max_chars: usize,
-}
-
-impl RawVoiceOptions {
-    #[allow(dead_code)]
-    fn for_language(self, language: &str) -> VoiceOptions {
-        if let Some(limits) = self.languages.get(language) {
-            return VoiceOptions {
-                min_chars: limits.min_chars,
-                max_chars: limits.max_chars,
-            };
-        }
-        VoiceOptions {
-            min_chars: self.min_chars.unwrap_or(20),
-            max_chars: self.max_chars.unwrap_or(500),
-        }
-    }
+#[derive(Debug, Clone, Default)]
+pub struct DesignLanguageOptions {
+    pub min_chars: usize,
+    pub max_chars: usize,
+    pub sample_text: String,
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default)]
+pub struct DesignCatalog {
+    pub genders: Vec<String>,
+    pub ages: Vec<String>,
+    pub pitches: Vec<String>,
+    pub styles: Vec<String>,
+    pub levels: Vec<String>,
+    pub default_level: String,
+    pub level_params: HashMap<String, serde_json::Value>,
+    pub languages: HashMap<String, DesignLanguageOptions>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default)]
+pub struct DesignRequest {
+    pub language: String,
+    pub text: String,
+    pub gender: Option<String>,
+    pub age: Option<String>,
+    pub pitch: Option<String>,
+    pub style: Option<String>,
+    pub params: Option<serde_json::Value>,
+    pub seed: Option<i64>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct VoiceDesign {
     pub id: i64,
     pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub candidates: Vec<DesignCandidate>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct DesignCandidate {
+    pub index: i64,
+    #[serde(default)]
+    pub audio_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -251,35 +293,76 @@ impl OmnivoiceClient {
 
     #[allow(dead_code)]
     pub async fn voice_options(&self, language: &str) -> AppResult<VoiceOptions> {
-        let raw: RawVoiceOptions = self
-            .call(Method::GET, "/api/voice-designs/options", None)
-            .await?;
-        Ok(raw.for_language(language))
+        let catalog = self.design_catalog().await?;
+        let entry = catalog.languages.get(language).cloned().unwrap_or_default();
+        Ok(VoiceOptions {
+            min_chars: entry.min_chars,
+            max_chars: entry.max_chars,
+        })
     }
 
     pub async fn list_voices(&self) -> AppResult<Vec<Voice>> {
         self.call(Method::GET, "/api/voices", None).await
     }
 
+    pub async fn design_catalog(&self) -> AppResult<DesignCatalog> {
+        let raw: RawDesignCatalog = self
+            .call(Method::GET, "/api/voice-designs/options", None)
+            .await?;
+        let mut levels: Vec<String> = raw.levels.keys().cloned().collect();
+        levels.sort();
+        let languages = raw
+            .languages
+            .into_iter()
+            .map(|(code, language)| {
+                (
+                    code,
+                    DesignLanguageOptions {
+                        min_chars: language.min_chars.unwrap_or(20),
+                        max_chars: language.max_chars.unwrap_or(500),
+                        sample_text: language.sample_text.unwrap_or_default(),
+                    },
+                )
+            })
+            .collect();
+        Ok(DesignCatalog {
+            genders: raw.genders,
+            ages: raw.ages,
+            pitches: raw.pitches,
+            styles: raw.styles,
+            default_level: raw.default_level.unwrap_or_else(|| "balanced".into()),
+            levels,
+            level_params: raw.levels,
+            languages,
+        })
+    }
+
     #[allow(dead_code)]
-    pub async fn create_design(
-        &self,
-        language: &str,
-        text: &str,
-        preset: &crate::models::VoicePreset,
-    ) -> AppResult<VoiceDesign> {
-        self.call(
-            Method::POST,
-            "/api/voice-designs",
-            Some(json!({
-                "language": language,
-                "gender": preset.gender,
-                "age": preset.age,
-                "pitch": preset.pitch,
-                "text": text,
-            })),
-        )
-        .await
+    pub async fn create_design(&self, request: &DesignRequest) -> AppResult<VoiceDesign> {
+        let mut body = json!({
+            "language": request.language,
+            "text": request.text,
+        });
+        if let Some(value) = &request.gender {
+            body["gender"] = json!(value);
+        }
+        if let Some(value) = &request.age {
+            body["age"] = json!(value);
+        }
+        if let Some(value) = &request.pitch {
+            body["pitch"] = json!(value);
+        }
+        if let Some(value) = &request.style {
+            body["style"] = json!(value);
+        }
+        if let Some(value) = &request.params {
+            body["params"] = value.clone();
+        }
+        if let Some(value) = request.seed {
+            body["seed"] = json!(value);
+        }
+        self.call(Method::POST, "/api/voice-designs", Some(body))
+            .await
     }
 
     #[allow(dead_code)]
@@ -289,13 +372,28 @@ impl OmnivoiceClient {
     }
 
     #[allow(dead_code)]
-    pub async fn save_design(&self, id: i64, name: &str) -> AppResult<Voice> {
+    pub async fn candidate_audio(&self, design_id: i64, index: i64) -> AppResult<VoicePreview> {
+        self.get_audio(&format!(
+            "/api/voice-designs/{design_id}/candidates/{index}/audio"
+        ))
+        .await
+    }
+
+    #[allow(dead_code)]
+    pub async fn save_design(&self, id: i64, name: &str, candidate: i64) -> AppResult<Voice> {
         self.call(
             Method::POST,
             &format!("/api/voice-designs/{id}/save"),
-            Some(json!({ "name": name, "candidate": 0 })),
+            Some(json!({ "name": name, "candidate": candidate })),
         )
         .await
+    }
+
+    #[allow(dead_code)]
+    pub async fn delete_voice(&self, id: i64) -> AppResult<()> {
+        self.send::<Value>(Method::DELETE, &format!("/api/voices/{id}"), None)
+            .await
+            .map(|_| ())
     }
 
     pub async fn delete_design(&self, id: i64) -> AppResult<()> {
@@ -359,12 +457,11 @@ impl OmnivoiceClient {
         }
     }
 
-    pub async fn preview_voice(&self, id: i64) -> AppResult<VoicePreview> {
-        let path = format!("/api/voices/{id}/preview");
+    async fn get_audio(&self, path: &str) -> AppResult<VoicePreview> {
         let mut retried = false;
         loop {
             let response = self
-                .request(Method::GET, &path)
+                .request(Method::GET, path)
                 .send()
                 .await
                 .map_err(|e| AppError::Upstream(e.to_string()))?;
@@ -378,7 +475,7 @@ impl OmnivoiceClient {
             }
             if !response.status().is_success() {
                 return Err(AppError::Upstream(format!(
-                    "Omnivoice preview HTTP {}",
+                    "Omnivoice audio HTTP {}",
                     response.status()
                 )));
             }
@@ -393,13 +490,17 @@ impl OmnivoiceClient {
                 .await
                 .map_err(|e| AppError::Upstream(e.to_string()))?;
             if bytes.len() > MAX_PREVIEW_BYTES {
-                return Err(AppError::Upstream("Omnivoice preview is too large".into()));
+                return Err(AppError::Upstream("Omnivoice audio is too large".into()));
             }
             return Ok(VoicePreview {
                 content_type,
                 bytes: bytes.to_vec(),
             });
         }
+    }
+
+    pub async fn preview_voice(&self, id: i64) -> AppResult<VoicePreview> {
+        self.get_audio(&format!("/api/voices/{id}/preview")).await
     }
 
     pub async fn delete_speech(&self, id: i64) -> AppResult<()> {
@@ -670,16 +771,34 @@ mod tests {
             .and(path("/api/voice-designs/options"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ok": true,
-                "data": {"min_chars": 20, "max_chars": 300, "sample_text": "Xin chào"},
+                "data": {
+                    "genders": ["male", "female"],
+                    "ages": ["young_adult", "middle_aged"],
+                    "pitches": ["low", "moderate"],
+                    "styles": ["whisper"],
+                    "levels": {
+                        "stable": {"position_temperature": 1.0, "class_temperature": 0.0, "guidance_scale": 2.5, "num_step": 32, "speed": 1.0},
+                        "balanced": {"position_temperature": 5.0, "class_temperature": 0.0, "guidance_scale": 2.5, "num_step": 32, "speed": 1.0}
+                    },
+                    "default_level": "balanced",
+                    "languages": {
+                        "vi": {"min_chars": 20, "max_chars": 300, "sample_text": "Xin chào"}
+                    }
+                },
                 "error": null
             })))
             .mount(&server)
             .await;
         Mock::given(method("POST"))
             .and(path("/api/voice-designs"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            .and(body_partial_json(serde_json::json!({
+                "language": "vi",
+                "gender": "female",
+                "params": {"position_temperature": 5.0}
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
                 "ok": true,
-                "data": {"id": 3, "status": "queued", "voice_id": null},
+                "data": {"id": 3, "status": "queued", "error": null, "language": "vi", "candidates": []},
                 "error": null
             })))
             .mount(&server)
@@ -688,22 +807,42 @@ mod tests {
             .and(path("/api/voice-designs/3"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ok": true,
-                "data": {"id": 3, "status": "ready", "voice_id": 11},
+                "data": {
+                    "id": 3,
+                    "status": "ready",
+                    "error": null,
+                    "language": "vi",
+                    "candidates": [
+                        {"index": 0, "audio_url": "/api/voice-designs/3/candidates/0/audio"},
+                        {"index": 1, "audio_url": "/api/voice-designs/3/candidates/1/audio"},
+                        {"index": 2, "audio_url": "/api/voice-designs/3/candidates/2/audio"}
+                    ]
+                },
                 "error": null
             })))
             .mount(&server)
             .await;
+        Mock::given(method("GET"))
+            .and(path("/api/voice-designs/3/candidates/1/audio"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "audio/wav")
+                    .set_body_bytes(b"RIFFfake".to_vec()),
+            )
+            .mount(&server)
+            .await;
         Mock::given(method("POST"))
             .and(path("/api/voice-designs/3/save"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            .and(body_partial_json(serde_json::json!({"name": "Giọng mới", "candidate": 1})))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
                 "ok": true,
-                "data": {"id": 11, "name": "Giọng mới", "status": "ready", "language": "vi"},
+                "data": {"id": 11, "name": "Giọng mới", "status": "measuring", "language": "vi", "preview_url": null, "design": null},
                 "error": null
             })))
             .mount(&server)
             .await;
         Mock::given(method("DELETE"))
-            .and(path("/api/voice-designs/3"))
+            .and(path("/api/voices/11"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ok": true, "data": null, "error": null
             })))
@@ -711,18 +850,29 @@ mod tests {
             .await;
 
         let client = OmnivoiceClient::new(&cfg(&server.uri()));
-        let options = client.voice_options("vi").await.unwrap();
-        assert_eq!(options.max_chars, 300);
-        let design = client
-            .create_design("vi", "Xin chào", &crate::models::VoicePreset::default())
-            .await
-            .unwrap();
+        let catalog = client.design_catalog().await.unwrap();
+        assert_eq!(catalog.default_level, "balanced");
+        assert_eq!(catalog.languages["vi"].sample_text, "Xin chào");
+        let request = DesignRequest {
+            language: "vi".into(),
+            text: "Xin chào".into(),
+            gender: Some("female".into()),
+            age: Some("middle_aged".into()),
+            pitch: None,
+            style: None,
+            params: catalog.level_params.get("balanced").cloned(),
+            seed: None,
+        };
+        let design = client.create_design(&request).await.unwrap();
         assert_eq!(design.id, 3);
-        let ready = client.design_status(design.id).await.unwrap();
-        assert_eq!(ready.status, "ready");
-        let voice = client.save_design(design.id, "Giọng mới").await.unwrap();
+        let ready = client.design_status(3).await.unwrap();
+        assert_eq!(ready.candidates.len(), 3);
+        let audio = client.candidate_audio(3, 1).await.unwrap();
+        assert_eq!(audio.content_type, "audio/wav");
+        assert_eq!(audio.bytes, b"RIFFfake");
+        let voice = client.save_design(3, "Giọng mới", 1).await.unwrap();
         assert_eq!(voice.id, 11);
-        client.delete_design(design.id).await.unwrap();
+        client.delete_voice(11).await.unwrap();
     }
 
     #[tokio::test]
