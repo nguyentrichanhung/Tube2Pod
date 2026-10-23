@@ -518,8 +518,15 @@ mod tests {
         let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
         assert!(html.contains("<details"));
         assert!(html.contains("Nâng cao"));
-        assert!(html.contains(&format!("hx-post=\"/episodes/{}/reread\"", episode.uuid)));
-        assert!(html.contains(&format!("action=\"/episodes/{}/publish\"", episode.uuid)));
+        let summary = "<summary>Nâng cao</summary>";
+        let start = html.find(summary).expect("advanced disclosure summary");
+        let end = html[start..]
+            .find("</details>")
+            .expect("advanced disclosure end");
+        let advanced = &html[start..start + end];
+        assert!(advanced.contains(&format!("hx-post=\"/episodes/{}/reread\"", episode.uuid)));
+        assert!(advanced.contains(&format!("action=\"/episodes/{}/publish\"", episode.uuid)));
+        assert!(html.contains("<summary>Nâng cao: Transcript</summary>"));
     }
 
     #[tokio::test]
