@@ -1,7 +1,7 @@
 use crate::db::{episodes, shows};
 use crate::error::{AppError, AppResult};
 use crate::models::language_label;
-use crate::services::omnivoice::{DesignRequest, OmnivoiceClient, Voice};
+use crate::services::omnivoice::{DesignRequest, OmnivoiceClient, Voice, VoiceDesign};
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
 use askama::Template;
@@ -128,6 +128,41 @@ impl DesignFormTemplate {
         }
         .to_string()
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaveDesignForm {
+    pub _csrf: String,
+    pub name: String,
+    pub candidate: i64,
+    pub show_id: Option<i64>,
+    pub language: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "voice_design_page.html")]
+pub struct DesignPageTemplate {
+    csrf: String,
+    design: VoiceDesign,
+    language: Option<String>,
+    language_label: &'static str,
+    show_id: Option<i64>,
+    show_title: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "partials/voice_design_card.html")]
+pub struct DesignCardTemplate {
+    csrf: String,
+    design: VoiceDesign,
+    show_id: Option<i64>,
+    language: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct DesignPageQuery {
+    pub show: Option<i64>,
+    pub language: Option<String>,
 }
 
 pub async fn index(
@@ -411,6 +446,117 @@ pub async fn create_design(
     Ok(Redirect::to(&location))
 }
 
+pub async fn design(
+    State(state): State<AppState>,
+    Extension(token): Extension<CsrfToken>,
+    Path(id): Path<i64>,
+    Query(query): Query<DesignPageQuery>,
+) -> AppResult<Html<String>> {
+    let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+    let design = client
+        .design_status(id)
+        .await
+        .map_err(|e| AppError::Upstream(e.to_string()))?;
+    let language = query
+        .language
+        .clone()
+        .or_else(|| design.language.clone())
+        .unwrap_or_else(|| "vi".into());
+    let show_title = match query.show {
+        Some(show_id) => shows::get(&state.pool, show_id)
+            .await?
+            .map(|show| show.title),
+        None => None,
+    };
+    Ok(Html(
+        DesignPageTemplate {
+            csrf: token.0,
+            design,
+            language: Some(language.clone()),
+            language_label: language_label(&language),
+            show_id: query.show,
+            show_title,
+        }
+        .render()?,
+    ))
+}
+
+pub async fn design_card(
+    State(state): State<AppState>,
+    Extension(token): Extension<CsrfToken>,
+    Path(id): Path<i64>,
+    Query(query): Query<DesignPageQuery>,
+) -> AppResult<Html<String>> {
+    let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+    let design = client
+        .design_status(id)
+        .await
+        .map_err(|e| AppError::Upstream(e.to_string()))?;
+    Ok(Html(
+        DesignCardTemplate {
+            csrf: token.0,
+            design,
+            show_id: query.show,
+            language: query.language,
+        }
+        .render()?,
+    ))
+}
+
+pub async fn candidate_audio(
+    State(state): State<AppState>,
+    Path((id, index)): Path<(i64, i64)>,
+) -> AppResult<Response> {
+    let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+    let design = client
+        .design_status(id)
+        .await
+        .map_err(|e| AppError::Upstream(e.to_string()))?;
+    if design.status != "ready" || !design.candidates.iter().any(|c| c.index == index) {
+        return Err(AppError::NotFound);
+    }
+    let audio = client.candidate_audio(id, index).await?;
+    audio_response(audio)
+}
+
+pub async fn save_design(
+    State(state): State<AppState>,
+    Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Form(form): Form<SaveDesignForm>,
+) -> AppResult<Redirect> {
+    csrf::verify(&token, &headers, &form._csrf)?;
+    let name = form.name.trim().to_string();
+    if name.is_empty() || name.chars().count() > 120 {
+        return Err(AppError::BadRequest(
+            "Tên giọng phải từ 1 đến 120 ký tự.".into(),
+        ));
+    }
+    let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+    let design = client
+        .design_status(id)
+        .await
+        .map_err(|e| AppError::Upstream(e.to_string()))?;
+    if design.status != "ready" {
+        return Err(AppError::Conflict("Giọng chưa sẵn sàng để lưu.".into()));
+    }
+    if !design.candidates.iter().any(|c| c.index == form.candidate) {
+        return Err(AppError::BadRequest("Bản thử không hợp lệ.".into()));
+    }
+    let voice = client.save_design(id, &name, form.candidate).await?;
+    if let (Some(show_id), Some(language)) = (form.show_id, form.language.as_deref()) {
+        if !matches!(language, "vi" | "en" | "ko") {
+            return Err(AppError::BadRequest("Ngôn ngữ không được hỗ trợ.".into()));
+        }
+        shows::get(&state.pool, show_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        shows::upsert_voice(&state.pool, show_id, language, voice.id, &name).await?;
+    }
+    Ok(Redirect::to(&format!("/voices/{}", voice.id)))
+}
+
 pub fn audio_response(preview: crate::services::omnivoice::VoicePreview) -> AppResult<Response> {
     let content_type = if preview
         .content_type
@@ -489,6 +635,25 @@ mod tests {
             .and(path("/api/voices"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ok": true, "data": voices, "error": null
+            })))
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_ready_design(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/api/voice-designs/3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {
+                    "id": 3, "status": "ready", "error": null, "language": "vi",
+                    "candidates": [
+                        {"index": 0, "audio_url": "/api/voice-designs/3/candidates/0/audio"},
+                        {"index": 1, "audio_url": "/api/voice-designs/3/candidates/1/audio"},
+                        {"index": 2, "audio_url": "/api/voice-designs/3/candidates/2/audio"}
+                    ]
+                },
+                "error": null
             })))
             .mount(server)
             .await;
@@ -893,5 +1058,119 @@ mod tests {
             .iter()
             .any(|request| request.method.as_str() == "POST"
                 && request.url.path() == "/api/voice-designs"));
+    }
+
+    #[tokio::test]
+    async fn design_page_lists_three_candidates() {
+        let server = MockServer::start().await;
+        mount_ready_design(&server).await;
+        let context = ctx(&server).await;
+
+        let response = request(&context, Method::GET, "/voices/designs/3", None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = body_text(response).await;
+        assert!(html.contains("candidates/0/audio"));
+        assert!(html.contains("candidates/1/audio"));
+        assert!(html.contains("candidates/2/audio"));
+        assert!(html.contains("Lưu giọng"));
+    }
+
+    #[tokio::test]
+    async fn candidate_audio_proxies_ready_take() {
+        let server = MockServer::start().await;
+        mount_ready_design(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/api/voice-designs/3/candidates/1/audio"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "audio/wav")
+                    .set_body_bytes(b"RIFFfake".to_vec()),
+            )
+            .mount(&server)
+            .await;
+        let context = ctx(&server).await;
+
+        let response = request(
+            &context,
+            Method::GET,
+            "/voices/designs/3/candidates/1/audio",
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "audio/wav"
+        );
+    }
+
+    #[tokio::test]
+    async fn save_design_creates_voice_and_auto_assigns_from_show() {
+        let server = MockServer::start().await;
+        mount_ready_design(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/api/voice-designs/3/save"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": {"id": 11, "name": "Giọng mới", "status": "measuring", "language": "vi", "preview_url": null, "design": null},
+                "error": null
+            })))
+            .mount(&server)
+            .await;
+        let context = ctx(&server).await;
+        let show = shows::create(
+            &context.state.pool,
+            shows::NewShow {
+                title: "Show".into(),
+                ..shows::NewShow::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = request(
+            &context,
+            Method::POST,
+            "/voices/designs/3/save",
+            Some(form(&[
+                ("_csrf", TOKEN),
+                ("name", "Giọng mới"),
+                ("candidate", "1"),
+                ("show_id", &show.id.to_string()),
+                ("language", "vi"),
+            ])),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/voices/11"
+        );
+        assert_eq!(
+            shows::get_voice(&context.state.pool, show.id, "vi")
+                .await
+                .unwrap(),
+            Some((11, "Giọng mới".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn save_design_rejects_a_bad_candidate() {
+        let server = MockServer::start().await;
+        mount_ready_design(&server).await;
+        let context = ctx(&server).await;
+
+        let response = request(
+            &context,
+            Method::POST,
+            "/voices/designs/3/save",
+            Some(form(&[
+                ("_csrf", TOKEN),
+                ("name", "Giọng mới"),
+                ("candidate", "9"),
+            ])),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

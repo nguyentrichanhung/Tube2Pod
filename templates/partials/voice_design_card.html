@@ -1,0 +1,38 @@
+<div id="design-card" class="card stack" data-voice-preview
+     {% if design.status != "ready" && design.status != "failed" %}hx-get="/voices/designs/{{ design.id }}/card?language={{ language.as_deref().unwrap_or("vi") }}{% if show_id.is_some() %}&show={{ show_id.unwrap() }}{% endif %}" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+{% if design.status == "failed" %}
+<div class="notice error" role="alert">Không tạo được giọng. {{ design.error.as_deref().unwrap_or("Vui lòng thử lại.") }}</div>
+<a class="btn btn-secondary" href="/voices/new">Tạo lại</a>
+{% else if design.status == "ready" %}
+<h2>Chọn một bản thử</h2>
+<div class="voice-preview-bar">
+  <span class="voice-preview-label">Chọn “Nghe” để nghe từng bản thử.</span>
+  <audio controls preload="none" aria-label="Nghe thử bản thiết kế"></audio>
+</div>
+<form method="post" action="/voices/designs/{{ design.id }}/save" class="stack">
+  <input type="hidden" name="_csrf" value="{{ csrf }}">
+  {% if show_id.is_some() %}<input type="hidden" name="show_id" value="{{ show_id.unwrap() }}">{% endif %}
+  {% if language.is_some() %}<input type="hidden" name="language" value="{{ language.as_deref().unwrap_or("") }}">{% endif %}
+  {% for candidate in design.candidates %}
+  <div class="voice-option">
+    <label class="voice-option-main">
+      <input type="radio" name="candidate" value="{{ candidate.index }}" required {% if loop.first %}checked{% endif %}>
+      <span>Bản thử {{ candidate.index + 1 }}</span>
+    </label>
+    <button type="button" class="voice-preview-button"
+            data-preview-url="/voices/designs/{{ design.id }}/candidates/{{ candidate.index }}/audio"
+            data-voice-name="Bản thử {{ candidate.index + 1 }}">Nghe</button>
+  </div>
+  {% endfor %}
+  <label>Tên giọng
+    <input name="name" value="Tube2Pod · {{ language.as_deref().unwrap_or("") }}" required maxlength="120">
+  </label>
+  <button class="btn" type="submit">Lưu giọng</button>
+</form>
+{% else %}
+<div class="row between">
+  <span class="badge">Đang thiết kế…</span>
+  <span class="muted">Omnivoice đang tạo 3 bản thử.</span>
+</div>
+{% endif %}
+</div>
