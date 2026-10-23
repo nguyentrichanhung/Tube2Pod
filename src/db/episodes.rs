@@ -256,6 +256,23 @@ pub async fn set_summary_edit(
     Ok(())
 }
 
+pub async fn voice_usage_count(pool: &SqlitePool, voice_id: i64) -> AppResult<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT COUNT(*) FROM episodes WHERE voice_id = ?1")
+            .bind(voice_id)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+pub async fn voice_usage_counts(pool: &SqlitePool) -> AppResult<Vec<(i64, i64)>> {
+    Ok(sqlx::query_as(
+        "SELECT voice_id, COUNT(*) FROM episodes WHERE voice_id IS NOT NULL GROUP BY voice_id",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn set_voice(pool: &SqlitePool, uuid: &str, voice_id: i64) -> AppResult<()> {
     sqlx::query(
         "UPDATE episodes SET voice_id = ?1, voice_design_id = NULL, updated_at = ?2 WHERE uuid = ?3",
@@ -951,5 +968,55 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(queued.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn counts_episodes_per_voice() {
+        let pool = crate::db::test_pool().await;
+        let show = crate::db::shows::create(
+            &pool,
+            crate::db::shows::NewShow {
+                title: "Show".into(),
+                ..crate::db::shows::NewShow::default()
+            },
+        )
+        .await
+        .unwrap();
+        let episode = create(
+            &pool,
+            NewEpisode {
+                show_id: show.id,
+                video_id: "v1".into(),
+                source_url: "https://www.youtube.com/watch?v=v1".into(),
+                source_title: "Video".into(),
+                source_channel: String::new(),
+                source_duration_s: None,
+                source_thumbnail_url: None,
+                source_upload_date: None,
+                language: "vi".into(),
+                target_minutes: 10,
+            },
+        )
+        .await
+        .unwrap();
+        set_voice(&pool, &episode.uuid, 42).await.unwrap();
+
+        assert_eq!(voice_usage_count(&pool, 42).await.unwrap(), 1);
+        assert_eq!(voice_usage_count(&pool, 99).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn groups_episode_counts_per_voice() {
+        let (pool, show_id) = setup().await;
+        for video_id in ["v1", "v2"] {
+            let ep = create(&pool, episode(show_id, video_id)).await.unwrap();
+            set_voice(&pool, &ep.uuid, 42).await.unwrap();
+        }
+        let other = create(&pool, episode(show_id, "v3")).await.unwrap();
+        set_voice(&pool, &other.uuid, 99).await.unwrap();
+
+        let mut rows = voice_usage_counts(&pool).await.unwrap();
+        rows.sort();
+        assert_eq!(rows, vec![(42, 2), (99, 1)]);
     }
 }

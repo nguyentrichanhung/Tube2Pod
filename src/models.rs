@@ -232,7 +232,6 @@ pub fn error_label_for(code: Option<&str>) -> Option<&'static str> {
     }
 }
 
-#[allow(dead_code)]
 impl Episode {
     pub fn progress_percent(&self) -> u8 {
         progress_percent_for(

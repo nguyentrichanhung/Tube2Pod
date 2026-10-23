@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="eyebrow">Voice Studio</div>
+    <h1>Thiết kế giọng {{ language_label }}</h1>
+    {% if show_title.is_some() %}<p class="muted">Gán vào {{ show_title.as_deref().unwrap_or("") }}</p>{% endif %}
+  </div>
+  <a class="btn btn-secondary" href="/voices">Về danh sách</a>
+</div>
+{% include "partials/voice_design_card.html" %}
+{% endblock %}
