@@ -2,7 +2,7 @@
 {% block content %}
 <div class="row between">
   <div><h1>Thư viện</h1><p class="muted">Tất cả tập từ mọi show, mới nhất trước.</p></div>
-  <a class="button" href="/">Tạo tập</a>
+  <a class="btn" href="/">Tạo tập</a>
 </div>
 <form class="card row" method="get" action="/library"
       hx-get="/api/library/rows" hx-target="#rows" hx-trigger="change, keyup changed delay:400ms" hx-include="closest form">
@@ -26,11 +26,81 @@
     <input name="q" value="{{ query }}" placeholder="Tên video hoặc kênh">
   </label>
 </form>
-<div class="row between">
-  <p class="muted">{{ rows.len() }} tập</p>
-  <a class="btn btn-secondary" href="/library">Xoá bộ lọc</a>
-</div>
-<section class="card" id="rows">
-  {% include "partials/episode_rows.html" %}
-</section>
+{% if bulk_message.is_some() %}
+<div class="notice" role="status">{{ bulk_message.as_deref().unwrap_or("") }}</div>
+{% endif %}
+<form method="post" action="/library/bulk-delete" class="stack" id="bulk-form">
+  <input type="hidden" name="_csrf" value="{{ csrf }}">
+  {% if selected_show.is_some() %}<input type="hidden" name="show_id" value="{{ selected_show.unwrap() }}">{% endif %}
+  {% if !selected_status.is_empty() %}<input type="hidden" name="status" value="{{ selected_status }}">{% endif %}
+  {% if !query.is_empty() %}<input type="hidden" name="q" value="{{ query }}">{% endif %}
+  <div class="row between">
+    <p class="muted">{{ rows.len() }} tập</p>
+    <a class="btn btn-secondary" href="/library">Xoá bộ lọc</a>
+  </div>
+  <div class="row between">
+    <span class="muted"><strong id="bulk-count">0</strong> tập đã chọn</span>
+    <div class="row">
+      <input name="confirm" placeholder="Gõ XOA để xác nhận" aria-label="Gõ XOA để xác nhận xoá" required>
+      <button class="btn btn-danger" type="submit" id="bulk-submit" disabled>Xoá đã chọn</button>
+    </div>
+  </div>
+  <section class="card" id="rows">
+    {% include "partials/episode_rows.html" %}
+  </section>
+</form>
+<script>
+  (function () {
+    const form = document.getElementById("bulk-form");
+    if (!form) return;
+    const count = document.getElementById("bulk-count");
+    const submit = document.getElementById("bulk-submit");
+    const confirmInput = form.querySelector("input[name='confirm']");
+    const boxes = () => Array.from(form.querySelectorAll("input[name='uuid']:not([disabled])"));
+    function setFilter(name, value) {
+      let input = form.querySelector(`input[name='${name}']`);
+      if (!input) {
+        input = document.createElement("input");
+        input.type = "hidden";
+        input.name = name;
+        form.appendChild(input);
+      }
+      input.value = value;
+    }
+    function syncFilters() {
+      const filterForm = document.querySelector("form[action='/library']");
+      if (!filterForm) return;
+      const data = new FormData(filterForm);
+      setFilter("show_id", data.get("show_id") || "");
+      setFilter("status", data.get("status") || "");
+      setFilter("q", data.get("q") || "");
+    }
+    function refresh() {
+      const checked = boxes().filter((box) => box.checked).length;
+      count.textContent = checked;
+      submit.disabled = checked === 0 || confirmInput.value.trim().toUpperCase() !== "XOA";
+    }
+    form.addEventListener("change", (event) => {
+      if (event.target.id === "select-all") {
+        boxes().forEach((box) => {
+          box.checked = event.target.checked;
+        });
+      }
+      refresh();
+    });
+    form.addEventListener("input", refresh);
+    document.body.addEventListener("htmx:afterSwap", (event) => {
+      if (event.detail && event.detail.target && event.detail.target.id === "rows") {
+        refresh();
+      }
+    });
+    const filterForm = document.querySelector("form[action='/library']");
+    if (filterForm) {
+      filterForm.addEventListener("change", syncFilters);
+      filterForm.addEventListener("input", syncFilters);
+    }
+    syncFilters();
+    refresh();
+  })();
+</script>
 {% endblock %}

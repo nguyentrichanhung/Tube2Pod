@@ -519,6 +519,19 @@ pub async fn delete(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
     Ok(())
 }
 
+pub async fn delete_if_terminal(pool: &SqlitePool, uuid: &str) -> AppResult<Option<Episode>> {
+    Ok(sqlx::query_as::<_, Episode>(
+        "DELETE FROM episodes WHERE uuid = ?1 AND status IN (?2,?3,?4,?5) RETURNING *",
+    )
+    .bind(uuid)
+    .bind(status::PUBLISHED)
+    .bind(status::READY)
+    .bind(status::FAILED)
+    .bind(status::CANCELLED)
+    .fetch_optional(pool)
+    .await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -858,6 +871,36 @@ mod tests {
         let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
         assert_eq!(got.summary_text.as_deref(), Some("Bản tạo mới"));
         assert_eq!(got.summary_edited_at, None);
+    }
+
+    #[tokio::test]
+    async fn delete_if_terminal_removes_published_but_not_running() {
+        let (pool, show_id) = setup().await;
+        let published = create(&pool, episode(show_id, "pub")).await.unwrap();
+        finish(
+            &pool,
+            &published.uuid,
+            stage::PUBLISHED,
+            status::PUBLISHED,
+            true,
+        )
+        .await
+        .unwrap();
+        let deleted = delete_if_terminal(&pool, &published.uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(deleted.uuid, published.uuid);
+        assert!(get(&pool, &published.uuid).await.unwrap().is_none());
+
+        let running = create(&pool, episode(show_id, "run")).await.unwrap();
+        let claimed = claim_next(&pool).await.unwrap().unwrap();
+        assert_eq!(claimed.uuid, running.uuid);
+        assert!(delete_if_terminal(&pool, &running.uuid)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(get(&pool, &running.uuid).await.unwrap().is_some());
     }
 
     #[tokio::test]

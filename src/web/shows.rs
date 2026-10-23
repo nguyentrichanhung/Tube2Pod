@@ -163,6 +163,7 @@ pub struct ShowDetailTemplate {
     cover_url: String,
     voice_rows: Vec<VoiceRow>,
     has_playable_voice: bool,
+    selectable: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -359,6 +360,7 @@ pub async fn detail(
             cover_url,
             voice_rows,
             has_playable_voice,
+            selectable: false,
         }
         .render()?,
     ))

@@ -54,6 +54,7 @@ button:disabled { opacity:.5; cursor:not-allowed; }
 .notice.error { border-color:var(--danger); background:var(--err-bg); color:#7b271f; }
 .error { color:var(--danger); font-weight:600; }
 .empty-state,.empty { padding:1.8rem; text-align:center; color:var(--muted); border:1px dashed var(--line-strong); background:var(--paper); border-radius:var(--radius); }
+.select-col { width:2.2rem; }
 .table-wrap { overflow-x:auto; }
 table { width:100%; border-collapse:collapse; }
 th,td { text-align:left; padding:.62rem .45rem; border-bottom:1px solid var(--line); vertical-align:top; }
