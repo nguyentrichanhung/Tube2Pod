@@ -51,10 +51,12 @@
       {% else %}
       <div class="empty-state">Audio chưa sẵn sàng.</div>
       {% endif %}
+      {% if audio_url.is_some() %}
       {% if episode.audio_needs_reread() %}
       <div class="row" style="margin-top:.75rem"><span class="badge badge-err">Cần đọc lại</span></div>
-      {% else if audio_url.is_some() %}
+      {% else %}
       <div class="row" style="margin-top:.75rem"><span class="badge badge-ok">Audio khớp</span></div>
+      {% endif %}
       {% endif %}
       <div class="row between" style="margin-top:.75rem">
         <a href="{{ feed_url }}" target="_blank" rel="noreferrer">Feed URL</a>

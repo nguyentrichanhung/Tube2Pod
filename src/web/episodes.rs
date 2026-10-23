@@ -571,7 +571,7 @@ mod tests {
         let show = create_show(&context, "Show").await;
         let episode = create_episode(&context, show.id, "Tập").await;
         sqlx::query(
-            "UPDATE episodes SET status = 'ready', stage = 'ready', summary_hash = 'new', audio_summary_hash = 'old' WHERE uuid = ?1",
+            "UPDATE episodes SET status = 'ready', stage = 'ready', summary_hash = 'new', audio_summary_hash = 'old', audio_path = '/tmp/audio.mp3' WHERE uuid = ?1",
         )
         .bind(&episode.uuid)
         .execute(&context.state.pool)
@@ -580,6 +580,24 @@ mod tests {
 
         let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
         assert!(html.contains("Cần đọc lại"));
+    }
+
+    #[tokio::test]
+    async fn review_episode_without_audio_does_not_warn_about_stale_audio() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        sqlx::query(
+            "UPDATE episodes SET status = 'review', stage = 'review', summary_hash = 'new', audio_summary_hash = NULL WHERE uuid = ?1",
+        )
+        .bind(&episode.uuid)
+        .execute(&context.state.pool)
+        .await
+        .unwrap();
+
+        let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
+        assert!(!html.contains("Cần đọc lại"));
+        assert!(!html.contains("Audio khớp"));
     }
 
     #[tokio::test]
