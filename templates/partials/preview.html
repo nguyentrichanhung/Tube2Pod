@@ -8,14 +8,20 @@
   {% if has_thumbnail %}
   <a href="{{ thumbnail }}" target="_blank" rel="noopener noreferrer">Ảnh thu nhỏ</a>
   {% endif %}
-  {% if voice_missing %}
+  {% if catalog_error %}
+  <div class="notice">Không tải được danh sách giọng. Sẽ dùng giọng mặc định của show nếu có.</div>
+  {% else if voice_missing %}
   <div class="notice error" data-voice-missing="true">Chưa chọn giọng cho {{ language_label }}. Liên hệ admin.</div>
   {% else %}
   <label>Giọng đọc
     <select name="voice_id">
+      {% if show_voice_ready %}
       <option value="">Theo show{% if voice_name.is_some() %} ({{ voice_name.as_deref().unwrap_or("") }}){% endif %}</option>
+      {% else %}
+      <option value="" disabled>Chọn một giọng</option>
+      {% endif %}
       {% for voice in voices %}
-      <option value="{{ voice.id }}"{% if selected_voice_id == Some(voice.id.clone()) %} selected{% endif %}>{{ voice.name.as_deref().unwrap_or("Không tên") }} · {{ voice.gender_label() }} · {{ voice.age_label() }}</option>
+      <option value="{{ voice.id }}"{% if selected_voice_id == Some(voice.id.clone()) %} selected{% else if selected_voice_id.is_none() && !show_voice_ready && loop.index0 == 0 %} selected{% endif %}>{{ voice.name.as_deref().unwrap_or("Không tên") }} · {{ voice.gender_label() }} · {{ voice.age_label() }}</option>
       {% endfor %}
     </select>
   </label>

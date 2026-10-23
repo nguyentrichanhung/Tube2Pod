@@ -44,6 +44,8 @@ pub struct PreviewTemplate {
     has_thumbnail: bool,
     voice_name: Option<String>,
     voice_missing: bool,
+    catalog_error: bool,
+    show_voice_ready: bool,
     voices: Vec<Voice>,
     selected_voice_id: Option<i64>,
 }
@@ -63,6 +65,8 @@ struct PreviewData {
     thumbnail: Option<String>,
     voice_name: Option<String>,
     voice_missing: bool,
+    catalog_error: bool,
+    show_voice_ready: bool,
     voices: Vec<Voice>,
     selected_voice_id: Option<i64>,
 }
@@ -79,6 +83,8 @@ impl From<&PreviewData> for PreviewTemplate {
             has_thumbnail: data.thumbnail.is_some(),
             voice_name: data.voice_name.clone(),
             voice_missing: data.voice_missing,
+            catalog_error: data.catalog_error,
+            show_voice_ready: data.show_voice_ready,
             voices: data.voices.clone(),
             selected_voice_id: data.selected_voice_id,
         }
@@ -184,6 +190,10 @@ pub async fn create(
                         .is_some()
             })
             .ok_or_else(|| AppError::BadRequest("Giọng đọc không còn khả dụng.".into()))?;
+    } else {
+        shows::get_voice(&state.pool, show.id, &show.language)
+            .await?
+            .ok_or_else(|| AppError::BadRequest("Chọn giọng đọc cho tập này.".into()))?;
     }
     let episode = match episodes::create(
         &state.pool,
@@ -279,27 +289,31 @@ async fn load_preview(
     let has_captions = language
         .and_then(|lang| ytdlp::choose_caption(&meta, lang))
         .is_some();
-    let (voice_name, voice_missing, voices) = match (form.show_id, language) {
-        (Some(show_id), Some(language)) => {
-            let catalog = OmnivoiceClient::new(&state.cfg.omnivoice)
-                .list_voices()
-                .await
-                .unwrap_or_default();
-            let selected = shows::get_voice(&state.pool, show_id, language).await?;
-            let voice_name = selected.as_ref().map(|(_, name)| name.clone());
-            let ready = selected.as_ref().is_some_and(|(voice_id, _)| {
-                catalog
-                    .iter()
-                    .any(|voice| voice.id == *voice_id && voice.is_ready_for(language))
-            });
-            let voices = catalog
-                .into_iter()
-                .filter(|voice| voice.is_ready_for(language))
-                .collect();
-            (voice_name, !ready, voices)
-        }
-        _ => (None, false, Vec::new()),
-    };
+    let (voice_name, voice_missing, catalog_error, show_voice_ready, voices) =
+        match (form.show_id, language) {
+            (Some(show_id), Some(language)) => {
+                let selected = shows::get_voice(&state.pool, show_id, language).await?;
+                let voice_name = selected.as_ref().map(|(_, name)| name.clone());
+                match OmnivoiceClient::new(&state.cfg.omnivoice)
+                    .list_voices()
+                    .await
+                {
+                    Ok(catalog) => {
+                        let voices: Vec<Voice> = catalog
+                            .into_iter()
+                            .filter(|voice| voice.is_ready_for(language))
+                            .collect();
+                        let show_voice_ready = selected.as_ref().is_some_and(|(voice_id, _)| {
+                            voices.iter().any(|voice| voice.id == *voice_id)
+                        });
+                        let voice_missing = voices.is_empty();
+                        (voice_name, voice_missing, false, show_voice_ready, voices)
+                    }
+                    Err(_) => (voice_name, false, true, false, Vec::new()),
+                }
+            }
+            _ => (None, false, false, false, Vec::new()),
+        };
     Ok(PreviewData {
         title: meta.title,
         channel: meta.channel,
@@ -309,6 +323,8 @@ async fn load_preview(
         thumbnail: meta.thumbnail,
         voice_name,
         voice_missing,
+        catalog_error,
+        show_voice_ready,
         voices,
         selected_voice_id: form.voice_id,
     })
@@ -469,7 +485,7 @@ mod tests {
     }
 
     async fn create_show(state: &AppState) -> i64 {
-        shows::create(
+        let show = shows::create(
             &state.pool,
             NewShow {
                 title: "Show".into(),
@@ -477,8 +493,11 @@ mod tests {
             },
         )
         .await
-        .unwrap()
-        .id
+        .unwrap();
+        shows::upsert_voice(&state.pool, show.id, "vi", 42, "Default")
+            .await
+            .unwrap();
+        show.id
     }
 
     fn form(pairs: &[(&str, &str)]) -> String {
@@ -620,6 +639,27 @@ mod tests {
             .unwrap();
         assert_eq!(episodes.len(), 1);
         assert_eq!(episodes[0].voice_id, None);
+    }
+
+    #[tokio::test]
+    async fn create_requires_a_voice_when_the_show_has_none() {
+        let state = test_state().await;
+        let show = shows::create(
+            &state.pool,
+            NewShow {
+                title: "No voice".into(),
+                ..NewShow::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = post(&state, "/episodes", create_form(show.id), &[]).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(episodes::list(&state.pool, &Default::default())
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -833,11 +873,25 @@ mod tests {
         }
     }
 
-    #[test]
-    fn preview_renders_the_detected_language_voice_options() {
-        use crate::services::omnivoice::{Voice, VoiceDesignInfo};
+    fn preview_voice(id: i64) -> Voice {
+        use crate::services::omnivoice::VoiceDesignInfo;
 
-        let template = PreviewTemplate {
+        Voice {
+            id,
+            name: Some("Phượng".into()),
+            status: "ready".into(),
+            language: Some("vi".into()),
+            preview_url: None,
+            design: Some(VoiceDesignInfo {
+                gender: Some("female".into()),
+                age: Some("middle_aged".into()),
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn preview_template() -> PreviewTemplate {
+        PreviewTemplate {
             title: "Video".into(),
             channel: "Channel".into(),
             duration: "10:00".into(),
@@ -847,27 +901,50 @@ mod tests {
             has_thumbnail: false,
             voice_name: Some("Phượng".into()),
             voice_missing: false,
-            voices: vec![Voice {
-                id: 42,
-                name: Some("Phượng".into()),
-                status: "ready".into(),
-                language: Some("vi".into()),
-                preview_url: None,
-                design: Some(VoiceDesignInfo {
-                    gender: Some("female".into()),
-                    age: Some("middle_aged".into()),
-                    ..Default::default()
-                }),
-            }],
+            catalog_error: false,
+            show_voice_ready: true,
+            voices: vec![preview_voice(42)],
             selected_voice_id: Some(42),
-        };
-        let html = template.render().unwrap();
+        }
+    }
+
+    #[test]
+    fn preview_renders_the_detected_language_voice_options() {
+        let html = preview_template().render().unwrap();
         assert!(html.contains("name=\"voice_id\""));
         assert!(html.contains("Theo show"));
         assert!(html.contains("Phượng"));
         assert!(html.contains("Nữ"));
         assert!(html.contains("Trung niên"));
         assert!(html.contains("value=\"42\" selected"));
+    }
+
+    #[test]
+    fn preview_selects_the_first_voice_when_the_show_has_no_ready_voice() {
+        let mut template = preview_template();
+        template.show_voice_ready = false;
+        template.selected_voice_id = None;
+        template.voices = vec![preview_voice(42), preview_voice(99)];
+
+        let html = template.render().unwrap();
+        assert!(html.contains("Chọn một giọng"));
+        assert!(html.contains("value=\"42\" selected"));
+        assert!(!html.contains("data-voice-missing"));
+    }
+
+    #[test]
+    fn preview_shows_a_catalog_notice_without_hiding_the_form() {
+        let mut template = preview_template();
+        template.catalog_error = true;
+        template.show_voice_ready = false;
+        template.voices = Vec::new();
+        template.selected_voice_id = None;
+
+        let html = template.render().unwrap();
+        assert!(html
+            .contains("Không tải được danh sách giọng. Sẽ dùng giọng mặc định của show nếu có."));
+        assert!(!html.contains("name=\"voice_id\""));
+        assert!(!html.contains("data-voice-missing"));
     }
 
     #[tokio::test]
