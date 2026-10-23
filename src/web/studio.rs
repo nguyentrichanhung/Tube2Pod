@@ -38,8 +38,6 @@ pub struct PreviewTemplate {
     title: String,
     channel: String,
     duration: String,
-    #[allow(dead_code)]
-    language: String,
     language_label: String,
     has_captions: bool,
     thumbnail: String,
@@ -47,6 +45,7 @@ pub struct PreviewTemplate {
     voice_name: Option<String>,
     voice_missing: bool,
     voices: Vec<Voice>,
+    selected_voice_id: Option<i64>,
 }
 
 #[derive(Template)]
@@ -65,6 +64,7 @@ struct PreviewData {
     voice_name: Option<String>,
     voice_missing: bool,
     voices: Vec<Voice>,
+    selected_voice_id: Option<i64>,
 }
 
 impl From<&PreviewData> for PreviewTemplate {
@@ -73,7 +73,6 @@ impl From<&PreviewData> for PreviewTemplate {
             title: data.title.clone(),
             channel: data.channel.clone().unwrap_or_default(),
             duration: duration_label(data.duration_s),
-            language: data.language.unwrap_or("không xác định").to_string(),
             language_label: language_label(data.language.unwrap_or_default()).to_string(),
             has_captions: data.has_captions,
             thumbnail: data.thumbnail.clone().unwrap_or_default(),
@@ -81,6 +80,7 @@ impl From<&PreviewData> for PreviewTemplate {
             voice_name: data.voice_name.clone(),
             voice_missing: data.voice_missing,
             voices: data.voices.clone(),
+            selected_voice_id: data.selected_voice_id,
         }
     }
 }
@@ -103,6 +103,7 @@ pub struct PreviewForm {
     pub _csrf: String,
     pub url: String,
     pub show_id: Option<i64>,
+    pub voice_id: Option<i64>,
 }
 
 pub async fn index(
@@ -273,6 +274,7 @@ async fn load_preview(
         voice_name,
         voice_missing,
         voices,
+        selected_voice_id: form.voice_id,
     })
 }
 
@@ -710,7 +712,6 @@ mod tests {
             title: "Video".into(),
             channel: "Channel".into(),
             duration: "10:00".into(),
-            language: "vi".into(),
             language_label: "Tiếng Việt".into(),
             has_captions: true,
             thumbnail: String::new(),
@@ -729,6 +730,7 @@ mod tests {
                     ..Default::default()
                 }),
             }],
+            selected_voice_id: Some(42),
         };
         let html = template.render().unwrap();
         assert!(html.contains("name=\"voice_id\""));
@@ -736,6 +738,7 @@ mod tests {
         assert!(html.contains("Phượng"));
         assert!(html.contains("Nữ"));
         assert!(html.contains("Trung niên"));
+        assert!(html.contains("value=\"42\" selected"));
     }
 
     #[tokio::test]

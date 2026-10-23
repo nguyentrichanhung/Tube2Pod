@@ -15,7 +15,7 @@
     <select name="voice_id">
       <option value="">Theo show{% if voice_name.is_some() %} ({{ voice_name.as_deref().unwrap_or("") }}){% endif %}</option>
       {% for voice in voices %}
-      <option value="{{ voice.id }}">{{ voice.name.as_deref().unwrap_or("Không tên") }} · {{ voice.gender_label() }} · {{ voice.age_label() }}</option>
+      <option value="{{ voice.id }}"{% if selected_voice_id == Some(voice.id.clone()) %} selected{% endif %}>{{ voice.name.as_deref().unwrap_or("Không tên") }} · {{ voice.gender_label() }} · {{ voice.age_label() }}</option>
       {% endfor %}
     </select>
   </label>
