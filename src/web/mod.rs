@@ -56,6 +56,7 @@ pub fn admin_router(state: AppState) -> Router {
         .route("/episodes/{uuid}/cancel", post(episodes::cancel))
         .route("/episodes/{uuid}/reread", post(episodes::reread))
         .route("/episodes/{uuid}/publish", post(episodes::publish))
+        .route("/episodes/{uuid}/approve", post(episodes::approve))
         .route("/api/queue", get(studio::queue))
         .route("/library", get(library::index))
         .route("/library/bulk-delete", post(library::bulk_delete))

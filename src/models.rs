@@ -15,6 +15,7 @@ pub mod stage {
     pub const PUBLISHING: &str = "publishing";
     pub const PUBLISHED: &str = "published";
     pub const READY: &str = "ready";
+    pub const REVIEW: &str = "review";
 }
 
 pub mod status {
@@ -24,6 +25,7 @@ pub mod status {
     pub const PUBLISHED: &str = "published";
     pub const FAILED: &str = "failed";
     pub const CANCELLED: &str = "cancelled";
+    pub const REVIEW: &str = "review";
 }
 
 #[derive(Clone, sqlx::FromRow, Serialize)]
@@ -167,6 +169,7 @@ pub fn progress_percent_for(
             }
         }
         stage::ASSEMBLING => 85,
+        stage::REVIEW => 45,
         stage::PUBLISHING => 95,
         stage::READY | stage::PUBLISHED => 100,
         _ => 0,
@@ -184,6 +187,7 @@ pub fn stage_label_for(stage: &str) -> &'static str {
         stage::PUBLISHING => "Đang phát hành",
         stage::READY => "Sẵn sàng",
         stage::PUBLISHED => "Đã đăng",
+        stage::REVIEW => "Chờ duyệt tóm tắt",
         _ => "Đang xử lý",
     }
 }
@@ -196,6 +200,7 @@ pub fn status_label_for(status: &str) -> &'static str {
         status::PUBLISHED => "Đã đăng",
         status::FAILED => "Lỗi",
         status::CANCELLED => "Đã huỷ",
+        status::REVIEW => "Chờ duyệt",
         _ => "Không xác định",
     }
 }
@@ -492,6 +497,7 @@ mod tests {
         assert_eq!(progress_percent_for("synthesizing", 2, Some(4), None), 67);
         assert_eq!(progress_percent_for("synthesizing", 4, Some(4), None), 80);
         assert_eq!(progress_percent_for("assembling", 0, None, None), 85);
+        assert_eq!(progress_percent_for("review", 0, None, None), 45);
         assert_eq!(progress_percent_for("publishing", 0, None, None), 95);
         assert_eq!(progress_percent_for("published", 0, None, None), 100);
         assert_eq!(progress_percent_for("ready", 0, None, None), 100);
@@ -508,6 +514,8 @@ mod tests {
     #[test]
     fn labels_and_errors_are_user_facing() {
         assert_eq!(stage_label_for("synthesizing"), "Đang tạo audio");
+        assert_eq!(stage_label_for("review"), "Chờ duyệt tóm tắt");
+        assert_eq!(status_label_for("review"), "Chờ duyệt");
         assert_eq!(status_label_for("ready"), "Sẵn sàng");
         assert_eq!(status_label_for("cancelled"), "Đã huỷ");
         assert_eq!(

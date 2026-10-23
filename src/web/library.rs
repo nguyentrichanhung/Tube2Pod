@@ -14,13 +14,14 @@ use axum::response::{Html, IntoResponse, Redirect};
 use axum::Extension;
 use serde::Deserialize;
 
-const STATUSES: [&str; 6] = [
+const STATUSES: [&str; 7] = [
     status::QUEUED,
     status::RUNNING,
     status::READY,
     status::PUBLISHED,
     status::FAILED,
     status::CANCELLED,
+    status::REVIEW,
 ];
 
 fn empty_as_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>

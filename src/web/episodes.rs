@@ -252,6 +252,26 @@ pub async fn publish(
     Ok(redirect_response(&headers, &format!("/episodes/{uuid}")))
 }
 
+pub async fn approve(
+    State(state): State<AppState>,
+    Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
+    Path(uuid): Path<String>,
+    Form(form): Form<CsrfForm>,
+) -> AppResult<Response> {
+    csrf::verify(&token, &headers, &form._csrf)?;
+    episodes::get(&state.pool, &uuid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if !episodes::approve_review(&state.pool, &uuid).await? {
+        return Err(AppError::Conflict(
+            "Chỉ duyệt được tập đang chờ duyệt.".into(),
+        ));
+    }
+    state.notify.notify_one();
+    Ok(redirect_response(&headers, &format!("/episodes/{uuid}")))
+}
+
 pub async fn delete(
     State(state): State<AppState>,
     Extension(token): Extension<CsrfToken>,
@@ -447,6 +467,44 @@ mod tests {
             .oneshot(request.body(Body::from(body.unwrap_or_default())).unwrap())
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn approve_resumes_only_a_review_episode() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        sqlx::query("UPDATE episodes SET status = 'review', stage = 'review' WHERE uuid = ?1")
+            .bind(&episode.uuid)
+            .execute(&context.state.pool)
+            .await
+            .unwrap();
+
+        let response = send(
+            &context,
+            Method::POST,
+            &format!("/episodes/{}/approve", episode.uuid),
+            Some(form(&[("_csrf", TOKEN)]).into_bytes()),
+            &[],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let got = episodes::get(&context.state.pool, &episode.uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.status, status::QUEUED);
+        assert_eq!(got.stage, stage::VOICING);
+
+        let again = send(
+            &context,
+            Method::POST,
+            &format!("/episodes/{}/approve", episode.uuid),
+            Some(form(&[("_csrf", TOKEN)]).into_bytes()),
+            &[],
+        )
+        .await;
+        assert_eq!(again.status(), StatusCode::CONFLICT);
     }
 
     async fn get(context: &Ctx, path: &str) -> axum::response::Response {

@@ -245,6 +245,37 @@ pub async fn set_summary(
     Ok(())
 }
 
+pub async fn set_review(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE episodes SET status = ?1, stage = ?2, progress_json = ?3, updated_at = ?4
+         WHERE uuid = ?5",
+    )
+    .bind(status::REVIEW)
+    .bind(stage::REVIEW)
+    .bind(r#"{"percent":45}"#)
+    .bind(now_ts())
+    .bind(uuid)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn approve_review(pool: &SqlitePool, uuid: &str) -> AppResult<bool> {
+    let result = sqlx::query(
+        "UPDATE episodes SET status = ?1, stage = ?2, next_attempt_at = NULL,
+            error_code = NULL, error_message = NULL, updated_at = ?3
+         WHERE uuid = ?4 AND status = ?5",
+    )
+    .bind(status::QUEUED)
+    .bind(stage::VOICING)
+    .bind(now_ts())
+    .bind(uuid)
+    .bind(status::REVIEW)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 pub async fn set_summary_edit(
     pool: &SqlitePool,
     uuid: &str,
@@ -623,6 +654,16 @@ mod tests {
         let recovered = get(&pool, &claimed.uuid).await.unwrap().unwrap();
         assert_eq!(recovered.status, status::QUEUED);
         assert_eq!(recover_running(&pool).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn review_episodes_are_not_claimable() {
+        let (pool, show_id) = setup().await;
+        let mut new = episode(show_id, "review1");
+        new.review_required = true;
+        let ep = create(&pool, new).await.unwrap();
+        set_review(&pool, &ep.uuid).await.unwrap();
+        assert!(claim_next(&pool).await.unwrap().is_none());
     }
 
     #[tokio::test]
