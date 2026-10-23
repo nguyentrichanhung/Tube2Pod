@@ -73,13 +73,6 @@ pub struct SpeechTake {
     pub error: Option<String>,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
-pub struct VoiceOptions {
-    pub min_chars: usize,
-    pub max_chars: usize,
-}
-
 #[derive(Debug, Deserialize)]
 struct RawDesignCatalog {
     #[serde(default)]
@@ -285,16 +278,6 @@ impl OmnivoiceClient {
         self.send(method, path, body)
             .await?
             .ok_or_else(|| AppError::Upstream("Omnivoice returned no data".into()))
-    }
-
-    #[allow(dead_code)]
-    pub async fn voice_options(&self, language: &str) -> AppResult<VoiceOptions> {
-        let catalog = self.design_catalog().await?;
-        let entry = catalog.languages.get(language).cloned().unwrap_or_default();
-        Ok(VoiceOptions {
-            min_chars: entry.min_chars,
-            max_chars: entry.max_chars,
-        })
     }
 
     pub async fn list_voices(&self) -> AppResult<Vec<Voice>> {
@@ -864,31 +847,6 @@ mod tests {
         let voice = client.save_design(3, "Giọng mới", 1).await.unwrap();
         assert_eq!(voice.id, 11);
         client.delete_voice(11).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn reads_language_scoped_voice_options() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/api/voice-designs/options"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "ok": true,
-                "data": {
-                    "languages": {
-                        "vi": {"min_chars": 40, "max_chars": 900, "sample_text": "Xin chào"},
-                        "en": {"min_chars": 30, "max_chars": 700, "sample_text": "Hello"}
-                    }
-                },
-                "error": null
-            })))
-            .mount(&server)
-            .await;
-
-        let client = OmnivoiceClient::new(&cfg(&server.uri()));
-        let vi = client.voice_options("vi").await.unwrap();
-        assert_eq!((vi.min_chars, vi.max_chars), (40, 900));
-        let en = client.voice_options("en").await.unwrap();
-        assert_eq!((en.min_chars, en.max_chars), (30, 700));
     }
 
     #[tokio::test]

@@ -9,11 +9,10 @@ use askama::Template;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
-use axum::response::{Html, IntoResponse, Json, Redirect, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::Extension;
 use axum::Form;
 use serde::Deserialize;
-use serde_json::json;
 use std::path::PathBuf;
 
 #[derive(Template)]
@@ -282,24 +281,6 @@ pub async fn delete(
     Ok(redirect_response(&headers, "/library"))
 }
 
-pub async fn status(
-    State(state): State<AppState>,
-    Path(uuid): Path<String>,
-) -> AppResult<impl IntoResponse> {
-    let episode = episodes::get(&state.pool, &uuid)
-        .await?
-        .ok_or(AppError::NotFound)?;
-    Ok(Json(json!({
-        "ok": true,
-        "stage": episode.stage,
-        "status": episode.status,
-        "progress": episode.progress_json,
-        "error_code": episode.error_code,
-        "error_message": episode.error_message,
-        "audio_needs_reread": episode.audio_needs_reread(),
-    })))
-}
-
 fn validate_summary(text: &str) -> AppResult<String> {
     let text = text.trim();
     if text.is_empty() {
@@ -526,6 +507,26 @@ mod tests {
 
         let missing = get(&context, "/episodes/does-not-exist").await;
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn episode_detail_hides_advanced_actions_in_a_disclosure() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        set_status(&context, &episode.uuid, status::READY, stage::READY).await;
+        let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
+        assert!(html.contains("<details"));
+        assert!(html.contains("Nâng cao"));
+        let summary = "<summary>Nâng cao</summary>";
+        let start = html.find(summary).expect("advanced disclosure summary");
+        let end = html[start..]
+            .find("</details>")
+            .expect("advanced disclosure end");
+        let advanced = &html[start..start + end];
+        assert!(advanced.contains(&format!("hx-post=\"/episodes/{}/reread\"", episode.uuid)));
+        assert!(advanced.contains(&format!("action=\"/episodes/{}/publish\"", episode.uuid)));
+        assert!(html.contains("<summary>Nâng cao: Transcript</summary>"));
     }
 
     #[tokio::test]
@@ -1298,23 +1299,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_returns_progress_and_missing_episodes_are_404() {
+    async fn removed_status_endpoint_is_404() {
         let context = ctx().await;
         let show = create_show(&context, "Show").await;
         let episode = create_episode(&context, show.id, "Tập").await;
-        episodes::set_progress(&context.state.pool, &episode.uuid, r#"{"percent":40}"#)
-            .await
-            .unwrap();
-
         let response = get(&context, &format!("/api/episodes/{}/status", episode.uuid)).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let json: serde_json::Value = serde_json::from_str(&body(response).await).unwrap();
-        assert_eq!(json["ok"], true);
-        assert_eq!(json["status"], status::QUEUED);
-        assert_eq!(json["stage"], stage::QUEUED);
-        assert_eq!(json["progress"], r#"{"percent":40}"#);
-
-        let missing = get(&context, "/api/episodes/missing/status").await;
-        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

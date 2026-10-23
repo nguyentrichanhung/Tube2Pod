@@ -397,7 +397,6 @@ pub async fn update(
             website_url: Some(form.website_url),
             default_minutes: Some(form.default_minutes),
             auto_publish: Some(form.auto_publish.is_some()),
-            voice_preset_json: None,
         },
     )
     .await?;

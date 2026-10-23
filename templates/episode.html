@@ -59,10 +59,15 @@
         <form method="post" action="/episodes/{{ episode.uuid }}/retry"><input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">Thử lại</button></form>
         {% endif %}
         {% if episode.status == "published" || episode.status == "ready" || episode.status == "failed" %}
-        <form method="post" action="/episodes/{{ episode.uuid }}/reread" hx-post="/episodes/{{ episode.uuid }}/reread" hx-confirm="Bắt đầu tạo audio mới từ bản tóm tắt hiện tại?"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="secondary" type="submit">Đọc lại từ bản sửa</button></form>
-        {% endif %}
-        {% if episode.status == "ready" %}
-        <form method="post" action="/episodes/{{ episode.uuid }}/publish"><input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">Phát hành</button></form>
+        <details class="stack">
+          <summary>Nâng cao</summary>
+          <div class="row">
+            <form method="post" action="/episodes/{{ episode.uuid }}/reread" hx-post="/episodes/{{ episode.uuid }}/reread" hx-confirm="Bắt đầu tạo audio mới từ bản tóm tắt hiện tại?"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="secondary" type="submit">Đọc lại từ bản sửa</button></form>
+            {% if episode.status == "ready" %}
+            <form method="post" action="/episodes/{{ episode.uuid }}/publish"><input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit">Phát hành</button></form>
+            {% endif %}
+          </div>
+        </details>
         {% endif %}
         {% if episode.status == "queued" || episode.status == "running" %}
         <form method="post" action="/episodes/{{ episode.uuid }}/cancel"><input type="hidden" name="_csrf" value="{{ csrf }}"><button class="danger" type="submit">Huỷ</button></form>
@@ -77,14 +82,14 @@
 
   <aside class="stack">
     {% include "partials/episode_progress.html" %}
-    <div class="card">
-      <h2>Transcript</h2>
+    <details class="card stack">
+      <summary>Nâng cao: Transcript</summary>
       {% if transcript.is_empty() %}
       <div class="empty">Chưa có transcript.</div>
       {% else %}
       <details><summary>Xem transcript</summary><pre style="white-space:pre-wrap">{{ transcript }}</pre></details>
       {% endif %}
-    </div>
+    </details>
   </aside>
 </div>
 {% endblock %}

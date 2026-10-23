@@ -52,7 +52,6 @@ pub struct ShowPatch {
     pub website_url: Option<String>,
     pub default_minutes: Option<i64>,
     pub auto_publish: Option<bool>,
-    pub voice_preset_json: Option<String>,
 }
 
 pub async fn create(pool: &SqlitePool, new: NewShow) -> AppResult<Show> {
@@ -124,9 +123,8 @@ pub async fn update(pool: &SqlitePool, id: i64, patch: ShowPatch) -> AppResult<S
             website_url = COALESCE(?9, website_url),
             default_minutes = COALESCE(?10, default_minutes),
             auto_publish = COALESCE(?11, auto_publish),
-            voice_preset_json = COALESCE(?12, voice_preset_json),
-            updated_at = ?13
-         WHERE id = ?14
+            updated_at = ?12
+         WHERE id = ?13
          RETURNING *",
     )
     .bind(patch.title.map(|v| v.trim().to_string()))
@@ -140,7 +138,6 @@ pub async fn update(pool: &SqlitePool, id: i64, patch: ShowPatch) -> AppResult<S
     .bind(patch.website_url.map(|v| v.trim().to_string()))
     .bind(patch.default_minutes)
     .bind(patch.auto_publish)
-    .bind(patch.voice_preset_json)
     .bind(now_ts())
     .bind(id)
     .fetch_one(pool)
