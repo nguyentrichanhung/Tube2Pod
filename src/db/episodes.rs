@@ -7,6 +7,18 @@ fn warn_event(error: crate::error::AppError, uuid: &str, context: &str) {
     tracing::warn!(%error, %uuid, context, "stage event write failed");
 }
 
+async fn close_event(
+    pool: &SqlitePool,
+    uuid: &str,
+    outcome: &str,
+    error_code: Option<&str>,
+    context: &str,
+) {
+    if let Err(error) = stage_events::close_open(pool, uuid, outcome, error_code).await {
+        warn_event(error, uuid, context);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NewEpisode {
     pub show_id: i64,
@@ -294,7 +306,7 @@ pub async fn set_fetched(pool: &SqlitePool, uuid: &str, meta: FetchedMeta<'_>) -
     .execute(pool)
     .await?;
     if result.rows_affected() > 0 {
-        let _ = stage_events::close_open(pool, uuid, stage_events::OUTCOME_OK, None).await;
+        close_event(pool, uuid, stage_events::OUTCOME_OK, None, "set_fetched").await;
         if let Err(error) = stage_events::open(pool, uuid, meta.next_stage).await {
             warn_event(error, uuid, "set_fetched");
         }
@@ -338,7 +350,7 @@ pub async fn set_review(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
     .execute(pool)
     .await?;
     if result.rows_affected() > 0 {
-        let _ = stage_events::close_open(pool, uuid, stage_events::OUTCOME_OK, None).await;
+        close_event(pool, uuid, stage_events::OUTCOME_OK, None, "set_review").await;
         if let Err(error) = stage_events::open(pool, uuid, stage::REVIEW).await {
             warn_event(error, uuid, "set_review");
         }
@@ -360,7 +372,7 @@ pub async fn approve_review(pool: &SqlitePool, uuid: &str) -> AppResult<bool> {
     .execute(pool)
     .await?;
     if result.rows_affected() > 0 {
-        let _ = stage_events::close_open(pool, uuid, stage_events::OUTCOME_OK, None).await;
+        close_event(pool, uuid, stage_events::OUTCOME_OK, None, "approve_review").await;
         if let Err(error) = stage_events::open(pool, uuid, stage::VOICING).await {
             warn_event(error, uuid, "approve_review");
         }
@@ -516,7 +528,7 @@ pub async fn finish(
     .execute(pool)
     .await?;
     if result.rows_affected() > 0 {
-        let _ = stage_events::close_open(pool, uuid, stage_events::OUTCOME_OK, None).await;
+        close_event(pool, uuid, stage_events::OUTCOME_OK, None, "finish").await;
     }
     Ok(())
 }
@@ -587,7 +599,7 @@ pub async fn cancel(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
     .execute(pool)
     .await?;
     if result.rows_affected() > 0 {
-        let _ = stage_events::close_open(pool, uuid, stage_events::OUTCOME_CANCELLED, None).await;
+        close_event(pool, uuid, stage_events::OUTCOME_CANCELLED, None, "cancel").await;
     }
     Ok(())
 }
@@ -607,7 +619,14 @@ pub async fn reset_for_reread(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
     .execute(pool)
     .await?;
     if result.rows_affected() > 0 {
-        let _ = stage_events::close_open(pool, uuid, stage_events::OUTCOME_OK, None).await;
+        close_event(
+            pool,
+            uuid,
+            stage_events::OUTCOME_OK,
+            None,
+            "reset_for_reread",
+        )
+        .await;
         if let Err(error) = stage_events::open(pool, uuid, stage::SYNTHESIZING).await {
             warn_event(error, uuid, "reset_for_reread");
         }
@@ -630,7 +649,7 @@ pub async fn publish_one(pool: &SqlitePool, uuid: &str) -> AppResult<bool> {
     .execute(pool)
     .await?;
     if result.rows_affected() > 0 {
-        let _ = stage_events::close_open(pool, uuid, stage_events::OUTCOME_OK, None).await;
+        close_event(pool, uuid, stage_events::OUTCOME_OK, None, "publish_one").await;
     }
     Ok(result.rows_affected() > 0)
 }
@@ -656,7 +675,7 @@ pub async fn publish_ready(pool: &SqlitePool, show_id: i64) -> AppResult<u64> {
     .await?;
     if result.rows_affected() > 0 {
         for uuid in uuids {
-            let _ = stage_events::close_open(pool, &uuid, stage_events::OUTCOME_OK, None).await;
+            close_event(pool, &uuid, stage_events::OUTCOME_OK, None, "publish_ready").await;
         }
     }
     Ok(result.rows_affected())

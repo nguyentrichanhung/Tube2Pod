@@ -210,6 +210,13 @@ mod tests {
         )
         .await
         .unwrap();
+        let before: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM stage_events WHERE episode_uuid = ?1")
+                .bind(&ep.uuid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(before, 1);
         crate::db::episodes::delete(&pool, &ep.uuid).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage_events")
             .fetch_one(&pool)
