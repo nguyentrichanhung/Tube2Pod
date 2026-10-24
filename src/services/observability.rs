@@ -125,7 +125,7 @@ pub fn percentile(sorted: &[i64], p: u8) -> Option<i64> {
         return None;
     }
     let n = sorted.len();
-    let rank = ((p as usize * n + 99) / 100).max(1).min(n);
+    let rank = (p as usize * n).div_ceil(100).max(1).min(n);
     Some(sorted[rank - 1])
 }
 
