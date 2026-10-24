@@ -205,7 +205,11 @@ pub fn status_label_for(status: &str) -> &'static str {
 }
 
 pub fn created_label_for(ts: i64) -> String {
-    let seconds = crate::db::now_ts() - ts;
+    created_label_at(ts, crate::db::now_ts())
+}
+
+pub fn created_label_at(ts: i64, now: i64) -> String {
+    let seconds = now - ts;
     if seconds < 60 {
         "vừa xong".into()
     } else if seconds < 3600 {

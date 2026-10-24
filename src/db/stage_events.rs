@@ -102,7 +102,7 @@ pub async fn failure_groups(pool: &SqlitePool, since: i64) -> AppResult<Vec<Fail
          FROM stage_events
          WHERE outcome = 'failed' AND exited_at IS NOT NULL AND exited_at >= ?1
          GROUP BY error_code, stage
-         ORDER BY count DESC, error_code ASC
+         ORDER BY count DESC, error_code ASC, stage ASC
          LIMIT 10",
     )
     .bind(since)
@@ -133,8 +133,10 @@ pub async fn recent_failures(
 
 pub async fn oldest_open_queued(pool: &SqlitePool) -> AppResult<Option<i64>> {
     Ok(sqlx::query_scalar(
-        "SELECT MIN(entered_at) FROM stage_events
-         WHERE stage = 'queued' AND exited_at IS NULL",
+        "SELECT MIN(se.entered_at)
+         FROM stage_events se
+         JOIN episodes e ON e.uuid = se.episode_uuid
+         WHERE se.stage = 'queued' AND se.exited_at IS NULL AND e.status = 'queued'",
     )
     .fetch_one(pool)
     .await?)

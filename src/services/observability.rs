@@ -94,35 +94,35 @@ fn status_count(rows: &[(String, i64)], value: &str) -> i64 {
         .unwrap_or(0)
 }
 
-pub async fn load_metrics(
-    pool: &SqlitePool,
-    window: Window,
-    now: i64,
-) -> AppResult<Metrics> {
+fn failure_label(code: &str) -> &'static str {
+    if code == "unknown" {
+        "Lỗi khác"
+    } else {
+        crate::models::error_label_for(Some(code)).unwrap_or("Lỗi khác")
+    }
+}
+
+pub async fn load_metrics(pool: &SqlitePool, window: Window, now: i64) -> AppResult<Metrics> {
     let since = window.since(now);
-    let status_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT status, COUNT(*) FROM episodes GROUP BY status",
-    )
-    .fetch_all(pool)
-    .await?;
+    let status_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT status, COUNT(*) FROM episodes GROUP BY status")
+            .fetch_all(pool)
+            .await?;
     let oldest_event = stage_events::oldest_open_queued(pool).await?;
-    let oldest_created: Option<i64> = sqlx::query_scalar(
-        "SELECT MIN(created_at) FROM episodes WHERE status IN (?1, ?2)",
-    )
-    .bind(status::QUEUED)
-    .bind(status::RUNNING)
-    .fetch_one(pool)
-    .await?;
-    let oldest = match (oldest_event, oldest_created) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
+    let oldest = match oldest_event {
+        Some(entered) => Some(entered),
+        None => {
+            sqlx::query_scalar("SELECT MIN(created_at) FROM episodes WHERE status = ?1")
+                .bind(status::QUEUED)
+                .fetch_one(pool)
+                .await?
+        }
     };
 
-    let created: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM episodes WHERE created_at >= ?1")
-            .bind(since)
-            .fetch_one(pool)
-            .await?;
+    let created: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM episodes WHERE created_at >= ?1")
+        .bind(since)
+        .fetch_one(pool)
+        .await?;
     let published: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM episodes WHERE published_at IS NOT NULL AND published_at >= ?1",
     )
@@ -165,8 +165,7 @@ pub async fn load_metrics(
     }
 
     let failures: Vec<FailureGroup> = stage_events::failure_groups(pool, since).await?;
-    let recent: Vec<RecentFailure> =
-        stage_events::recent_failures(pool, since, 20).await?;
+    let recent: Vec<RecentFailure> = stage_events::recent_failures(pool, since, 20).await?;
     let has_latency = latency.iter().any(|row| row.count > 0);
 
     Ok(Metrics {
@@ -185,8 +184,7 @@ pub async fn load_metrics(
         failure_groups: failures
             .into_iter()
             .map(|row| FailureGroupRow {
-                label: crate::models::error_label_for(Some(&row.error_code))
-                    .unwrap_or("Lỗi khác"),
+                label: failure_label(&row.error_code),
                 stage: crate::models::stage_label_for(&row.stage),
                 count: row.count,
             })
@@ -196,10 +194,9 @@ pub async fn load_metrics(
             .map(|row| RecentFailureRow {
                 episode_uuid: row.episode_uuid,
                 source_title: row.source_title,
-                label: crate::models::error_label_for(Some(&row.error_code))
-                    .unwrap_or("Lỗi khác"),
+                label: failure_label(&row.error_code),
                 stage: crate::models::stage_label_for(&row.stage),
-                age: crate::models::created_label_for(row.exited_at),
+                age: crate::models::created_label_at(row.exited_at, now),
             })
             .collect(),
     })
@@ -216,6 +213,104 @@ mod tests {
         assert_eq!(percentile(&values, 95), Some(50));
         assert_eq!(percentile(&[], 50), None);
         assert_eq!(percentile(&[7], 95), Some(7));
+    }
+
+    #[test]
+    fn failure_labels_use_the_fallback_for_unknown_codes() {
+        assert_eq!(failure_label("unknown"), "Lỗi khác");
+        assert_eq!(
+            failure_label("tts_unavailable"),
+            "Dịch vụ đọc chưa sẵn sàng. Liên hệ admin."
+        );
+    }
+
+    async fn create_episode(
+        pool: &SqlitePool,
+        show_id: i64,
+        video_id: &str,
+    ) -> crate::models::Episode {
+        crate::db::episodes::create(
+            pool,
+            crate::db::episodes::NewEpisode {
+                show_id,
+                video_id: video_id.into(),
+                source_url: format!("https://www.youtube.com/watch?v={video_id}"),
+                source_title: video_id.into(),
+                source_channel: String::new(),
+                source_duration_s: None,
+                source_thumbnail_url: None,
+                source_upload_date: None,
+                language: "vi".into(),
+                target_minutes: 10,
+                review_required: false,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn create_show(pool: &SqlitePool) -> crate::models::Show {
+        crate::db::shows::create(
+            pool,
+            crate::db::shows::NewShow {
+                title: "Show".into(),
+                ..crate::db::shows::NewShow::default()
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn oldest_queued_uses_the_open_queued_event_and_ignores_running() {
+        let pool = crate::db::test_pool().await;
+        let now = 1_000_000;
+        let show = create_show(&pool).await;
+        let queued = create_episode(&pool, show.id, "queued-age").await;
+        let running = create_episode(&pool, show.id, "running-age").await;
+
+        sqlx::query(
+            "UPDATE stage_events SET entered_at = ?2
+             WHERE episode_uuid = ?1 AND exited_at IS NULL",
+        )
+        .bind(&queued.uuid)
+        .bind(now - 300)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE episodes SET status = 'running', created_at = ?2, updated_at = ?2
+             WHERE uuid = ?1",
+        )
+        .bind(&running.uuid)
+        .bind(now - 1000)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let metrics = load_metrics(&pool, Window::Day, now).await.unwrap();
+        assert_eq!(metrics.oldest_queued_secs, Some(300));
+    }
+
+    #[tokio::test]
+    async fn oldest_queued_is_none_when_only_running_episodes_exist() {
+        let pool = crate::db::test_pool().await;
+        let now = 1_000_000;
+        let show = create_show(&pool).await;
+        let running = create_episode(&pool, show.id, "running-only").await;
+
+        sqlx::query(
+            "UPDATE episodes SET status = 'running', created_at = ?2, updated_at = ?2
+             WHERE uuid = ?1",
+        )
+        .bind(&running.uuid)
+        .bind(now - 1000)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let metrics = load_metrics(&pool, Window::Day, now).await.unwrap();
+        assert_eq!(metrics.oldest_queued_secs, None);
     }
 
     #[tokio::test]
@@ -308,5 +403,6 @@ mod tests {
         assert_eq!(metrics.latency[0].p50_secs, Some(10));
         assert_eq!(metrics.failure_groups[0].count, 1);
         assert_eq!(metrics.recent_failures[0].episode_uuid, failed.uuid);
+        assert_eq!(metrics.recent_failures[0].age, "vừa xong");
     }
 }
