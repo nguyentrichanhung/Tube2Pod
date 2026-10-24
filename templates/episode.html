@@ -12,7 +12,7 @@
     {% else if episode.status == "failed" %}
     <span class="badge badge-err">{{ episode.status_label() }}</span>
     {% else %}
-    <span class="badge">{{ episode.status_label() }}</span>
+    <span class="badge">{% if episode.is_active() && episode.stage_label() != episode.status_label() %}{{ episode.status_label() }} · {{ episode.stage_label() }}{% else %}{{ episode.status_label() }}{% endif %}</span>
     {% endif %}
   </div>
 </div>
@@ -38,6 +38,12 @@
       <p class="muted">Audio chưa được tạo. Kiểm tra tóm tắt rồi tiếp tục.</p>
       <div class="summary-text">{{ episode.summary_text.as_deref().unwrap_or("") }}</div>
       <div class="muted">{{ episode.summary_words() }} từ</div>
+      {% if episode.audio_script.is_some() %}
+      <details class="stack">
+        <summary>Script audio đầy đủ ({{ episode.audio_script_words() }} từ)</summary>
+        <div class="summary-text">{{ episode.audio_script.as_deref().unwrap_or("") }}</div>
+      </details>
+      {% endif %}
       <form method="post" action="/episodes/{{ episode.uuid }}/approve">
         <input type="hidden" name="_csrf" value="{{ csrf }}">
         <button class="btn" type="submit">Tiếp tục tạo audio</button>

@@ -117,7 +117,6 @@ pub struct Episode {
     pub transcript_chars: Option<i64>,
     pub summary_text: Option<String>,
     pub audio_script: Option<String>,
-    pub summary_edited_at: Option<i64>,
     pub review_required: bool,
     pub summary_hash: Option<String>,
     pub target_minutes: i64,
@@ -301,6 +300,14 @@ impl Episode {
             .count()
     }
 
+    pub fn audio_script_words(&self) -> usize {
+        self.audio_script
+            .as_deref()
+            .unwrap_or("")
+            .split_whitespace()
+            .count()
+    }
+
     pub fn audio_needs_reread(&self) -> bool {
         match (&self.summary_hash, &self.audio_summary_hash) {
             (Some(summary), Some(audio)) => summary != audio,
@@ -447,8 +454,7 @@ mod tests {
             transcript_kind: None,
             transcript_chars: None,
             summary_text: Some("Một hai ba.".into()),
-            audio_script: None,
-            summary_edited_at: None,
+            audio_script: Some("Một hai ba bốn.".into()),
             summary_hash: None,
             review_required: false,
             target_minutes: 10,
@@ -475,6 +481,7 @@ mod tests {
             updated_at: 1,
         };
         assert_eq!(episode.summary_words(), 3);
+        assert_eq!(episode.audio_script_words(), 4);
     }
 
     #[test]

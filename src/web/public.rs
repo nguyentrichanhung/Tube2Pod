@@ -484,6 +484,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn feed_description_uses_the_display_summary_not_the_audio_script() {
+        let fx = fixture().await;
+        episodes::set_summary(
+            &fx.state.pool,
+            &fx.uuid,
+            "Tóm tắt hiển thị.",
+            "SCRIPT_NOI_DAY_DU_KHONG_DUOC_LO",
+            "hash",
+        )
+        .await
+        .unwrap();
+
+        let xml = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
+        assert!(xml.contains("Tóm tắt hiển thị."), "{xml}");
+        assert!(!xml.contains("SCRIPT_NOI_DAY_DU_KHONG_DUOC_LO"), "{xml}");
+    }
+
+    #[tokio::test]
     async fn feed_is_404_unless_enabled_and_complete() {
         let fx = fixture().await;
         let pool = &fx.state.pool;

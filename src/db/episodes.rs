@@ -96,6 +96,21 @@ pub async fn list(pool: &SqlitePool, filter: &EpisodeFilter) -> AppResult<Vec<Ep
     Ok(rows)
 }
 
+pub async fn count(pool: &SqlitePool, filter: &EpisodeFilter) -> AppResult<i64> {
+    let total = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM episodes
+         WHERE (?1 IS NULL OR show_id = ?1)
+           AND (?2 IS NULL OR status = ?2)
+           AND (?3 IS NULL OR source_title LIKE '%' || ?3 || '%' OR source_channel LIKE '%' || ?3 || '%')",
+    )
+    .bind(filter.show_id)
+    .bind(filter.status.as_deref())
+    .bind(filter.query.as_deref())
+    .fetch_one(pool)
+    .await?;
+    Ok(total)
+}
+
 pub async fn list_for_show(pool: &SqlitePool, show_id: i64, limit: i64) -> AppResult<Vec<Episode>> {
     list(
         pool,
@@ -106,6 +121,39 @@ pub async fn list_for_show(pool: &SqlitePool, show_id: i64, limit: i64) -> AppRe
         },
     )
     .await
+}
+
+pub async fn cap_legacy_summaries(pool: &SqlitePool) -> AppResult<u64> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT uuid, summary_text FROM episodes
+         WHERE summary_text IS NOT NULL
+           AND audio_script IS NOT NULL
+           AND TRIM(audio_script) != ''",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut changed = 0u64;
+    for (uuid, summary) in rows {
+        if summary.split_whitespace().count() <= crate::domain::summarize::DISPLAY_SUMMARY_MAX_WORDS
+        {
+            continue;
+        }
+        let capped = crate::domain::summarize::cap_words(
+            &summary,
+            crate::domain::summarize::DISPLAY_SUMMARY_MAX_WORDS,
+        );
+        if capped == summary {
+            continue;
+        }
+        sqlx::query("UPDATE episodes SET summary_text = ?1, updated_at = ?2 WHERE uuid = ?3")
+            .bind(capped)
+            .bind(now_ts())
+            .bind(uuid)
+            .execute(pool)
+            .await?;
+        changed += 1;
+    }
+    Ok(changed)
 }
 
 pub async fn claim_next(pool: &SqlitePool) -> AppResult<Option<Episode>> {
@@ -232,7 +280,7 @@ pub async fn set_summary(
 ) -> AppResult<()> {
     sqlx::query(
         "UPDATE episodes SET summary_text = ?1, audio_script = ?2, summary_hash = ?3,
-            summary_edited_at = NULL, updated_at = ?4
+            updated_at = ?4
          WHERE uuid = ?5",
     )
     .bind(display_summary)
@@ -936,6 +984,45 @@ mod tests {
         assert_eq!(got.summary_text.as_deref(), Some("Tóm tắt ngắn."));
         assert_eq!(got.audio_script.as_deref(), Some("Script đầy đủ để đọc."));
         assert_eq!(got.summary_hash.as_deref(), Some("hash"));
+    }
+
+    #[tokio::test]
+    async fn caps_legacy_display_summaries_without_touching_audio_script() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "legacy-long"))
+            .await
+            .unwrap();
+        let long_summary = (1..=300)
+            .map(|index| format!("word{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        set_summary(&pool, &ep.uuid, &long_summary, "Script đầy đủ.", "hash")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE episodes SET updated_at = 1 WHERE uuid = ?1")
+            .bind(&ep.uuid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let before = get(&pool, &ep.uuid).await.unwrap().unwrap();
+
+        assert_eq!(cap_legacy_summaries(&pool).await.unwrap(), 1);
+
+        let after = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(after.summary_words(), 200);
+        assert_eq!(
+            after
+                .summary_text
+                .as_deref()
+                .unwrap()
+                .split_whitespace()
+                .next(),
+            Some("word1")
+        );
+        assert_eq!(after.audio_script.as_deref(), Some("Script đầy đủ."));
+        assert_eq!(after.summary_hash.as_deref(), Some("hash"));
+        assert!(after.updated_at > before.updated_at);
+        assert_eq!(cap_legacy_summaries(&pool).await.unwrap(), 0);
     }
 
     #[tokio::test]

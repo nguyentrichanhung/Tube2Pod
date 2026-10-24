@@ -5,7 +5,7 @@ use crate::services::cover;
 use crate::services::omnivoice::{OmnivoiceClient, Voice};
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
-use crate::web::library::LibraryRow;
+use crate::web::library::{LibraryRow, Pagination};
 use askama::Template;
 use axum::body::{Body, Bytes};
 use axum::extract::{Multipart, Path, Query, State};
@@ -164,6 +164,7 @@ pub struct ShowDetailTemplate {
     voice_rows: Vec<VoiceRow>,
     has_playable_voice: bool,
     selectable: bool,
+    pagination: Pagination,
 }
 
 #[derive(Debug, Deserialize)]
@@ -332,6 +333,7 @@ pub async fn detail(
         })
         .collect();
     let episode_count = rows.len();
+    let pagination = Pagination::single(episode_count as i64);
     let feed_url = format!("{}/feed/{}.xml", state.cfg.public_base_url, show.feed_token);
     let cover_url = format!("/shows/{}/cover", show.id);
     let checklist = feed_checklist(&show);
@@ -361,6 +363,7 @@ pub async fn detail(
             voice_rows,
             has_playable_voice,
             selectable: false,
+            pagination,
         }
         .render()?,
     ))

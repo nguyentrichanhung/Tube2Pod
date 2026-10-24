@@ -34,3 +34,13 @@
 </table>
 </div>
 {% endif %}
+{% if pagination.total_pages > 1 %}
+<div class="row between" style="margin-top:.75rem">
+  <span class="muted">{{ pagination.label() }}</span>
+  <div class="row">
+    {% if pagination.prev_url.is_some() %}<a class="btn btn-secondary" href="{{ pagination.prev_url.as_deref().unwrap_or("") }}">Trước</a>{% endif %}
+    <span class="muted">Trang {{ pagination.page }}/{{ pagination.total_pages }}</span>
+    {% if pagination.next_url.is_some() %}<a class="btn btn-secondary" href="{{ pagination.next_url.as_deref().unwrap_or("") }}">Sau</a>{% endif %}
+  </div>
+</div>
+{% endif %}
