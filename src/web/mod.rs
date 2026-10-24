@@ -2,6 +2,7 @@ pub mod csrf;
 pub mod episodes;
 pub mod errors;
 pub mod library;
+pub mod observability;
 pub mod public;
 pub mod settings;
 pub mod shows;
@@ -100,6 +101,7 @@ pub fn admin_router(state: AppState) -> Router {
         .route("/shows/{id}/feed/rotate", post(shows::rotate_feed))
         .route("/shows/{id}/publish-ready", post(shows::publish_ready))
         .route("/settings", get(settings::index).post(settings::save))
+        .route("/observability", get(observability::index))
         .route("/healthz", get(crate::health::healthz))
         .layer(middleware::from_fn(csrf::csrf_middleware))
         .layer(middleware::from_fn(errors::html_errors));
