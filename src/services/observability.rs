@@ -1,11 +1,17 @@
 use crate::db::stage_events::{self, FailureGroup, RecentFailure};
 use crate::error::AppResult;
 use crate::models::{stage, status};
+use crate::services::omnivoice::OmnivoiceClient;
+use crate::state::{AppState, CachedHealth};
 use sqlx::SqlitePool;
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 pub const WINDOW_24H: &str = "24h";
 pub const WINDOW_7D: &str = "7d";
+
+const HEALTH_CACHE_SECS: u64 = 30;
+const HEALTH_TIMEOUT_SECS: u64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Window {
@@ -35,6 +41,42 @@ impl Window {
         };
         now.saturating_sub(seconds)
     }
+}
+
+pub async fn omnivoice_health(state: &AppState) -> CachedHealth {
+    let cached = state.health_cache.lock().await.clone();
+    if let Some(cached) = cached {
+        if cached.checked_at.elapsed() < Duration::from_secs(HEALTH_CACHE_SECS) {
+            return cached;
+        }
+    }
+
+    let client = OmnivoiceClient::new(&state.cfg.omnivoice);
+    let result = tokio::time::timeout(
+        Duration::from_secs(HEALTH_TIMEOUT_SECS),
+        client.list_voices(),
+    )
+    .await;
+
+    let health = match result {
+        Ok(Ok(_)) => CachedHealth {
+            checked_at: Instant::now(),
+            ok: true,
+            message: None,
+        },
+        Ok(Err(_)) => CachedHealth {
+            checked_at: Instant::now(),
+            ok: false,
+            message: Some("Không kết nối được Omnivoice.".into()),
+        },
+        Err(_) => CachedHealth {
+            checked_at: Instant::now(),
+            ok: false,
+            message: Some("Omnivoice không phản hồi trong 5 giây.".into()),
+        },
+    };
+    *state.health_cache.lock().await = Some(health.clone());
+    health
 }
 
 #[derive(Debug, Clone)]
@@ -404,5 +446,48 @@ mod tests {
         assert_eq!(metrics.failure_groups[0].count, 1);
         assert_eq!(metrics.recent_failures[0].episode_uuid, failed.uuid);
         assert_eq!(metrics.recent_failures[0].age, "vừa xong");
+    }
+
+    #[tokio::test]
+    async fn omnivoice_health_is_cached_for_thirty_seconds() {
+        use crate::config::Config;
+        use crate::state::AppState;
+        use std::sync::Arc;
+        use tokio::sync::Notify;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/voices"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "data": [],
+                "error": null
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let cfg = Config::from_lookup({
+            let base = server.uri();
+            move |key| match key {
+                "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
+                "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
+                "OMNIVOICE_BASE_URL" => Some(base.clone()),
+                "DATA_DIR" => Some("/tmp/t2p-observability".into()),
+                _ => None,
+            }
+        })
+        .unwrap();
+        let state = AppState {
+            pool: crate::db::test_pool().await,
+            cfg: Arc::new(cfg),
+            notify: Arc::new(Notify::new()),
+            health_cache: Arc::new(tokio::sync::Mutex::new(None)),
+        };
+
+        assert!(omnivoice_health(&state).await.ok);
+        assert!(omnivoice_health(&state).await.ok);
     }
 }

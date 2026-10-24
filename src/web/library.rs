@@ -456,6 +456,7 @@ mod tests {
                 pool: crate::db::test_pool().await,
                 cfg: Arc::new(cfg),
                 notify: Arc::new(Notify::new()),
+                health_cache: Arc::new(tokio::sync::Mutex::new(None)),
             },
             _dir: dir,
         }

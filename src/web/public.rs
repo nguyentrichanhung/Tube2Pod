@@ -357,6 +357,7 @@ mod tests {
             pool,
             cfg: Arc::new(cfg),
             notify: Arc::new(Notify::new()),
+            health_cache: Arc::new(tokio::sync::Mutex::new(None)),
         };
         install_audio(&state, &episode).await;
         episodes::finish(

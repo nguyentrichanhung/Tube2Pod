@@ -55,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
         pool,
         cfg: cfg.clone(),
         notify,
+        health_cache: Arc::new(tokio::sync::Mutex::new(None)),
     };
     let admin_listener = tokio::net::TcpListener::bind(admin_addr)
         .await
