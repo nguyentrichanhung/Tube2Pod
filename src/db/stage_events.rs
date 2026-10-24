@@ -131,12 +131,15 @@ pub async fn recent_failures(
     .await?)
 }
 
-pub async fn oldest_open_queued(pool: &SqlitePool) -> AppResult<Option<i64>> {
+pub async fn oldest_queued_at(pool: &SqlitePool) -> AppResult<Option<i64>> {
     Ok(sqlx::query_scalar(
-        "SELECT MIN(se.entered_at)
-         FROM stage_events se
-         JOIN episodes e ON e.uuid = se.episode_uuid
-         WHERE se.stage = 'queued' AND se.exited_at IS NULL AND e.status = 'queued'",
+        "SELECT MIN(COALESCE(se.entered_at, e.created_at))
+         FROM episodes e
+         LEFT JOIN stage_events se
+           ON se.episode_uuid = e.uuid
+          AND se.stage = 'queued'
+          AND se.exited_at IS NULL
+         WHERE e.status = 'queued'",
     )
     .fetch_one(pool)
     .await?)

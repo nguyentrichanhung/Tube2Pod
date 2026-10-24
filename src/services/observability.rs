@@ -85,6 +85,7 @@ pub struct StageLatency {
     pub count: usize,
     pub p50_secs: Option<i64>,
     pub p95_secs: Option<i64>,
+    pub p95_percent: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -137,10 +138,27 @@ fn status_count(rows: &[(String, i64)], value: &str) -> i64 {
 }
 
 fn failure_label(code: &str) -> &'static str {
-    if code == "unknown" {
-        "Lỗi khác"
-    } else {
+    let known = matches!(
+        code,
+        "invalid_url"
+            | "source_unavailable"
+            | "source_too_long"
+            | "source_too_short"
+            | "no_captions"
+            | "unsupported_language"
+            | "transcript_too_short"
+            | "transcript_invalid"
+            | "voice_not_selected"
+            | "voice_design_failed"
+            | "tts_unavailable"
+            | "synthesis_failed"
+            | "assembly_failed"
+            | "disk_full"
+    );
+    if known {
         crate::models::error_label_for(Some(code)).unwrap_or("Lỗi khác")
+    } else {
+        "Lỗi khác"
     }
 }
 
@@ -150,16 +168,7 @@ pub async fn load_metrics(pool: &SqlitePool, window: Window, now: i64) -> AppRes
         sqlx::query_as("SELECT status, COUNT(*) FROM episodes GROUP BY status")
             .fetch_all(pool)
             .await?;
-    let oldest_event = stage_events::oldest_open_queued(pool).await?;
-    let oldest = match oldest_event {
-        Some(entered) => Some(entered),
-        None => {
-            sqlx::query_scalar("SELECT MIN(created_at) FROM episodes WHERE status = ?1")
-                .bind(status::QUEUED)
-                .fetch_one(pool)
-                .await?
-        }
-    };
+    let oldest = stage_events::oldest_queued_at(pool).await?;
 
     let created: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM episodes WHERE created_at >= ?1")
         .bind(since)
@@ -203,7 +212,19 @@ pub async fn load_metrics(pool: &SqlitePool, window: Window, now: i64) -> AppRes
             count: values.len(),
             p50_secs: percentile(&values, 50),
             p95_secs: percentile(&values, 95),
+            p95_percent: 0,
         });
+    }
+    let max_p95 = latency
+        .iter()
+        .filter_map(|row| row.p95_secs)
+        .max()
+        .unwrap_or(0);
+    for row in &mut latency {
+        row.p95_percent = match row.p95_secs {
+            Some(p95) if max_p95 > 0 => ((p95 * 100 / max_p95) as u8).min(100),
+            _ => 0,
+        };
     }
 
     let failures: Vec<FailureGroup> = stage_events::failure_groups(pool, since).await?;
@@ -260,6 +281,7 @@ mod tests {
     #[test]
     fn failure_labels_use_the_fallback_for_unknown_codes() {
         assert_eq!(failure_label("unknown"), "Lỗi khác");
+        assert_eq!(failure_label("mystery_code"), "Lỗi khác");
         assert_eq!(
             failure_label("tts_unavailable"),
             "Dịch vụ đọc chưa sẵn sàng. Liên hệ admin."
@@ -332,6 +354,52 @@ mod tests {
 
         let metrics = load_metrics(&pool, Window::Day, now).await.unwrap();
         assert_eq!(metrics.oldest_queued_secs, Some(300));
+    }
+
+    #[tokio::test]
+    async fn oldest_queued_includes_eventless_queued_episodes_and_excludes_running() {
+        let pool = crate::db::test_pool().await;
+        let now = 1_000_000;
+        let show = create_show(&pool).await;
+        let with_event = create_episode(&pool, show.id, "queued-with-event").await;
+        let without_event = create_episode(&pool, show.id, "queued-without-event").await;
+        let running = create_episode(&pool, show.id, "running-older").await;
+
+        sqlx::query(
+            "UPDATE stage_events SET entered_at = ?2
+             WHERE episode_uuid = ?1 AND exited_at IS NULL",
+        )
+        .bind(&with_event.uuid)
+        .bind(now - 50)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM stage_events
+             WHERE episode_uuid = ?1 AND stage = 'queued' AND exited_at IS NULL",
+        )
+        .bind(&without_event.uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE episodes SET created_at = ?2, updated_at = ?2 WHERE uuid = ?1")
+            .bind(&without_event.uuid)
+            .bind(now - 500)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE episodes SET status = 'running', created_at = ?2, updated_at = ?2
+             WHERE uuid = ?1",
+        )
+        .bind(&running.uuid)
+        .bind(now - 900)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let metrics = load_metrics(&pool, Window::Day, now).await.unwrap();
+        assert_eq!(metrics.oldest_queued_secs, Some(500));
     }
 
     #[tokio::test]

@@ -14,11 +14,11 @@
 <div class="grid two">
   <section class="card stack">
     <h2>Hàng đợi</h2>
-    <div class="row between"><span>Đang chờ</span><strong>{{ metrics.queued }}</strong></div>
-    <div class="row between"><span>Đang xử lý</span><strong>{{ metrics.running }}</strong></div>
-    <div class="row between"><span>Chờ duyệt</span><strong>{{ metrics.review }}</strong></div>
-    <div class="row between"><span>Lỗi</span><strong>{{ metrics.failed }}</strong></div>
-    <div class="row between"><span>Sẵn sàng / đã đăng</span><strong>{{ metrics.ready }}</strong></div>
+    <div class="row between"><a href="/library?status=queued">Đang chờ</a><strong>{{ metrics.queued }}</strong></div>
+    <div class="row between"><a href="/library?status=running">Đang xử lý</a><strong>{{ metrics.running }}</strong></div>
+    <div class="row between"><a href="/library?status=review">Chờ duyệt</a><strong>{{ metrics.review }}</strong></div>
+    <div class="row between"><a href="/library?status=failed">Lỗi</a><strong>{{ metrics.failed }}</strong></div>
+    <div class="row between"><a href="/library?status=ready">Sẵn sàng / đã đăng</a><strong>{{ metrics.ready }}</strong></div>
     {% if let Some(secs) = metrics.oldest_queued_secs %}
     <div class="muted">Tập chờ lâu nhất: {{ secs / 60 }} phút</div>
     {% endif %}
@@ -44,7 +44,10 @@
           <td>{{ row.stage }}</td>
           <td>{{ row.count }}</td>
           <td>{% if let Some(p50) = row.p50_secs %}{{ p50 }} giây{% else %}—{% endif %}</td>
-          <td>{% if let Some(p95) = row.p95_secs %}{{ p95 }} giây{% else %}—{% endif %}</td>
+          <td>
+            {% if let Some(p95) = row.p95_secs %}{{ p95 }} giây{% else %}—{% endif %}
+            <div class="progress" aria-hidden="true"><div class="progress-bar" style="width:{{ row.p95_percent }}%"></div></div>
+          </td>
         </tr>
       {% endfor %}
       </tbody>
