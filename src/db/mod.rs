@@ -1,6 +1,7 @@
 pub mod episodes;
 pub mod settings;
 pub mod shows;
+pub mod stage_events;
 
 use crate::error::AppResult;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
