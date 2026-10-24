@@ -70,6 +70,76 @@ pub async fn purge_before(pool: &SqlitePool, cutoff: i64) -> AppResult<u64> {
     Ok(result.rows_affected())
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct FailureGroup {
+    pub error_code: String,
+    pub stage: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RecentFailure {
+    pub episode_uuid: String,
+    pub source_title: String,
+    pub error_code: String,
+    pub stage: String,
+    pub exited_at: i64,
+}
+
+pub async fn durations_since(pool: &SqlitePool, since: i64) -> AppResult<Vec<(String, i64)>> {
+    Ok(sqlx::query_as(
+        "SELECT stage, exited_at - entered_at FROM stage_events
+         WHERE outcome = 'ok' AND exited_at IS NOT NULL AND exited_at >= ?1",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn failure_groups(pool: &SqlitePool, since: i64) -> AppResult<Vec<FailureGroup>> {
+    Ok(sqlx::query_as(
+        "SELECT COALESCE(error_code, 'unknown') AS error_code, stage, COUNT(*) AS count
+         FROM stage_events
+         WHERE outcome = 'failed' AND exited_at IS NOT NULL AND exited_at >= ?1
+         GROUP BY error_code, stage
+         ORDER BY count DESC, error_code ASC
+         LIMIT 10",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn recent_failures(
+    pool: &SqlitePool,
+    since: i64,
+    limit: i64,
+) -> AppResult<Vec<RecentFailure>> {
+    Ok(sqlx::query_as(
+        "SELECT se.episode_uuid, e.source_title,
+                COALESCE(se.error_code, 'unknown') AS error_code,
+                se.stage, se.exited_at
+         FROM stage_events se
+         JOIN episodes e ON e.uuid = se.episode_uuid
+         WHERE se.outcome = 'failed' AND se.exited_at IS NOT NULL AND se.exited_at >= ?1
+         ORDER BY se.exited_at DESC, se.id DESC
+         LIMIT ?2",
+    )
+    .bind(since)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn oldest_open_queued(pool: &SqlitePool) -> AppResult<Option<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT MIN(entered_at) FROM stage_events
+         WHERE stage = 'queued' AND exited_at IS NULL",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
