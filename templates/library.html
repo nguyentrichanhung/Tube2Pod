@@ -37,7 +37,6 @@
   {% if !query.is_empty() %}<input type="hidden" name="q" value="{{ query }}">{% endif %}
   <input type="hidden" name="page" value="{{ pagination.page }}">
   <div class="row between">
-    <p class="muted">{{ pagination.label() }}</p>
     <a class="btn btn-secondary" href="/library">Xoá bộ lọc</a>
   </div>
   <div class="row between">
@@ -76,6 +75,7 @@
       setFilter("show_id", data.get("show_id") || "");
       setFilter("status", data.get("status") || "");
       setFilter("q", data.get("q") || "");
+      setFilter("page", data.get("page") || "1");
     }
     function refresh() {
       const checked = boxes().filter((box) => box.checked).length;

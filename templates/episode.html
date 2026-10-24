@@ -38,7 +38,7 @@
       <p class="muted">Audio chưa được tạo. Kiểm tra tóm tắt rồi tiếp tục.</p>
       <div class="summary-text">{{ episode.summary_text.as_deref().unwrap_or("") }}</div>
       <div class="muted">{{ episode.summary_words() }} từ</div>
-      {% if episode.audio_script.is_some() %}
+      {% if episode.audio_script_words() > 0 %}
       <details class="stack">
         <summary>Script audio đầy đủ ({{ episode.audio_script_words() }} từ)</summary>
         <div class="summary-text">{{ episode.audio_script.as_deref().unwrap_or("") }}</div>

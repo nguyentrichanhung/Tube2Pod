@@ -49,10 +49,9 @@ impl Pagination {
         }
     }
 
-    fn new(query: &LibraryQuery, total: i64) -> Self {
-        let page = query.page();
-        let total_pages = ((total + PAGE_SIZE - 1) / PAGE_SIZE).max(1);
-        let offset = (page - 1) * PAGE_SIZE;
+    fn new(query: &LibraryQuery, total: i64, page: i64) -> Self {
+        let total_pages = total_pages(total);
+        let offset = page.saturating_sub(1).saturating_mul(PAGE_SIZE);
         let start = if total == 0 { 0 } else { offset + 1 };
         let end = (offset + PAGE_SIZE).min(total);
         Self {
@@ -110,6 +109,10 @@ impl LibraryQuery {
     }
 
     pub fn filter(&self) -> EpisodeFilter {
+        self.filter_at(self.page())
+    }
+
+    fn filter_at(&self, page: i64) -> EpisodeFilter {
         EpisodeFilter {
             show_id: self.show_id,
             status: self
@@ -125,9 +128,13 @@ impl LibraryQuery {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
             limit: Some(PAGE_SIZE),
-            offset: Some((self.page() - 1) * PAGE_SIZE),
+            offset: Some(page.saturating_sub(1).saturating_mul(PAGE_SIZE)),
         }
     }
+}
+
+fn total_pages(total: i64) -> i64 {
+    ((total + PAGE_SIZE - 1) / PAGE_SIZE).max(1)
 }
 
 fn page_url(query: &LibraryQuery, page: i64) -> String {
@@ -139,7 +146,7 @@ fn page_url(query: &LibraryQuery, page: i64) -> String {
         .status
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.is_empty() && STATUSES.contains(value))
     {
         serializer.append_pair("status", value);
     }
@@ -223,8 +230,8 @@ pub async fn index(
 ) -> AppResult<Html<String>> {
     let filter = query.filter();
     let selected_status = filter.status.clone().unwrap_or_default();
-    let (rows, shows, total) = load_rows(&state, &filter).await?;
-    let pagination = Pagination::new(&query, total);
+    let (rows, shows, total, page) = load_rows(&state, &query).await?;
+    let pagination = Pagination::new(&query, total, page);
     let bulk_message = query.deleted.map(|deleted| {
         let skipped = query.skipped.unwrap_or(0);
         if skipped > 0 {
@@ -253,8 +260,8 @@ pub async fn rows(
     State(state): State<AppState>,
     Query(query): Query<LibraryQuery>,
 ) -> AppResult<impl IntoResponse> {
-    let (rows, _, total) = load_rows(&state, &query.filter()).await?;
-    let pagination = Pagination::new(&query, total);
+    let (rows, _, total, page) = load_rows(&state, &query).await?;
+    let pagination = Pagination::new(&query, total, page);
     Ok(Html(
         RowsTemplate {
             rows,
@@ -386,12 +393,13 @@ fn library_redirect(
 
 async fn load_rows(
     state: &AppState,
-    filter: &EpisodeFilter,
-) -> AppResult<(Vec<LibraryRow>, Vec<Show>, i64)> {
-    let total = episodes::count(&state.pool, filter).await?;
-    let episodes = episodes::list(&state.pool, filter).await?;
+    query: &LibraryQuery,
+) -> AppResult<(Vec<LibraryRow>, Vec<Show>, i64, i64)> {
+    let total = episodes::count(&state.pool, &query.filter_at(1)).await?;
+    let page = query.page().min(total_pages(total));
+    let episodes = episodes::list(&state.pool, &query.filter_at(page)).await?;
     let shows = shows::list(&state.pool).await?;
-    Ok((build_rows(episodes, &shows), shows, total))
+    Ok((build_rows(episodes, &shows), shows, total, page))
 }
 
 fn build_rows(episodes: Vec<Episode>, shows: &[Show]) -> Vec<LibraryRow> {
@@ -577,6 +585,7 @@ mod tests {
         assert!(first.contains("51 tập"));
         assert!(first.contains("Trang 1/2"));
         assert!(first.contains("page=2"));
+        assert!(first.contains("name=\"page\" value=\"1\""));
 
         let second =
             body_string(send(&context, Method::GET, "/library?status=queued&page=2").await).await;
@@ -584,6 +593,11 @@ mod tests {
         assert!(second.contains("Trang 2/2"));
         assert!(second.contains("status=queued"));
         assert!(second.contains("Trước"));
+
+        let clamped = body_string(send(&context, Method::GET, "/library?page=999").await).await;
+        assert_eq!(clamped.matches("name=\"uuid\"").count(), 1);
+        assert!(clamped.contains("Trang 2/2"));
+        assert!(!clamped.contains("101–51"));
     }
 
     #[tokio::test]

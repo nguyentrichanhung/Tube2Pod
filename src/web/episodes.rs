@@ -500,6 +500,24 @@ mod tests {
         assert!(!html.contains("name=\"summary_text\""));
     }
 
+    #[tokio::test]
+    async fn review_audio_script_is_escaped() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        sqlx::query(
+            "UPDATE episodes SET status = 'review', stage = 'review', audio_script = '<script>alert(1)</script>' WHERE uuid = ?1",
+        )
+        .bind(&episode.uuid)
+        .execute(&context.state.pool)
+        .await
+        .unwrap();
+
+        let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(!html.contains("<script>alert(1)</script>"));
+    }
+
     async fn get(context: &Ctx, path: &str) -> axum::response::Response {
         send(context, Method::GET, path, None, &[]).await
     }

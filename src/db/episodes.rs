@@ -1006,7 +1006,33 @@ mod tests {
             .unwrap();
         let before = get(&pool, &ep.uuid).await.unwrap().unwrap();
 
+        let without_script = create(&pool, episode(show_id, "legacy-no-script"))
+            .await
+            .unwrap();
+        set_summary(
+            &pool,
+            &without_script.uuid,
+            &long_summary,
+            "Script tạm.",
+            "hash",
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE episodes SET audio_script = NULL WHERE uuid = ?1")
+            .bind(&without_script.uuid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let untouched_before = get(&pool, &without_script.uuid).await.unwrap().unwrap();
+
         assert_eq!(cap_legacy_summaries(&pool).await.unwrap(), 1);
+
+        let untouched_after = get(&pool, &without_script.uuid).await.unwrap().unwrap();
+        assert_eq!(
+            untouched_after.summary_text.as_deref(),
+            Some(long_summary.as_str())
+        );
+        assert_eq!(untouched_after.updated_at, untouched_before.updated_at);
 
         let after = get(&pool, &ep.uuid).await.unwrap().unwrap();
         assert_eq!(after.summary_words(), 200);
