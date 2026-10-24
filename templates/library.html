@@ -68,14 +68,14 @@
       }
       input.value = value;
     }
-    function syncFilters() {
+    function syncFilters(resetPage) {
       const filterForm = document.querySelector("form[action='/library']");
       if (!filterForm) return;
       const data = new FormData(filterForm);
       setFilter("show_id", data.get("show_id") || "");
       setFilter("status", data.get("status") || "");
       setFilter("q", data.get("q") || "");
-      setFilter("page", data.get("page") || "1");
+      if (resetPage) setFilter("page", "1");
     }
     function refresh() {
       const checked = boxes().filter((box) => box.checked).length;
@@ -98,10 +98,10 @@
     });
     const filterForm = document.querySelector("form[action='/library']");
     if (filterForm) {
-      filterForm.addEventListener("change", syncFilters);
-      filterForm.addEventListener("input", syncFilters);
+      filterForm.addEventListener("change", () => syncFilters(true));
+      filterForm.addEventListener("input", () => syncFilters(true));
     }
-    syncFilters();
+    syncFilters(false);
     refresh();
   })();
 </script>

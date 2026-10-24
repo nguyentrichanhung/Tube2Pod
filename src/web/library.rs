@@ -34,6 +34,7 @@ pub struct Pagination {
     end: i64,
     pub prev_url: Option<String>,
     pub next_url: Option<String>,
+    pub show_total: bool,
 }
 
 impl Pagination {
@@ -46,6 +47,7 @@ impl Pagination {
             end: total,
             prev_url: None,
             next_url: None,
+            show_total: false,
         }
     }
 
@@ -62,6 +64,7 @@ impl Pagination {
             end,
             prev_url: (page > 1).then(|| page_url(query, page - 1)),
             next_url: (page < total_pages).then(|| page_url(query, page + 1)),
+            show_total: true,
         }
     }
 
@@ -564,6 +567,7 @@ mod tests {
         assert!(html.contains("disabled"));
         assert!(html.contains("value=\"review\""));
         assert!(html.contains("Chờ duyệt"));
+        assert!(html.contains("2 tập"));
     }
 
     #[tokio::test]
@@ -593,6 +597,7 @@ mod tests {
         assert!(second.contains("Trang 2/2"));
         assert!(second.contains("status=queued"));
         assert!(second.contains("Trước"));
+        assert!(second.contains("name=\"page\" value=\"2\""));
 
         let clamped = body_string(send(&context, Method::GET, "/library?page=999").await).await;
         assert_eq!(clamped.matches("name=\"uuid\"").count(), 1);
