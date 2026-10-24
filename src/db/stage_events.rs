@@ -175,4 +175,46 @@ mod tests {
         assert_eq!(outcomes[1].0, done);
         assert_eq!(outcomes[1].1, None);
     }
+
+    #[tokio::test]
+    async fn deleting_an_episode_cascades_its_events() {
+        let pool = crate::db::test_pool().await;
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let show = crate::db::shows::create(
+            &pool,
+            crate::db::shows::NewShow {
+                title: "Show".into(),
+                ..crate::db::shows::NewShow::default()
+            },
+        )
+        .await
+        .unwrap();
+        let ep = crate::db::episodes::create(
+            &pool,
+            crate::db::episodes::NewEpisode {
+                show_id: show.id,
+                video_id: "cascade".into(),
+                source_url: "https://www.youtube.com/watch?v=cascade".into(),
+                source_title: "Video".into(),
+                source_channel: String::new(),
+                source_duration_s: None,
+                source_thumbnail_url: None,
+                source_upload_date: None,
+                language: "vi".into(),
+                target_minutes: 10,
+                review_required: false,
+            },
+        )
+        .await
+        .unwrap();
+        crate::db::episodes::delete(&pool, &ep.uuid).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
 }

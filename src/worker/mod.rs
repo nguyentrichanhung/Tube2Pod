@@ -101,6 +101,12 @@ impl Pipeline {
             if episode.is_terminal() {
                 return Ok(());
             }
+            if let Err(error) =
+                crate::db::stage_events::ensure_open(&self.pool, &episode.uuid, &episode.stage)
+                    .await
+            {
+                tracing::warn!(%error, uuid = %episode.uuid, "stage event ensure failed");
+            }
             match episode.stage.as_str() {
                 stage::QUEUED | stage::FETCHING => {
                     fetch::fetch_episode(&self.pool, &self.cfg, &episode).await?

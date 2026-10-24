@@ -653,6 +653,11 @@ mod tests {
         let low = "00000000-0000-4000-8000-000000000001";
         let high = "ffffffff-ffff-4fff-8fff-ffffffffffff";
         for (old, new) in [(&fx.uuid, high), (&second.uuid, low)] {
+            sqlx::query("DELETE FROM stage_events WHERE episode_uuid = ?1")
+                .bind(old)
+                .execute(&fx.state.pool)
+                .await
+                .unwrap();
             sqlx::query("UPDATE episodes SET uuid = ?1, published_at = ?2 WHERE uuid = ?3")
                 .bind(new)
                 .bind(100_i64)
