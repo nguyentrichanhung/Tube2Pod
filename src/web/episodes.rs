@@ -359,6 +359,7 @@ mod tests {
                 pool: crate::db::test_pool().await,
                 cfg: Arc::new(cfg),
                 notify: Arc::new(Notify::new()),
+                health_cache: Arc::new(tokio::sync::Mutex::new(None)),
             },
             _dir: dir,
         }
@@ -484,7 +485,7 @@ mod tests {
         let context = ctx().await;
         let show = create_show(&context, "Show").await;
         let episode = create_episode(&context, show.id, "Tập").await;
-        sqlx::query("UPDATE episodes SET status = 'review', stage = 'review', summary_text = 'Tóm tắt ngắn.' WHERE uuid = ?1")
+        sqlx::query("UPDATE episodes SET status = 'review', stage = 'review', summary_text = 'Tóm tắt ngắn.', audio_script = 'Script đầy đủ để admin duyệt.' WHERE uuid = ?1")
             .bind(&episode.uuid)
             .execute(&context.state.pool)
             .await
@@ -494,8 +495,28 @@ mod tests {
         assert!(html.contains("Chờ duyệt tóm tắt"));
         assert!(html.contains("Tiếp tục tạo audio"));
         assert!(html.contains("Tóm tắt ngắn."));
+        assert!(html.contains("Script audio đầy đủ"));
+        assert!(html.contains("Script đầy đủ để admin duyệt."));
         assert!(html.contains(&format!("action=\"/episodes/{}/approve\"", episode.uuid)));
         assert!(!html.contains("name=\"summary_text\""));
+    }
+
+    #[tokio::test]
+    async fn review_audio_script_is_escaped() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        sqlx::query(
+            "UPDATE episodes SET status = 'review', stage = 'review', audio_script = '<script>alert(1)</script>' WHERE uuid = ?1",
+        )
+        .bind(&episode.uuid)
+        .execute(&context.state.pool)
+        .await
+        .unwrap();
+
+        let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(!html.contains("<script>alert(1)</script>"));
     }
 
     async fn get(context: &Ctx, path: &str) -> axum::response::Response {
@@ -509,6 +530,23 @@ mod tests {
 
     fn csrf_form() -> String {
         form(&[("_csrf", TOKEN)])
+    }
+
+    #[tokio::test]
+    async fn detail_shows_the_pipeline_stage_for_active_episodes() {
+        let context = ctx().await;
+        let show = create_show(&context, "Show").await;
+        let episode = create_episode(&context, show.id, "Tập").await;
+        sqlx::query(
+            "UPDATE episodes SET status = 'running', stage = 'summarizing' WHERE uuid = ?1",
+        )
+        .bind(&episode.uuid)
+        .execute(&context.state.pool)
+        .await
+        .unwrap();
+
+        let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
+        assert!(html.contains("Đang xử lý · Đang tóm tắt"));
     }
 
     #[tokio::test]

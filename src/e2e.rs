@@ -156,6 +156,7 @@ async fn youtube_url_becomes_a_published_feed_item() {
         pool,
         cfg,
         notify: Arc::new(Notify::new()),
+        health_cache: Arc::new(tokio::sync::Mutex::new(None)),
     };
     let response = crate::web::public::public_router(state)
         .oneshot(

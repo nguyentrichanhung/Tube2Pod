@@ -2,6 +2,7 @@ use crate::domain::transcript::{split_punctuation, stopwords};
 use std::collections::{BTreeSet, HashMap};
 
 const INTRO_OUTRO_RESERVE_CHARS: usize = 256;
+pub const DISPLAY_SUMMARY_MAX_WORDS: usize = 200;
 
 #[derive(Debug, Clone)]
 pub struct SummaryOptions {

@@ -357,6 +357,7 @@ mod tests {
             pool,
             cfg: Arc::new(cfg),
             notify: Arc::new(Notify::new()),
+            health_cache: Arc::new(tokio::sync::Mutex::new(None)),
         };
         install_audio(&state, &episode).await;
         episodes::finish(
@@ -481,6 +482,24 @@ mod tests {
 
         let missing = get(&fx.state, "/feed/nope.xml").await;
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn feed_description_uses_the_display_summary_not_the_audio_script() {
+        let fx = fixture().await;
+        episodes::set_summary(
+            &fx.state.pool,
+            &fx.uuid,
+            "Tóm tắt hiển thị.",
+            "SCRIPT_NOI_DAY_DU_KHONG_DUOC_LO",
+            "hash",
+        )
+        .await
+        .unwrap();
+
+        let xml = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
+        assert!(xml.contains("Tóm tắt hiển thị."), "{xml}");
+        assert!(!xml.contains("SCRIPT_NOI_DAY_DU_KHONG_DUOC_LO"), "{xml}");
     }
 
     #[tokio::test]
@@ -635,6 +654,11 @@ mod tests {
         let low = "00000000-0000-4000-8000-000000000001";
         let high = "ffffffff-ffff-4fff-8fff-ffffffffffff";
         for (old, new) in [(&fx.uuid, high), (&second.uuid, low)] {
+            sqlx::query("DELETE FROM stage_events WHERE episode_uuid = ?1")
+                .bind(old)
+                .execute(&fx.state.pool)
+                .await
+                .unwrap();
             sqlx::query("UPDATE episodes SET uuid = ?1, published_at = ?2 WHERE uuid = ?3")
                 .bind(new)
                 .bind(100_i64)

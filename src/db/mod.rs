@@ -1,6 +1,7 @@
 pub mod episodes;
 pub mod settings;
 pub mod shows;
+pub mod stage_events;
 
 use crate::error::AppResult;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -46,4 +47,20 @@ pub async fn test_pool() -> SqlitePool {
         .unwrap();
     migrate(&pool).await.unwrap();
     pool
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn schema_drops_the_unused_summary_edited_column() {
+        let pool = test_pool().await;
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('episodes')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(!columns.iter().any(|name| name == "summary_edited_at"));
+    }
 }

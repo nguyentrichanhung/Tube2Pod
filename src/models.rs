@@ -117,7 +117,6 @@ pub struct Episode {
     pub transcript_chars: Option<i64>,
     pub summary_text: Option<String>,
     pub audio_script: Option<String>,
-    pub summary_edited_at: Option<i64>,
     pub review_required: bool,
     pub summary_hash: Option<String>,
     pub target_minutes: i64,
@@ -206,7 +205,11 @@ pub fn status_label_for(status: &str) -> &'static str {
 }
 
 pub fn created_label_for(ts: i64) -> String {
-    let seconds = crate::db::now_ts() - ts;
+    created_label_at(ts, crate::db::now_ts())
+}
+
+pub fn created_label_at(ts: i64, now: i64) -> String {
+    let seconds = now - ts;
     if seconds < 60 {
         "vừa xong".into()
     } else if seconds < 3600 {
@@ -295,6 +298,14 @@ impl Episode {
 
     pub fn summary_words(&self) -> usize {
         self.summary_text
+            .as_deref()
+            .unwrap_or("")
+            .split_whitespace()
+            .count()
+    }
+
+    pub fn audio_script_words(&self) -> usize {
+        self.audio_script
             .as_deref()
             .unwrap_or("")
             .split_whitespace()
@@ -447,8 +458,7 @@ mod tests {
             transcript_kind: None,
             transcript_chars: None,
             summary_text: Some("Một hai ba.".into()),
-            audio_script: None,
-            summary_edited_at: None,
+            audio_script: Some("Một hai ba bốn.".into()),
             summary_hash: None,
             review_required: false,
             target_minutes: 10,
@@ -475,6 +485,7 @@ mod tests {
             updated_at: 1,
         };
         assert_eq!(episode.summary_words(), 3);
+        assert_eq!(episode.audio_script_words(), 4);
     }
 
     #[test]

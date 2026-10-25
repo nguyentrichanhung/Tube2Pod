@@ -66,7 +66,7 @@ pub async fn summarize_episode(
         &episode.language,
     );
     let script = summarize::sanitize_for_tts(&script);
-    let display_summary = summarize::cap_words(&body, 200);
+    let display_summary = summarize::cap_words(&body, summarize::DISPLAY_SUMMARY_MAX_WORDS);
     let hash = crate::models::sha256_hex(&script);
     episodes::set_summary(pool, &episode.uuid, &display_summary, &script, &hash)
         .await

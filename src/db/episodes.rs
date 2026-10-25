@@ -1,6 +1,23 @@
+use crate::db::stage_events;
 use crate::db::{now_ts, AppResult};
 use crate::models::{stage, status, Episode};
 use sqlx::SqlitePool;
+
+fn warn_event(error: crate::error::AppError, uuid: &str, context: &str) {
+    tracing::warn!(%error, %uuid, context, "stage event write failed");
+}
+
+async fn close_event(
+    pool: &SqlitePool,
+    uuid: &str,
+    outcome: &str,
+    error_code: Option<&str>,
+    context: &str,
+) {
+    if let Err(error) = stage_events::close_open(pool, uuid, outcome, error_code).await {
+        warn_event(error, uuid, context);
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct NewEpisode {
@@ -54,6 +71,9 @@ pub async fn create(pool: &SqlitePool, new: NewEpisode) -> AppResult<Episode> {
     .bind(now)
     .fetch_one(pool)
     .await?;
+    if let Err(error) = stage_events::open(pool, &row.uuid, stage::QUEUED).await {
+        warn_event(error, &row.uuid, "create");
+    }
     Ok(row)
 }
 
@@ -96,6 +116,21 @@ pub async fn list(pool: &SqlitePool, filter: &EpisodeFilter) -> AppResult<Vec<Ep
     Ok(rows)
 }
 
+pub async fn count(pool: &SqlitePool, filter: &EpisodeFilter) -> AppResult<i64> {
+    let total = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM episodes
+         WHERE (?1 IS NULL OR show_id = ?1)
+           AND (?2 IS NULL OR status = ?2)
+           AND (?3 IS NULL OR source_title LIKE '%' || ?3 || '%' OR source_channel LIKE '%' || ?3 || '%')",
+    )
+    .bind(filter.show_id)
+    .bind(filter.status.as_deref())
+    .bind(filter.query.as_deref())
+    .fetch_one(pool)
+    .await?;
+    Ok(total)
+}
+
 pub async fn list_for_show(pool: &SqlitePool, show_id: i64, limit: i64) -> AppResult<Vec<Episode>> {
     list(
         pool,
@@ -106,6 +141,39 @@ pub async fn list_for_show(pool: &SqlitePool, show_id: i64, limit: i64) -> AppRe
         },
     )
     .await
+}
+
+pub async fn cap_legacy_summaries(pool: &SqlitePool) -> AppResult<u64> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT uuid, summary_text FROM episodes
+         WHERE summary_text IS NOT NULL
+           AND audio_script IS NOT NULL
+           AND TRIM(audio_script) != ''",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut changed = 0u64;
+    for (uuid, summary) in rows {
+        if summary.split_whitespace().count() <= crate::domain::summarize::DISPLAY_SUMMARY_MAX_WORDS
+        {
+            continue;
+        }
+        let capped = crate::domain::summarize::cap_words(
+            &summary,
+            crate::domain::summarize::DISPLAY_SUMMARY_MAX_WORDS,
+        );
+        if capped == summary {
+            continue;
+        }
+        sqlx::query("UPDATE episodes SET summary_text = ?1, updated_at = ?2 WHERE uuid = ?3")
+            .bind(capped)
+            .bind(now_ts())
+            .bind(uuid)
+            .execute(pool)
+            .await?;
+        changed += 1;
+    }
+    Ok(changed)
 }
 
 pub async fn claim_next(pool: &SqlitePool) -> AppResult<Option<Episode>> {
@@ -129,6 +197,9 @@ pub async fn claim_next(pool: &SqlitePool) -> AppResult<Option<Episode>> {
 }
 
 pub async fn recover_running(pool: &SqlitePool) -> AppResult<u64> {
+    if let Err(error) = stage_events::close_for_running(pool).await {
+        tracing::warn!(%error, "stage event interruption failed");
+    }
     let result = sqlx::query(
         "UPDATE episodes SET status = ?1, next_attempt_at = NULL, updated_at = ?2
          WHERE status = ?3",
@@ -153,7 +224,11 @@ pub async fn earliest_retry_at(pool: &SqlitePool) -> AppResult<Option<i64>> {
 }
 
 pub async fn set_stage(pool: &SqlitePool, uuid: &str, new_stage: &str) -> AppResult<()> {
-    sqlx::query(
+    let previous: Option<String> = sqlx::query_scalar("SELECT stage FROM episodes WHERE uuid = ?1")
+        .bind(uuid)
+        .fetch_optional(pool)
+        .await?;
+    let result = sqlx::query(
         "UPDATE episodes SET stage = ?1,
             attempts = CASE WHEN stage != ?1 THEN 0 ELSE attempts END,
             active_take_id = CASE WHEN ?1 = ?4 THEN NULL ELSE active_take_id END,
@@ -169,6 +244,16 @@ pub async fn set_stage(pool: &SqlitePool, uuid: &str, new_stage: &str) -> AppRes
     .bind(stage::PUBLISHING)
     .execute(pool)
     .await?;
+    if result.rows_affected() > 0 && previous.as_deref() != Some(new_stage) {
+        if let Err(error) =
+            stage_events::close_open(pool, uuid, stage_events::OUTCOME_OK, None).await
+        {
+            warn_event(error, uuid, "set_stage close");
+        }
+        if let Err(error) = stage_events::open(pool, uuid, new_stage).await {
+            warn_event(error, uuid, "set_stage open");
+        }
+    }
     Ok(())
 }
 
@@ -196,7 +281,7 @@ pub struct FetchedMeta<'a> {
 }
 
 pub async fn set_fetched(pool: &SqlitePool, uuid: &str, meta: FetchedMeta<'_>) -> AppResult<()> {
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE episodes SET
             source_title = ?1, source_channel = ?2, source_duration_s = ?3,
             source_thumbnail_url = ?4, source_upload_date = ?5, language = ?6,
@@ -220,6 +305,12 @@ pub async fn set_fetched(pool: &SqlitePool, uuid: &str, meta: FetchedMeta<'_>) -
     .bind(uuid)
     .execute(pool)
     .await?;
+    if result.rows_affected() > 0 {
+        close_event(pool, uuid, stage_events::OUTCOME_OK, None, "set_fetched").await;
+        if let Err(error) = stage_events::open(pool, uuid, meta.next_stage).await {
+            warn_event(error, uuid, "set_fetched");
+        }
+    }
     Ok(())
 }
 
@@ -232,7 +323,7 @@ pub async fn set_summary(
 ) -> AppResult<()> {
     sqlx::query(
         "UPDATE episodes SET summary_text = ?1, audio_script = ?2, summary_hash = ?3,
-            summary_edited_at = NULL, updated_at = ?4
+            updated_at = ?4
          WHERE uuid = ?5",
     )
     .bind(display_summary)
@@ -246,7 +337,7 @@ pub async fn set_summary(
 }
 
 pub async fn set_review(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE episodes SET status = ?1, stage = ?2, progress_json = ?3,
             attempts = 0, next_attempt_at = NULL, updated_at = ?4
          WHERE uuid = ?5",
@@ -258,6 +349,12 @@ pub async fn set_review(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
     .bind(uuid)
     .execute(pool)
     .await?;
+    if result.rows_affected() > 0 {
+        close_event(pool, uuid, stage_events::OUTCOME_OK, None, "set_review").await;
+        if let Err(error) = stage_events::open(pool, uuid, stage::REVIEW).await {
+            warn_event(error, uuid, "set_review");
+        }
+    }
     Ok(())
 }
 
@@ -274,6 +371,12 @@ pub async fn approve_review(pool: &SqlitePool, uuid: &str) -> AppResult<bool> {
     .bind(status::REVIEW)
     .execute(pool)
     .await?;
+    if result.rows_affected() > 0 {
+        close_event(pool, uuid, stage_events::OUTCOME_OK, None, "approve_review").await;
+        if let Err(error) = stage_events::open(pool, uuid, stage::VOICING).await {
+            warn_event(error, uuid, "approve_review");
+        }
+    }
     Ok(result.rows_affected() > 0)
 }
 
@@ -410,7 +513,7 @@ pub async fn finish(
     set_published_at_if_null: bool,
 ) -> AppResult<()> {
     let now = now_ts();
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE episodes SET stage = ?1, status = ?2, error_code = NULL, error_message = NULL,
             next_attempt_at = NULL, updated_at = ?3,
             published_at = CASE WHEN ?4 THEN COALESCE(published_at, ?3) ELSE published_at END
@@ -424,6 +527,9 @@ pub async fn finish(
     .bind(status::CANCELLED)
     .execute(pool)
     .await?;
+    if result.rows_affected() > 0 {
+        close_event(pool, uuid, stage_events::OUTCOME_OK, None, "finish").await;
+    }
     Ok(())
 }
 
@@ -435,7 +541,7 @@ pub async fn record_failure(
     retry_at: Option<i64>,
 ) -> AppResult<()> {
     let retry = retry_at.is_some();
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE episodes SET status = ?1, error_code = ?2, error_message = ?3,
             attempts = attempts + 1, next_attempt_at = ?4, updated_at = ?5
          WHERE uuid = ?6 AND status != ?7",
@@ -453,6 +559,13 @@ pub async fn record_failure(
     .bind(status::CANCELLED)
     .execute(pool)
     .await?;
+    if result.rows_affected() > 0 {
+        if let Err(error) =
+            stage_events::close_open(pool, uuid, stage_events::OUTCOME_FAILED, Some(code)).await
+        {
+            warn_event(error, uuid, "record_failure");
+        }
+    }
     Ok(())
 }
 
@@ -474,7 +587,7 @@ pub async fn retry(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
 }
 
 pub async fn cancel(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE episodes SET status = ?1, next_attempt_at = NULL, updated_at = ?2
          WHERE uuid = ?3 AND status NOT IN (?4, ?5)",
     )
@@ -485,11 +598,14 @@ pub async fn cancel(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
     .bind(status::READY)
     .execute(pool)
     .await?;
+    if result.rows_affected() > 0 {
+        close_event(pool, uuid, stage_events::OUTCOME_CANCELLED, None, "cancel").await;
+    }
     Ok(())
 }
 
 pub async fn reset_for_reread(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE episodes SET stage = ?1, status = ?2, active_take_id = NULL,
             take_ids_json = NULL, chunk_done = 0, chunk_count = NULL, progress_json = NULL,
             attempts = 0, next_attempt_at = NULL, error_code = NULL, error_message = NULL,
@@ -502,6 +618,19 @@ pub async fn reset_for_reread(pool: &SqlitePool, uuid: &str) -> AppResult<()> {
     .bind(uuid)
     .execute(pool)
     .await?;
+    if result.rows_affected() > 0 {
+        close_event(
+            pool,
+            uuid,
+            stage_events::OUTCOME_OK,
+            None,
+            "reset_for_reread",
+        )
+        .await;
+        if let Err(error) = stage_events::open(pool, uuid, stage::SYNTHESIZING).await {
+            warn_event(error, uuid, "reset_for_reread");
+        }
+    }
     Ok(())
 }
 
@@ -519,10 +648,19 @@ pub async fn publish_one(pool: &SqlitePool, uuid: &str) -> AppResult<bool> {
     .bind(status::READY)
     .execute(pool)
     .await?;
+    if result.rows_affected() > 0 {
+        close_event(pool, uuid, stage_events::OUTCOME_OK, None, "publish_one").await;
+    }
     Ok(result.rows_affected() > 0)
 }
 
 pub async fn publish_ready(pool: &SqlitePool, show_id: i64) -> AppResult<u64> {
+    let uuids: Vec<String> =
+        sqlx::query_scalar("SELECT uuid FROM episodes WHERE show_id = ?1 AND status = ?2")
+            .bind(show_id)
+            .bind(status::READY)
+            .fetch_all(pool)
+            .await?;
     let result = sqlx::query(
         "UPDATE episodes SET status = ?1, stage = ?2,
             published_at = COALESCE(published_at, ?3), updated_at = ?3
@@ -535,6 +673,11 @@ pub async fn publish_ready(pool: &SqlitePool, show_id: i64) -> AppResult<u64> {
     .bind(status::READY)
     .execute(pool)
     .await?;
+    if result.rows_affected() > 0 {
+        for uuid in uuids {
+            close_event(pool, &uuid, stage_events::OUTCOME_OK, None, "publish_ready").await;
+        }
+    }
     Ok(result.rows_affected())
 }
 
@@ -605,6 +748,90 @@ mod tests {
             target_minutes: 10,
             review_required: false,
         }
+    }
+
+    async fn stage_rows(
+        pool: &SqlitePool,
+        uuid: &str,
+    ) -> Vec<(String, Option<String>, Option<String>)> {
+        sqlx::query_as(
+            "SELECT stage, outcome, error_code FROM stage_events
+             WHERE episode_uuid = ?1 ORDER BY id",
+        )
+        .bind(uuid)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_opens_a_queued_event_and_stage_changes_close_it() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "events1")).await.unwrap();
+        assert_eq!(
+            stage_rows(&pool, &ep.uuid).await,
+            vec![("queued".into(), None, None)]
+        );
+
+        set_stage(&pool, &ep.uuid, stage::FETCHING).await.unwrap();
+        set_stage(&pool, &ep.uuid, stage::FETCHING).await.unwrap();
+        let rows = stage_rows(&pool, &ep.uuid).await;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "queued");
+        assert_eq!(rows[0].1.as_deref(), Some("ok"));
+        assert_eq!(rows[1].0, "fetching");
+        assert_eq!(rows[1].1, None);
+    }
+
+    #[tokio::test]
+    async fn failure_closes_the_open_event_with_its_code() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "events2")).await.unwrap();
+        set_stage(&pool, &ep.uuid, stage::SYNTHESIZING)
+            .await
+            .unwrap();
+        record_failure(&pool, &ep.uuid, "tts_unavailable", "boom", None)
+            .await
+            .unwrap();
+
+        let rows = stage_rows(&pool, &ep.uuid).await;
+        let last = rows.last().unwrap();
+        assert_eq!(last.0, stage::SYNTHESIZING);
+        assert_eq!(last.1.as_deref(), Some("failed"));
+        assert_eq!(last.2.as_deref(), Some("tts_unavailable"));
+    }
+
+    #[tokio::test]
+    async fn review_approval_and_terminal_completion_close_events() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "events3")).await.unwrap();
+        set_stage(&pool, &ep.uuid, stage::SUMMARIZING)
+            .await
+            .unwrap();
+        set_review(&pool, &ep.uuid).await.unwrap();
+        assert!(approve_review(&pool, &ep.uuid).await.unwrap());
+        finish(&pool, &ep.uuid, stage::READY, status::REVIEW, false)
+            .await
+            .unwrap();
+
+        let rows = stage_rows(&pool, &ep.uuid).await;
+        let names: Vec<&str> = rows.iter().map(|row| row.0.as_str()).collect();
+        assert_eq!(names, vec!["queued", "summarizing", "review", "voicing"]);
+        assert_eq!(rows[3].1.as_deref(), Some("ok"));
+    }
+
+    #[tokio::test]
+    async fn recover_running_marks_only_running_events_interrupted() {
+        let (pool, show_id) = setup().await;
+        let running = create(&pool, episode(show_id, "events4")).await.unwrap();
+        claim_next(&pool).await.unwrap();
+        let queued = create(&pool, episode(show_id, "events5")).await.unwrap();
+
+        recover_running(&pool).await.unwrap();
+        let running_rows = stage_rows(&pool, &running.uuid).await;
+        assert_eq!(running_rows[0].1.as_deref(), Some("interrupted"));
+        let queued_rows = stage_rows(&pool, &queued.uuid).await;
+        assert_eq!(queued_rows[0].1, None);
     }
 
     #[tokio::test]
@@ -936,6 +1163,71 @@ mod tests {
         assert_eq!(got.summary_text.as_deref(), Some("Tóm tắt ngắn."));
         assert_eq!(got.audio_script.as_deref(), Some("Script đầy đủ để đọc."));
         assert_eq!(got.summary_hash.as_deref(), Some("hash"));
+    }
+
+    #[tokio::test]
+    async fn caps_legacy_display_summaries_without_touching_audio_script() {
+        let (pool, show_id) = setup().await;
+        let ep = create(&pool, episode(show_id, "legacy-long"))
+            .await
+            .unwrap();
+        let long_summary = (1..=300)
+            .map(|index| format!("word{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        set_summary(&pool, &ep.uuid, &long_summary, "Script đầy đủ.", "hash")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE episodes SET updated_at = 1 WHERE uuid = ?1")
+            .bind(&ep.uuid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let before = get(&pool, &ep.uuid).await.unwrap().unwrap();
+
+        let without_script = create(&pool, episode(show_id, "legacy-no-script"))
+            .await
+            .unwrap();
+        set_summary(
+            &pool,
+            &without_script.uuid,
+            &long_summary,
+            "Script tạm.",
+            "hash",
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE episodes SET audio_script = NULL WHERE uuid = ?1")
+            .bind(&without_script.uuid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let untouched_before = get(&pool, &without_script.uuid).await.unwrap().unwrap();
+
+        assert_eq!(cap_legacy_summaries(&pool).await.unwrap(), 1);
+
+        let untouched_after = get(&pool, &without_script.uuid).await.unwrap().unwrap();
+        assert_eq!(
+            untouched_after.summary_text.as_deref(),
+            Some(long_summary.as_str())
+        );
+        assert_eq!(untouched_after.updated_at, untouched_before.updated_at);
+
+        let after = get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(after.summary_words(), 200);
+        assert_eq!(
+            after
+                .summary_text
+                .as_deref()
+                .unwrap()
+                .split_whitespace()
+                .next(),
+            Some("word1")
+        );
+        assert_eq!(after.audio_script.as_deref(), Some("Script đầy đủ."));
+        assert_eq!(after.summary_hash.as_deref(), Some("hash"));
+        assert!(after.updated_at > before.updated_at);
+        assert_eq!(cap_legacy_summaries(&pool).await.unwrap(), 0);
     }
 
     #[tokio::test]

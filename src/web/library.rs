@@ -23,6 +23,59 @@ const STATUSES: [&str; 7] = [
     status::CANCELLED,
     status::REVIEW,
 ];
+const PAGE_SIZE: i64 = 50;
+
+#[derive(Debug, Clone)]
+pub struct Pagination {
+    pub page: i64,
+    pub total_pages: i64,
+    pub total: i64,
+    start: i64,
+    end: i64,
+    pub prev_url: Option<String>,
+    pub next_url: Option<String>,
+    pub show_total: bool,
+}
+
+impl Pagination {
+    pub fn single(total: i64) -> Self {
+        Self {
+            page: 1,
+            total_pages: 1,
+            total,
+            start: if total == 0 { 0 } else { 1 },
+            end: total,
+            prev_url: None,
+            next_url: None,
+            show_total: false,
+        }
+    }
+
+    fn new(query: &LibraryQuery, total: i64, page: i64) -> Self {
+        let total_pages = total_pages(total);
+        let offset = page.saturating_sub(1).saturating_mul(PAGE_SIZE);
+        let start = if total == 0 { 0 } else { offset + 1 };
+        let end = (offset + PAGE_SIZE).min(total);
+        Self {
+            page,
+            total_pages,
+            total,
+            start,
+            end,
+            prev_url: (page > 1).then(|| page_url(query, page - 1)),
+            next_url: (page < total_pages).then(|| page_url(query, page + 1)),
+            show_total: true,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        if self.total == 0 {
+            "0 tập".into()
+        } else {
+            format!("{}–{} / {} tập", self.start, self.end, self.total)
+        }
+    }
+}
 
 fn empty_as_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -49,10 +102,20 @@ pub struct LibraryQuery {
     pub deleted: Option<i64>,
     #[serde(default, deserialize_with = "empty_as_none")]
     pub skipped: Option<i64>,
+    #[serde(default, deserialize_with = "empty_as_none")]
+    pub page: Option<i64>,
 }
 
 impl LibraryQuery {
+    pub fn page(&self) -> i64 {
+        self.page.unwrap_or(1).max(1)
+    }
+
     pub fn filter(&self) -> EpisodeFilter {
+        self.filter_at(self.page())
+    }
+
+    fn filter_at(&self, page: i64) -> EpisodeFilter {
         EpisodeFilter {
             show_id: self.show_id,
             status: self
@@ -67,9 +130,45 @@ impl LibraryQuery {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
-            limit: Some(200),
-            offset: None,
+            limit: Some(PAGE_SIZE),
+            offset: Some(page.saturating_sub(1).saturating_mul(PAGE_SIZE)),
         }
+    }
+}
+
+fn total_pages(total: i64) -> i64 {
+    ((total + PAGE_SIZE - 1) / PAGE_SIZE).max(1)
+}
+
+fn page_url(query: &LibraryQuery, page: i64) -> String {
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    if let Some(show_id) = query.show_id {
+        serializer.append_pair("show_id", &show_id.to_string());
+    }
+    if let Some(value) = query
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && STATUSES.contains(value))
+    {
+        serializer.append_pair("status", value);
+    }
+    if let Some(value) = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        serializer.append_pair("q", value);
+    }
+    if page > 1 {
+        serializer.append_pair("page", &page.to_string());
+    }
+    let params = serializer.finish();
+    if params.is_empty() {
+        "/library".into()
+    } else {
+        format!("/library?{params}")
     }
 }
 
@@ -102,6 +201,7 @@ pub struct LibraryTemplate {
     query: String,
     selectable: bool,
     bulk_message: Option<String>,
+    pagination: Pagination,
 }
 
 impl LibraryTemplate {
@@ -112,6 +212,10 @@ impl LibraryTemplate {
     pub fn status_label(&self, status: &str) -> &'static str {
         crate::models::status_label_for(status)
     }
+
+    pub fn status_options(&self) -> &'static [&'static str] {
+        &STATUSES
+    }
 }
 
 #[derive(Template)]
@@ -119,6 +223,7 @@ impl LibraryTemplate {
 pub struct RowsTemplate {
     rows: Vec<LibraryRow>,
     selectable: bool,
+    pagination: Pagination,
 }
 
 pub async fn index(
@@ -128,7 +233,8 @@ pub async fn index(
 ) -> AppResult<Html<String>> {
     let filter = query.filter();
     let selected_status = filter.status.clone().unwrap_or_default();
-    let (rows, shows) = load_rows(&state, &filter).await?;
+    let (rows, shows, total, page) = load_rows(&state, &query).await?;
+    let pagination = Pagination::new(&query, total, page);
     let bulk_message = query.deleted.map(|deleted| {
         let skipped = query.skipped.unwrap_or(0);
         if skipped > 0 {
@@ -147,6 +253,7 @@ pub async fn index(
             query: query.q.clone().unwrap_or_default(),
             selectable: true,
             bulk_message,
+            pagination,
         }
         .render()?,
     ))
@@ -156,11 +263,13 @@ pub async fn rows(
     State(state): State<AppState>,
     Query(query): Query<LibraryQuery>,
 ) -> AppResult<impl IntoResponse> {
-    let (rows, _) = load_rows(&state, &query.filter()).await?;
+    let (rows, _, total, page) = load_rows(&state, &query).await?;
+    let pagination = Pagination::new(&query, total, page);
     Ok(Html(
         RowsTemplate {
             rows,
             selectable: true,
+            pagination,
         }
         .render()?,
     ))
@@ -201,6 +310,10 @@ pub async fn bulk_delete(
         trimmed_form_value(&body, "show_id").and_then(|value| value.parse::<i64>().ok());
     let filter_status = trimmed_form_value(&body, "status");
     let filter_q = trimmed_form_value(&body, "q");
+    let filter_page = trimmed_form_value(&body, "page")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(1)
+        .max(1);
     let mut seen = std::collections::HashSet::new();
     let uuids: Vec<String> = form_values(&body, "uuid")
         .into_iter()
@@ -249,6 +362,7 @@ pub async fn bulk_delete(
         filter_show_id,
         filter_status.as_deref(),
         filter_q.as_deref(),
+        filter_page,
         deleted,
         skipped,
     ))
@@ -258,6 +372,7 @@ fn library_redirect(
     show_id: Option<i64>,
     status: Option<&str>,
     q: Option<&str>,
+    page: i64,
     deleted: usize,
     skipped: usize,
 ) -> Redirect {
@@ -271,6 +386,9 @@ fn library_redirect(
     if let Some(value) = q.filter(|value| !value.is_empty()) {
         serializer.append_pair("q", value);
     }
+    if page > 1 {
+        serializer.append_pair("page", &page.to_string());
+    }
     serializer.append_pair("deleted", &deleted.to_string());
     serializer.append_pair("skipped", &skipped.to_string());
     Redirect::to(&format!("/library?{}", serializer.finish()))
@@ -278,11 +396,13 @@ fn library_redirect(
 
 async fn load_rows(
     state: &AppState,
-    filter: &EpisodeFilter,
-) -> AppResult<(Vec<LibraryRow>, Vec<Show>)> {
-    let episodes = episodes::list(&state.pool, filter).await?;
+    query: &LibraryQuery,
+) -> AppResult<(Vec<LibraryRow>, Vec<Show>, i64, i64)> {
+    let total = episodes::count(&state.pool, &query.filter_at(1)).await?;
+    let page = query.page().min(total_pages(total));
+    let episodes = episodes::list(&state.pool, &query.filter_at(page)).await?;
     let shows = shows::list(&state.pool).await?;
-    Ok((build_rows(episodes, &shows), shows))
+    Ok((build_rows(episodes, &shows), shows, total, page))
 }
 
 fn build_rows(episodes: Vec<Episode>, shows: &[Show]) -> Vec<LibraryRow> {
@@ -336,6 +456,7 @@ mod tests {
                 pool: crate::db::test_pool().await,
                 cfg: Arc::new(cfg),
                 notify: Arc::new(Notify::new()),
+                health_cache: Arc::new(tokio::sync::Mutex::new(None)),
             },
             _dir: dir,
         }
@@ -447,6 +568,42 @@ mod tests {
         assert!(html.contains("disabled"));
         assert!(html.contains("value=\"review\""));
         assert!(html.contains("Chờ duyệt"));
+        assert!(html.contains("2 tập"));
+    }
+
+    #[tokio::test]
+    async fn library_paginates_fifty_rows_and_keeps_filters() {
+        let context = ctx().await;
+        let show_id = create_show(&context).await;
+        for index in 0..51 {
+            create_episode(
+                &context,
+                show_id,
+                &format!("page{index}"),
+                &format!("Tập {index}"),
+            )
+            .await;
+        }
+
+        let first = body_string(send(&context, Method::GET, "/library").await).await;
+        assert_eq!(first.matches("name=\"uuid\"").count(), 50);
+        assert!(first.contains("51 tập"));
+        assert!(first.contains("Trang 1/2"));
+        assert!(first.contains("page=2"));
+        assert!(first.contains("name=\"page\" value=\"1\""));
+
+        let second =
+            body_string(send(&context, Method::GET, "/library?status=queued&page=2").await).await;
+        assert_eq!(second.matches("name=\"uuid\"").count(), 1);
+        assert!(second.contains("Trang 2/2"));
+        assert!(second.contains("status=queued"));
+        assert!(second.contains("Trước"));
+        assert!(second.contains("name=\"page\" value=\"2\""));
+
+        let clamped = body_string(send(&context, Method::GET, "/library?page=999").await).await;
+        assert_eq!(clamped.matches("name=\"uuid\"").count(), 1);
+        assert!(clamped.contains("Trang 2/2"));
+        assert!(!clamped.contains("101–51"));
     }
 
     #[tokio::test]
@@ -535,11 +692,14 @@ mod tests {
             q: Some("rust".into()),
             deleted: None,
             skipped: None,
+            page: None,
         };
         let filter = query.filter();
         assert_eq!(filter.show_id, Some(3));
         assert_eq!(filter.status.as_deref(), Some("failed"));
         assert_eq!(filter.query.as_deref(), Some("rust"));
+        assert_eq!(filter.limit, Some(PAGE_SIZE));
+        assert_eq!(filter.offset, Some(0));
     }
 
     #[test]

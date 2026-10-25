@@ -10,6 +10,7 @@ use tokio::task::JoinHandle;
 
 const CLEANUP_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const BACKUP_RETENTION_DAYS: i64 = 7;
+const EVENT_RETENTION_DAYS: i64 = 30;
 
 static BACKUP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -34,8 +35,24 @@ pub async fn run_once(pool: &SqlitePool, cfg: &Config) -> AppResult<()> {
     let tmp_hours = settings::read_i64(pool, "retention_tmp_hours", 24).await?;
     cleanup_audio(pool, cfg, audio_days).await?;
     cleanup_tmp(pool, cfg, tmp_hours).await?;
+    purge_stage_events(pool, db::now_ts()).await?;
     backup_database(pool, cfg).await?;
     Ok(())
+}
+
+async fn purge_stage_events(pool: &SqlitePool, now: i64) -> AppResult<()> {
+    let cutoff = now.saturating_sub(EVENT_RETENTION_DAYS * 86_400);
+    match db::stage_events::purge_before(pool, cutoff).await {
+        Ok(deleted) if deleted > 0 => {
+            tracing::info!(deleted, "purged old stage events");
+            Ok(())
+        }
+        Ok(_) => Ok(()),
+        Err(error) => {
+            tracing::warn!(%error, "failed to purge stage events");
+            Ok(())
+        }
+    }
 }
 
 async fn backup_database(pool: &SqlitePool, cfg: &Config) -> AppResult<()> {
@@ -477,6 +494,93 @@ mod tests {
             "superseded audio expires after updated_at ages"
         );
         assert!(current.exists(), "current audio must never be deleted");
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_stage_events_older_than_thirty_days() {
+        let pool = crate::db::test_pool().await;
+        let now = crate::db::now_ts();
+        sqlx::query(
+            "INSERT INTO shows (id, title, feed_token, created_at, updated_at)
+             VALUES (1, 'Test Show', 'test-feed', 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO episodes (
+                uuid, show_id, video_id, source_url, source_title, language,
+                target_minutes, stage, status, created_at, updated_at
+             ) VALUES ('u1', 1, 'v1', 'https://example.com/watch', 'Episode 1',
+                       'en', 10, 'queued', 'done', 0, 0),
+                      ('u2', 1, 'v2', 'https://example.com/watch', 'Episode 2',
+                       'en', 10, 'queued', 'done', 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO stage_events (episode_uuid, stage, entered_at, exited_at, outcome)
+             VALUES ('u1', 'fetching', ?1, ?2, 'ok'), ('u2', 'fetching', ?3, ?4, 'ok')",
+        )
+        .bind(now - 31 * 86_400)
+        .bind(now - 31 * 86_400 + 1)
+        .bind(now - 1)
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        purge_stage_events(&pool, now).await.unwrap();
+
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 1);
+    }
+
+    #[tokio::test]
+    async fn cleanup_keeps_open_stage_events_even_when_old() {
+        let pool = crate::db::test_pool().await;
+        let now = crate::db::now_ts();
+        let episode = episode(&pool, "open-event").await;
+        sqlx::query(
+            "INSERT INTO stage_events (episode_uuid, stage, entered_at)
+             VALUES (?1, 'fetching', ?2)",
+        )
+        .bind(&episode.uuid)
+        .bind(now - 60 * 86_400)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        purge_stage_events(&pool, now).await.unwrap();
+
+        let old_open: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM stage_events
+             WHERE stage = 'fetching' AND exited_at IS NULL AND entered_at = ?1",
+        )
+        .bind(now - 60 * 86_400)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(old_open, 1);
+    }
+
+    #[tokio::test]
+    async fn run_once_completes_when_stage_event_purge_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path());
+        let pool = crate::db::test_pool().await;
+        sqlx::query("DROP TABLE stage_events")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        run_once(&pool, &cfg).await.unwrap();
+
+        assert!(cfg.data_dir.join("backups").exists());
     }
 
     #[tokio::test]

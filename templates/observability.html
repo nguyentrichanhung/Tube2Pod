@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row between">
+  <div>
+    <h1>Vận hành</h1>
+    <p class="muted">Sức khoẻ pipeline, lỗi và dung lượng.</p>
+  </div>
+  <div class="row">
+    <a class="btn btn-secondary{% if window == "24h" %} active{% endif %}" href="/observability?window=24h">24 giờ</a>
+    <a class="btn btn-secondary{% if window == "7d" %} active{% endif %}" href="/observability?window=7d">7 ngày</a>
+  </div>
+</div>
+
+<div class="grid two">
+  <section class="card stack">
+    <h2>Hàng đợi</h2>
+    <div class="row between"><a href="/library?status=queued">Đang chờ</a><strong>{{ metrics.queued }}</strong></div>
+    <div class="row between"><a href="/library?status=running">Đang xử lý</a><strong>{{ metrics.running }}</strong></div>
+    <div class="row between"><a href="/library?status=review">Chờ duyệt</a><strong>{{ metrics.review }}</strong></div>
+    <div class="row between"><a href="/library?status=failed">Lỗi</a><strong>{{ metrics.failed }}</strong></div>
+    <div class="row between"><a href="/library?status=ready">Sẵn sàng / đã đăng</a><strong>{{ metrics.ready }}</strong></div>
+    {% if let Some(secs) = metrics.oldest_queued_secs %}
+    <div class="muted">Tập chờ lâu nhất: {{ secs / 60 }} phút</div>
+    {% endif %}
+  </section>
+
+  <section class="card stack">
+    <h2>Thông lượng</h2>
+    <div class="row between"><span>Tạo mới</span><strong>{{ metrics.created }}</strong></div>
+    <div class="row between"><span>Đã phát hành</span><strong>{{ metrics.published }}</strong></div>
+    <div class="row between"><span>Lỗi stage</span><strong>{{ metrics.failed_attempts }}</strong></div>
+  </section>
+</div>
+
+<section class="card stack">
+  <h2>Độ trễ stage</h2>
+  {% if metrics.has_latency %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Stage</th><th>Số mẫu</th><th>p50</th><th>p95</th></tr></thead>
+      <tbody>
+      {% for row in metrics.latency %}
+        <tr>
+          <td>{{ row.stage }}</td>
+          <td>{{ row.count }}</td>
+          <td>{% if let Some(p50) = row.p50_secs %}{{ p50 }} giây{% else %}—{% endif %}</td>
+          <td>
+            {% if let Some(p95) = row.p95_secs %}{{ p95 }} giây{% else %}—{% endif %}
+            <div class="progress" aria-hidden="true"><div class="progress-bar" style="width:{{ row.p95_percent }}%"></div></div>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">Chưa có dữ liệu vận hành. Dữ liệu bắt đầu từ bản này.</div>
+  {% endif %}
+</section>
+
+<div class="grid two">
+  <section class="card stack">
+    <h2>Lỗi theo stage</h2>
+    {% if metrics.failure_groups.is_empty() %}
+    <div class="empty-state">Chưa có lỗi trong cửa sổ này.</div>
+    {% else %}
+    {% for row in metrics.failure_groups %}
+    <div class="row between"><span>{{ row.label }} · {{ row.stage }}</span><strong>{{ row.count }}</strong></div>
+    {% endfor %}
+    {% endif %}
+  </section>
+
+  <section class="card stack">
+    <h2>Hệ thống</h2>
+    <div class="row between"><span>Tổng dữ liệu</span><strong>{{ total }}</strong></div>
+    <div class="row between"><span>Audio</span><strong>{{ audio }}</strong></div>
+    <div class="row between"><span>Transcript</span><strong>{{ transcripts }}</strong></div>
+    <div class="row between"><span>Show</span><strong>{{ shows }}</strong></div>
+    <div class="row between">
+      <span>Omnivoice</span>
+      {% if omnivoice_ok %}<span class="badge badge-ok">Kết nối được</span>{% else %}<span class="badge badge-err">Không kết nối được</span>{% endif %}
+    </div>
+    <div class="muted">Kiểm tra lúc: {{ omnivoice_checked }}</div>
+    {% if let Some(message) = omnivoice_message %}<div class="muted">{{ message }}</div>{% endif %}
+  </section>
+</div>
+
+<section class="card stack">
+  <h2>Lỗi gần nhất</h2>
+  {% if metrics.recent_failures.is_empty() %}
+  <div class="empty-state">Chưa có lỗi trong cửa sổ này.</div>
+  {% else %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Tập</th><th>Lỗi</th><th>Stage</th><th>Thời gian</th></tr></thead>
+      <tbody>
+      {% for row in metrics.recent_failures %}
+        <tr>
+          <td><a href="/episodes/{{ row.episode_uuid }}">{{ row.source_title }}</a></td>
+          <td>{{ row.label }}</td>
+          <td>{{ row.stage }}</td>
+          <td>{{ row.age }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
