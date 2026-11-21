@@ -7,7 +7,7 @@
   <fieldset class="stack">
     <legend>Bản audio</legend>
     {% for track in tracks %}
-    <label><input type="radio" name="source_audio_track" value="{{ track.key }}" {% if track.selected %}checked{% endif %} required>
+    <label class="audio-track"><input type="radio" name="source_audio_track" value="{{ track.key }}" {% if track.selected %}checked{% endif %} required>
       {% if track.default %}Bản mặc định{% else if track.recommended %}Đề xuất{% else %}Bản audio đi kèm {{ loop.index0 }}{% endif %}
       {% if track.original %} · Bản gốc{% endif %}{% if loop.first %} · {{ track.language }}{% endif %}
     </label>
@@ -15,7 +15,7 @@
   </fieldset>
   {% if tracks.len() > 1 %}
   <label>Ngôn ngữ bản đi kèm
-    <select name="language">
+    <select name="language" disabled>
       <option value="und" {% if language == "und" %}selected{% endif %}>Chưa rõ ngôn ngữ</option>
       <option value="vi" {% if language == "vi" %}selected{% endif %}>Tiếng Việt</option>
       <option value="en" {% if language == "en" %}selected{% endif %}>Tiếng Anh</option>

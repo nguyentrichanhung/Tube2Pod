@@ -166,3 +166,5 @@ details.card > :is(h2,.metrics-list) { margin-top:16px; }
   .show-card { grid-template-columns:minmax(0,1fr); }
   .show-card > :is(.cover,.cover-fallback) { width:68px; }
 }
+
+.audio-track { display:flex; align-items:center; gap:8px; }

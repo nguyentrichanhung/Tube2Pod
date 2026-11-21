@@ -147,39 +147,6 @@ pub async fn list_for_show(pool: &SqlitePool, show_id: i64, limit: i64) -> AppRe
     .await
 }
 
-pub async fn cap_legacy_summaries(pool: &SqlitePool) -> AppResult<u64> {
-    let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT uuid, summary_text FROM episodes
-         WHERE summary_text IS NOT NULL
-           AND audio_script IS NOT NULL
-           AND TRIM(audio_script) != ''",
-    )
-    .fetch_all(pool)
-    .await?;
-    let mut changed = 0u64;
-    for (uuid, summary) in rows {
-        if summary.split_whitespace().count() <= crate::domain::summarize::DISPLAY_SUMMARY_MAX_WORDS
-        {
-            continue;
-        }
-        let capped = crate::domain::summarize::cap_words(
-            &summary,
-            crate::domain::summarize::DISPLAY_SUMMARY_MAX_WORDS,
-        );
-        if capped == summary {
-            continue;
-        }
-        sqlx::query("UPDATE episodes SET summary_text = ?1, updated_at = ?2 WHERE uuid = ?3")
-            .bind(capped)
-            .bind(now_ts())
-            .bind(uuid)
-            .execute(pool)
-            .await?;
-        changed += 1;
-    }
-    Ok(changed)
-}
-
 pub async fn claim_next(pool: &SqlitePool) -> AppResult<Option<Episode>> {
     let now = now_ts();
     let row = sqlx::query_as::<_, Episode>(
@@ -1224,71 +1191,6 @@ mod tests {
         assert_eq!(got.summary_text.as_deref(), Some("Tóm tắt ngắn."));
         assert_eq!(got.audio_script.as_deref(), Some("Script đầy đủ để đọc."));
         assert_eq!(got.summary_hash.as_deref(), Some("hash"));
-    }
-
-    #[tokio::test]
-    async fn caps_legacy_display_summaries_without_touching_audio_script() {
-        let (pool, show_id) = setup().await;
-        let ep = create(&pool, episode(show_id, "legacy-long"))
-            .await
-            .unwrap();
-        let long_summary = (1..=300)
-            .map(|index| format!("word{index}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        set_summary(&pool, &ep.uuid, &long_summary, "Script đầy đủ.", "hash")
-            .await
-            .unwrap();
-        sqlx::query("UPDATE episodes SET updated_at = 1 WHERE uuid = ?1")
-            .bind(&ep.uuid)
-            .execute(&pool)
-            .await
-            .unwrap();
-        let before = get(&pool, &ep.uuid).await.unwrap().unwrap();
-
-        let without_script = create(&pool, episode(show_id, "legacy-no-script"))
-            .await
-            .unwrap();
-        set_summary(
-            &pool,
-            &without_script.uuid,
-            &long_summary,
-            "Script tạm.",
-            "hash",
-        )
-        .await
-        .unwrap();
-        sqlx::query("UPDATE episodes SET audio_script = NULL WHERE uuid = ?1")
-            .bind(&without_script.uuid)
-            .execute(&pool)
-            .await
-            .unwrap();
-        let untouched_before = get(&pool, &without_script.uuid).await.unwrap().unwrap();
-
-        assert_eq!(cap_legacy_summaries(&pool).await.unwrap(), 1);
-
-        let untouched_after = get(&pool, &without_script.uuid).await.unwrap().unwrap();
-        assert_eq!(
-            untouched_after.summary_text.as_deref(),
-            Some(long_summary.as_str())
-        );
-        assert_eq!(untouched_after.updated_at, untouched_before.updated_at);
-
-        let after = get(&pool, &ep.uuid).await.unwrap().unwrap();
-        assert_eq!(after.summary_words(), 200);
-        assert_eq!(
-            after
-                .summary_text
-                .as_deref()
-                .unwrap()
-                .split_whitespace()
-                .next(),
-            Some("word1")
-        );
-        assert_eq!(after.audio_script.as_deref(), Some("Script đầy đủ."));
-        assert_eq!(after.summary_hash.as_deref(), Some("hash"));
-        assert!(after.updated_at > before.updated_at);
-        assert_eq!(cap_legacy_summaries(&pool).await.unwrap(), 0);
     }
 
     #[tokio::test]

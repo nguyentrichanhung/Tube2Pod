@@ -362,6 +362,16 @@ mod tests {
                 .bind(&uuid).execute(&pool).await.unwrap();
             episodes.push((uuid, status));
         }
+        let long_summary = "old summary ".repeat(300);
+        let retained_uuid = &episodes[3].0;
+        sqlx::query(
+            "UPDATE episodes SET summary_text = ?1, audio_script = 'old script' WHERE uuid = ?2",
+        )
+        .bind(&long_summary)
+        .bind(retained_uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
         crate::db::migrate(&pool).await.unwrap();
         let new = episode(&pool, "new-track").await;
         sqlx::query("UPDATE episodes SET source_audio_track = 'track' WHERE uuid = ?1")
@@ -379,6 +389,15 @@ mod tests {
                 .unwrap(),
             3
         );
+        let retained = db::episodes::get(&pool, retained_uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            retained.summary_text.as_deref(),
+            Some(long_summary.as_str())
+        );
+        assert_eq!(retained.audio_script.as_deref(), Some("old script"));
         for (uuid, status) in episodes {
             let keep = !["queued", "running", "review"].contains(&status);
             assert_eq!(

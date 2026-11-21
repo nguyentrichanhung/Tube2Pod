@@ -70,12 +70,20 @@
   let video = form.querySelector("input[name='preview_video']")?.value;
   let track = form.querySelector("input[name='source_audio_track']:checked")?.value;
 
+  function syncLanguage() {
+    const radios = form.querySelectorAll("input[name='source_audio_track']");
+    const language = form.querySelector("select[name='language']");
+    if (language) language.disabled = !track || radios[0]?.value === track;
+  }
+  syncLanguage();
+
   form.addEventListener("change", (event) => {
     const language = form.querySelector("select[name='language']");
     if (event.target.name === "language" && track) languages.set(track, event.target.value);
     if (event.target.name === "source_audio_track") {
       track = event.target.value;
       if (language) language.value = languages.get(track) || "und";
+      syncLanguage();
     }
   });
   document.body.addEventListener("htmx:afterSwap", (event) => {
@@ -87,6 +95,7 @@
     track = selected?.value;
     const language = form.querySelector("select[name='language']");
     if (track && language) languages.set(track, language.value);
+    syncLanguage();
   });
 </script>
 {% endblock %}

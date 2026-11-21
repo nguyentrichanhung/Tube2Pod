@@ -40,12 +40,6 @@ async fn main() -> anyhow::Result<()> {
     cleanup::remove_legacy_pending_episodes(&pool, &cfg.data_dir)
         .await
         .context("purge legacy pending episodes")?;
-    let capped = db::episodes::cap_legacy_summaries(&pool)
-        .await
-        .context("cap legacy display summaries")?;
-    if capped > 0 {
-        tracing::info!(capped, "capped legacy display summaries");
-    }
     db::episodes::recover_running(&pool)
         .await
         .context("recover running episodes")?;
