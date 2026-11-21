@@ -1,7 +1,6 @@
 use crate::db::{episodes, shows};
 use crate::error::{AppError, AppResult};
 use crate::models::Episode;
-use crate::services::omnivoice::{OmnivoiceClient, Voice};
 use crate::services::ytdlp;
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
@@ -22,7 +21,9 @@ pub struct StudioTemplate {
     shows: Vec<crate::models::Show>,
     recent: Vec<Episode>,
     selected_show: Option<i64>,
-    selected_minutes: i64,
+    url: String,
+    error: String,
+    preview: String,
 }
 
 #[derive(Template)]
@@ -38,16 +39,11 @@ pub struct PreviewTemplate {
     title: String,
     channel: String,
     duration: String,
-    language_label: String,
-    has_captions: bool,
     thumbnail: String,
     has_thumbnail: bool,
-    voice_name: Option<String>,
-    voice_missing: bool,
-    catalog_error: bool,
-    show_voice_ready: bool,
-    voices: Vec<Voice>,
-    selected_voice_id: Option<i64>,
+    video_id: String,
+    tracks: Vec<PreviewTrack>,
+    language: String,
 }
 
 #[derive(Template)]
@@ -56,39 +52,110 @@ pub struct PreviewErrorTemplate {
     message: String,
 }
 
-struct PreviewData {
-    title: String,
-    channel: Option<String>,
-    duration_s: Option<i64>,
-    language: Option<&'static str>,
-    has_captions: bool,
-    thumbnail: Option<String>,
-    voice_name: Option<String>,
-    voice_missing: bool,
-    catalog_error: bool,
-    show_voice_ready: bool,
-    voices: Vec<Voice>,
-    selected_voice_id: Option<i64>,
+struct PreviewTrack {
+    key: String,
+    language: String,
+    selected: bool,
+    default: bool,
+    original: bool,
+    recommended: bool,
 }
 
-impl From<&PreviewData> for PreviewTemplate {
-    fn from(data: &PreviewData) -> Self {
-        Self {
-            title: data.title.clone(),
-            channel: data.channel.clone().unwrap_or_default(),
-            duration: duration_label(data.duration_s),
-            language_label: language_label(data.language.unwrap_or_default()).to_string(),
-            has_captions: data.has_captions,
-            thumbnail: data.thumbnail.clone().unwrap_or_default(),
-            has_thumbnail: data.thumbnail.is_some(),
-            voice_name: data.voice_name.clone(),
-            voice_missing: data.voice_missing,
-            catalog_error: data.catalog_error,
-            show_voice_ready: data.show_voice_ready,
-            voices: data.voices.clone(),
-            selected_voice_id: data.selected_voice_id,
-        }
+fn audio_language(code: &str) -> &str {
+    match crate::models::supported_language(code) {
+        Some("vi") => "Tiếng Việt",
+        Some("en") => "Tiếng Anh",
+        Some("ko") => "Tiếng Hàn",
+        _ => code,
     }
+}
+
+fn preview_tracks(
+    meta: &ytdlp::Metadata,
+    show_language: &str,
+    selected: Option<&str>,
+    _language: Option<&str>,
+) -> Vec<PreviewTrack> {
+    let tracks = ytdlp::audio_tracks(meta);
+    let selected = selected.filter(|key| tracks.iter().any(|track| track.key == *key));
+    let recommended = !tracks.iter().any(|track| track.is_default);
+    tracks
+        .iter()
+        .enumerate()
+        .map(|(index, track)| PreviewTrack {
+            key: track.key.clone(),
+            language: if index == 0 {
+                audio_language(
+                    track
+                        .source_language
+                        .as_deref()
+                        .filter(|code| !code.trim().is_empty() && *code != "und")
+                        .unwrap_or(show_language),
+                )
+                .into()
+            } else {
+                "Chưa rõ ngôn ngữ".into()
+            },
+            selected: selected.map_or(index == 0, |key| key == track.key),
+            default: track.is_default,
+            original: track.is_original,
+            recommended: index == 0 && recommended,
+        })
+        .collect()
+}
+
+pub(crate) fn selected_track(
+    meta: &ytdlp::Metadata,
+    show_language: &str,
+    key: &str,
+    language: Option<&str>,
+) -> AppResult<(ytdlp::AudioTrack, String)> {
+    let tracks = ytdlp::audio_tracks(meta);
+    let index = tracks
+        .iter()
+        .position(|track| track.key == key)
+        .ok_or_else(|| {
+            AppError::BadRequest("Bản audio đã chọn không còn khả dụng. Vui lòng chọn lại.".into())
+        })?;
+    let track = tracks[index].clone();
+    let label = if index == 0 {
+        track
+            .source_language
+            .as_deref()
+            .filter(|code| !code.trim().is_empty() && *code != "und")
+            .unwrap_or(show_language)
+    } else {
+        language
+            .and_then(crate::models::supported_language)
+            .unwrap_or("und")
+    };
+    let label = label.to_owned();
+    Ok((track, label))
+}
+
+fn preview_template(
+    meta: &ytdlp::Metadata,
+    video_id: &str,
+    show_language: &str,
+    selected: Option<&str>,
+    language: Option<&str>,
+) -> PreviewTemplate {
+    PreviewTemplate {
+        title: meta.title.clone(),
+        channel: meta.channel.clone().unwrap_or_default(),
+        duration: duration_label(meta.duration),
+        thumbnail: meta.thumbnail.clone().unwrap_or_default(),
+        has_thumbnail: meta.thumbnail.is_some(),
+        video_id: video_id.into(),
+        tracks: preview_tracks(meta, show_language, selected, language),
+        language: language.unwrap_or("und").into(),
+    }
+}
+
+async fn probe(state: &AppState, video: &ytdlp::VideoId) -> AppResult<ytdlp::Metadata> {
+    tokio::time::timeout(Duration::from_secs(15), ytdlp::probe(&state.cfg, video))
+        .await
+        .map_err(|_| AppError::Upstream("preview timed out".into()))?
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,29 +163,15 @@ pub struct StudioQuery {
     pub show: Option<i64>,
 }
 
-fn empty_as_none<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<String>::deserialize(deserializer)?;
-    match value.as_deref().map(str::trim) {
-        None | Some("") => Ok(None),
-        Some(raw) => raw
-            .parse::<i64>()
-            .map(Some)
-            .map_err(serde::de::Error::custom),
-    }
-}
-
 #[derive(Debug, Deserialize)]
 pub struct CreateForm {
     pub _csrf: String,
     pub url: String,
     pub show_id: i64,
-    pub minutes: i64,
-    #[serde(default, deserialize_with = "empty_as_none")]
-    pub voice_id: Option<i64>,
-    pub review_required: Option<String>,
+    #[serde(default)]
+    pub source_audio_track: String,
+    pub preview_video: Option<String>,
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,8 +179,9 @@ pub struct PreviewForm {
     pub _csrf: String,
     pub url: String,
     pub show_id: Option<i64>,
-    #[serde(default, deserialize_with = "empty_as_none")]
-    pub voice_id: Option<i64>,
+    pub preview_video: Option<String>,
+    pub source_audio_track: Option<String>,
+    pub language: Option<String>,
 }
 
 pub async fn index(
@@ -145,17 +199,15 @@ pub async fn index(
     )
     .await?;
     let selected_show = query.show.or_else(|| shows.first().map(|show| show.id));
-    let selected_minutes = selected_show
-        .and_then(|id| shows.iter().find(|show| show.id == id))
-        .map(|show| show.default_minutes)
-        .unwrap_or(10);
     Ok(Html(
         StudioTemplate {
             csrf: token.0,
             shows,
             recent,
             selected_show,
-            selected_minutes,
+            url: String::new(),
+            error: String::new(),
+            preview: String::new(),
         }
         .render()?,
     ))
@@ -166,50 +218,63 @@ pub async fn create(
     Extension(token): Extension<CsrfToken>,
     headers: HeaderMap,
     Form(form): Form<CreateForm>,
-) -> AppResult<Redirect> {
+) -> AppResult<Response> {
     csrf::verify(&token, &headers, &form._csrf)?;
-    validate_minutes(form.minutes)?;
-    let video = ytdlp::validate_url(&form.url)?;
+    let video = match ytdlp::validate_url(&form.url) {
+        Ok(video) => video,
+        Err(error) => return create_error(&state, &token, &form, &error, None).await,
+    };
     let show = shows::get(&state.pool, form.show_id)
         .await?
         .ok_or(AppError::NotFound)?;
     if let Some(existing) = episodes::get_by_video_id(&state.pool, &video.id).await? {
-        return Ok(duplicate_redirect(&existing.uuid));
+        return Ok(duplicate_redirect(&existing.uuid).into_response());
     }
-    if let Some(voice_id) = form.voice_id {
-        let client = OmnivoiceClient::new(&state.cfg.omnivoice);
-        let voices = client
-            .list_voices()
-            .await
-            .map_err(|e| AppError::Upstream(e.to_string()))?;
-        voices
-            .iter()
-            .find(|voice| {
-                voice.id == voice_id
-                    && voice.status == "ready"
-                    && crate::models::supported_language(voice.language.as_deref().unwrap_or(""))
-                        .is_some()
-            })
-            .ok_or_else(|| AppError::BadRequest("Giọng đọc không còn khả dụng.".into()))?;
-    } else {
-        shows::get_voice(&state.pool, show.id, &show.language)
-            .await?
-            .ok_or_else(|| AppError::BadRequest("Chọn giọng đọc cho tập này.".into()))?;
+    let meta = match probe(&state, &video).await {
+        Ok(meta) => meta,
+        Err(error) => return create_error(&state, &token, &form, &error, None).await,
+    };
+    if form
+        .preview_video
+        .as_deref()
+        .is_some_and(|id| id != video.id)
+    {
+        return create_error(
+            &state,
+            &token,
+            &form,
+            &AppError::BadRequest(
+                "Video đã thay đổi. Vui lòng chọn bản audio cho video này.".into(),
+            ),
+            Some(&meta),
+        )
+        .await;
     }
+    let (track, language) = match selected_track(
+        &meta,
+        &show.language,
+        &form.source_audio_track,
+        form.language.as_deref(),
+    ) {
+        Ok(selection) => selection,
+        Err(error) => return create_error(&state, &token, &form, &error, Some(&meta)).await,
+    };
     let episode = match episodes::create(
         &state.pool,
         episodes::NewEpisode {
             show_id: show.id,
             video_id: video.id.clone(),
             source_url: format!("https://www.youtube.com/watch?v={}", video.id),
-            source_title: "Đang tải thông tin…".into(),
-            source_channel: String::new(),
-            source_duration_s: None,
-            source_thumbnail_url: None,
-            source_upload_date: None,
-            language: show.language.clone(),
-            target_minutes: form.minutes,
-            review_required: form.review_required.is_some(),
+            source_title: meta.title,
+            source_channel: meta.channel.unwrap_or_default(),
+            source_duration_s: meta.duration,
+            source_thumbnail_url: meta.thumbnail,
+            source_upload_date: meta.upload_date,
+            source_description: meta.description,
+            source_audio_track: Some(track.key),
+            language,
+            target_minutes: show.default_minutes,
+            review_required: false,
         },
     )
     .await
@@ -217,16 +282,68 @@ pub async fn create(
         Ok(episode) => episode,
         Err(error) => {
             if let Some(existing) = episodes::get_by_video_id(&state.pool, &video.id).await? {
-                return Ok(duplicate_redirect(&existing.uuid));
+                return Ok(duplicate_redirect(&existing.uuid).into_response());
             }
             return Err(error);
         }
     };
-    if let Some(voice_id) = form.voice_id {
-        episodes::set_voice(&state.pool, &episode.uuid, voice_id).await?;
-    }
     state.notify.notify_one();
-    Ok(Redirect::to(&format!("/episodes/{}", episode.uuid)))
+    Ok(Redirect::to(&format!("/episodes/{}", episode.uuid)).into_response())
+}
+
+async fn create_error(
+    state: &AppState,
+    token: &CsrfToken,
+    form: &CreateForm,
+    error: &AppError,
+    meta: Option<&ytdlp::Metadata>,
+) -> AppResult<Response> {
+    let shows = shows::list(&state.pool).await?;
+    let recent = episodes::list(
+        &state.pool,
+        &episodes::EpisodeFilter {
+            limit: Some(8),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let preview = if let (Some(meta), Some(show), Ok(video)) = (
+        meta,
+        shows.iter().find(|show| show.id == form.show_id),
+        ytdlp::validate_url(&form.url),
+    ) {
+        preview_template(
+            meta,
+            &video.id,
+            &show.language,
+            None,
+            if form
+                .preview_video
+                .as_deref()
+                .is_some_and(|id| id != video.id)
+            {
+                None
+            } else {
+                form.language.as_deref()
+            },
+        )
+        .render()?
+    } else {
+        String::new()
+    };
+    Ok(Html(
+        StudioTemplate {
+            csrf: token.0.clone(),
+            shows,
+            recent,
+            selected_show: Some(form.show_id),
+            url: form.url.clone(),
+            error: preview_error_message(error),
+            preview,
+        }
+        .render()?,
+    )
+    .into_response())
 }
 
 fn duplicate_redirect(uuid: &str) -> Redirect {
@@ -239,97 +356,30 @@ pub async fn preview(
     headers: HeaderMap,
     Form(form): Form<PreviewForm>,
 ) -> AppResult<Response> {
-    let htmx = is_htmx(&headers);
-    match load_preview(&state, &token, &headers, &form).await {
-        Ok(data) => {
-            if htmx {
-                Ok(Html(PreviewTemplate::from(&data).render()?).into_response())
-            } else {
-                Ok(Json(json!({
-                    "ok": true,
-                    "title": data.title,
-                    "channel": data.channel,
-                    "duration_s": data.duration_s,
-                    "language": data.language,
-                    "has_captions": data.has_captions,
-                    "thumbnail": data.thumbnail,
-                    "voice_name": data.voice_name,
-                    "voice_missing": data.voice_missing,
-                    "voices": data.voices,
-                }))
-                .into_response())
+    let result = async {
+        csrf::verify(&token, &headers, &form._csrf)?;
+        let video = ytdlp::validate_url(&form.url)?;
+        let meta = probe(&state, &video).await?;
+        let show = match form.show_id { Some(id) => shows::get(&state.pool, id).await?, None => None };
+        let same_video = form.preview_video.as_deref() == Some(video.id.as_str());
+        let selected = if same_video { form.source_audio_track.as_deref() } else { None };
+        let language = if same_video { form.language.as_deref() } else { None };
+        let template = preview_template(&meta, &video.id, show.as_ref().map_or("vi", |s| s.language.as_str()), selected, language);
+        if template.tracks.is_empty() { return Err(AppError::BadRequest("Video không có bản audio khả dụng.".into())); }
+        if is_htmx(&headers) { Ok(Html(template.render()?).into_response()) }
+        else { Ok(Json(json!({"ok": true, "title": meta.title, "channel": meta.channel, "duration_s": meta.duration})).into_response()) }
+    }.await;
+    match result {
+        Ok(response) => Ok(response),
+        Err(error) if is_htmx(&headers) => Ok(Html(
+            PreviewErrorTemplate {
+                message: preview_error_message(&error),
             }
-        }
-        Err(error) => {
-            if htmx {
-                Ok(Html(
-                    PreviewErrorTemplate {
-                        message: preview_error_message(&error),
-                    }
-                    .render()?,
-                )
-                .into_response())
-            } else {
-                Err(error)
-            }
-        }
+            .render()?,
+        )
+        .into_response()),
+        Err(error) => Err(error),
     }
-}
-
-async fn load_preview(
-    state: &AppState,
-    token: &CsrfToken,
-    headers: &HeaderMap,
-    form: &PreviewForm,
-) -> AppResult<PreviewData> {
-    csrf::verify(token, headers, &form._csrf)?;
-    let video = ytdlp::validate_url(&form.url)?;
-    let meta = tokio::time::timeout(Duration::from_secs(15), ytdlp::probe(&state.cfg, &video))
-        .await
-        .map_err(|_| AppError::Upstream("preview timed out".into()))??;
-    let language = ytdlp::source_language(&meta).ok();
-    let has_captions = language
-        .and_then(|lang| ytdlp::choose_caption(&meta, lang))
-        .is_some();
-    let (voice_name, voice_missing, catalog_error, show_voice_ready, voices) =
-        match (form.show_id, language) {
-            (Some(show_id), Some(language)) => {
-                let selected = shows::get_voice(&state.pool, show_id, language).await?;
-                let voice_name = selected.as_ref().map(|(_, name)| name.clone());
-                match OmnivoiceClient::new(&state.cfg.omnivoice)
-                    .list_voices()
-                    .await
-                {
-                    Ok(catalog) => {
-                        let voices: Vec<Voice> = catalog
-                            .into_iter()
-                            .filter(|voice| voice.is_ready_for(language))
-                            .collect();
-                        let show_voice_ready = selected.as_ref().is_some_and(|(voice_id, _)| {
-                            voices.iter().any(|voice| voice.id == *voice_id)
-                        });
-                        let voice_missing = voices.is_empty();
-                        (voice_name, voice_missing, false, show_voice_ready, voices)
-                    }
-                    Err(_) => (voice_name, false, true, false, Vec::new()),
-                }
-            }
-            _ => (None, false, false, false, Vec::new()),
-        };
-    Ok(PreviewData {
-        title: meta.title,
-        channel: meta.channel,
-        duration_s: meta.duration,
-        language,
-        has_captions,
-        thumbnail: meta.thumbnail,
-        voice_name,
-        voice_missing,
-        catalog_error,
-        show_voice_ready,
-        voices,
-        selected_voice_id: form.voice_id,
-    })
 }
 
 fn is_htmx(headers: &HeaderMap) -> bool {
@@ -344,10 +394,6 @@ fn duration_label(seconds: Option<i64>) -> String {
         Some(total) => format!("{}:{:02}", total / 60, total % 60),
         None => "Chưa rõ".into(),
     }
-}
-
-fn language_label(language: &str) -> &'static str {
-    crate::models::language_label(language)
 }
 
 fn preview_error_message(error: &AppError) -> String {
@@ -413,16 +459,6 @@ pub async fn queue(
     ))
 }
 
-fn validate_minutes(minutes: i64) -> AppResult<()> {
-    if matches!(minutes, 5 | 10 | 15 | 20) {
-        Ok(())
-    } else {
-        Err(AppError::BadRequest(
-            "Thời lượng phải là 5, 10, 15 hoặc 20 phút.".into(),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,8 +469,6 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Notify;
     use tower::ServiceExt;
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const WATCH: &str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
@@ -454,38 +488,6 @@ mod tests {
             notify: Arc::new(Notify::new()),
             health_cache: Arc::new(tokio::sync::Mutex::new(None)),
         }
-    }
-
-    async fn state_with_omnivoice(server: &MockServer) -> AppState {
-        let cfg = Config::from_lookup({
-            let base = server.uri();
-            move |key| match key {
-                "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
-                "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
-                "OMNIVOICE_BASE_URL" => Some(base.clone()),
-                "DATA_DIR" => Some("/tmp/t2p-studio".into()),
-                _ => None,
-            }
-        })
-        .unwrap();
-        AppState {
-            pool: crate::db::test_pool().await,
-            cfg: Arc::new(cfg),
-            notify: Arc::new(Notify::new()),
-            health_cache: Arc::new(tokio::sync::Mutex::new(None)),
-        }
-    }
-
-    async fn mount_ready_voice(server: &MockServer) {
-        Mock::given(method("GET"))
-            .and(path("/api/voices"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "ok": true,
-                "data": [{"id": 42, "name": "Phượng", "status": "ready", "language": "vi"}],
-                "error": null
-            })))
-            .mount(server)
-            .await;
     }
 
     async fn create_show(state: &AppState) -> i64 {
@@ -568,6 +570,8 @@ mod tests {
             source_thumbnail_url: None,
             source_upload_date: None,
             language: "vi".into(),
+            source_audio_track: None,
+            source_description: None,
             target_minutes: 10,
             review_required: false,
         }
@@ -582,13 +586,172 @@ mod tests {
             .unwrap()
     }
 
+    fn audio_metadata(language: Option<&str>) -> ytdlp::Metadata {
+        serde_json::from_value(serde_json::json!({
+            "title": "Video", "formats": [
+                {"format_id":"1", "acodec":"aac", "vcodec":"none", "audio_track_id":"main", "language":language, "language_preference":5},
+                {"format_id":"2", "acodec":"aac", "vcodec":"none", "audio_track_id":"alt"}
+            ]
+        })).unwrap()
+    }
+
     #[test]
-    fn only_accepts_the_four_length_presets() {
-        assert!(validate_minutes(5).is_ok());
-        assert!(validate_minutes(10).is_ok());
-        assert!(validate_minutes(15).is_ok());
-        assert!(validate_minutes(20).is_ok());
-        assert!(validate_minutes(7).is_err());
+    fn preview_uses_youtube_language_before_show_language() {
+        let tracks = preview_tracks(&audio_metadata(Some("en")), "ko", None, None);
+        assert_eq!(tracks[0].language, "Tiếng Anh");
+        assert_eq!(tracks[1].language, "Chưa rõ ngôn ngữ");
+    }
+
+    #[test]
+    fn preview_falls_back_to_show_language() {
+        let tracks = preview_tracks(&audio_metadata(None), "ko", None, None);
+        assert_eq!(tracks[0].language, "Tiếng Hàn");
+    }
+
+    #[test]
+    fn preview_preserves_other_youtube_languages() {
+        let meta = audio_metadata(Some("ur"));
+        assert_eq!(preview_tracks(&meta, "ko", None, None)[0].language, "ur");
+        assert_eq!(
+            selected_track(&meta, "ko", "id:main", Some("ko"))
+                .unwrap()
+                .1,
+            "ur"
+        );
+    }
+
+    #[test]
+    fn selected_alternate_language_defaults_to_und() {
+        let meta = audio_metadata(Some("en"));
+        assert_eq!(
+            selected_track(&meta, "ko", "id:alt", Some("ko")).unwrap().1,
+            "ko"
+        );
+        assert_eq!(
+            selected_track(&meta, "ko", "id:alt", None).unwrap().1,
+            "und"
+        );
+    }
+
+    #[test]
+    fn create_rejects_a_track_that_disappeared_from_preview() {
+        assert!(selected_track(&audio_metadata(Some("en")), "ko", "missing", None).is_err());
+    }
+
+    async fn state_with_probe() -> (AppState, tempfile::TempDir) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("probe");
+        std::fs::write(&executable, "#!/bin/sh\nprintf '%s' '{\"title\":\"Probed\",\"channel\":\"Channel\",\"description\":\"Description\",\"duration\":120,\"upload_date\":\"20240101\",\"formats\":[{\"format_id\":\"1\",\"acodec\":\"aac\",\"audio_track_id\":\"main\",\"language\":\"en\",\"language_preference\":5},{\"format_id\":\"2\",\"acodec\":\"aac\",\"audio_track_id\":\"alt\"}]}'\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut state = test_state().await;
+        Arc::make_mut(&mut state.cfg).ytdlp_path = executable.to_string_lossy().into_owned();
+        (state, dir)
+    }
+
+    #[tokio::test]
+    async fn create_persists_explicit_alternate_and_its_language() {
+        for (label, expected) in [(Some("ko"), "ko"), (None, "und")] {
+            let (state, _dir) = state_with_probe().await;
+            let show = create_show(&state).await;
+            let mut body = form(&[
+                ("_csrf", TOKEN),
+                ("url", WATCH),
+                ("show_id", &show.to_string()),
+                ("source_audio_track", "id:alt"),
+            ]);
+            if let Some(label) = label {
+                body.push_str(&format!("&language={label}"));
+            }
+            let response = post(&state, "/episodes", body, &[]).await;
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+            let rows = episodes::list(&state.pool, &Default::default())
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].source_audio_track.as_deref(), Some("id:alt"));
+            assert_eq!(rows[0].language, expected);
+            assert_eq!(rows[0].source_title, "Probed");
+            assert_eq!(rows[0].source_description.as_deref(), Some("Description"));
+            assert_eq!(rows[0].status, "queued");
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_track_returns_a_form_and_does_not_queue() {
+        let (state, _dir) = state_with_probe().await;
+        let show = create_show(&state).await;
+        let response = post(
+            &state,
+            "/episodes",
+            form(&[
+                ("_csrf", TOKEN),
+                ("url", WATCH),
+                ("show_id", &show.to_string()),
+                ("source_audio_track", "missing"),
+            ]),
+            &[],
+        )
+        .await;
+        let html = response_body(response).await;
+        assert!(html.contains("không còn khả dụng"));
+        assert!(html.contains("name=\"source_audio_track\""));
+        assert!(episodes::list(&state.pool, &Default::default())
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn preview_preserves_selection_for_same_video_only() {
+        let (state, _dir) = state_with_probe().await;
+        let show = create_show(&state).await;
+        for (id, selected) in [(VIDEO_ID, true), ("oldvideo123", false)] {
+            let response = post(
+                &state,
+                "/api/preview",
+                form(&[
+                    ("_csrf", TOKEN),
+                    ("url", WATCH),
+                    ("show_id", &show.to_string()),
+                    ("preview_video", id),
+                    ("source_audio_track", "id:alt"),
+                    ("language", "ko"),
+                ]),
+                &[("hx-request", "true")],
+            )
+            .await;
+            let html = response_body(response).await;
+            assert_eq!(html.contains("value=\"id:alt\" checked"), selected);
+            assert_eq!(html.contains("value=\"ko\" selected"), selected);
+        }
+    }
+
+    #[tokio::test]
+    async fn create_rejects_stale_video_selection() {
+        let (state, _dir) = state_with_probe().await;
+        let show = create_show(&state).await;
+        let response = post(
+            &state,
+            "/episodes",
+            form(&[
+                ("_csrf", TOKEN),
+                ("url", WATCH),
+                ("show_id", &show.to_string()),
+                ("preview_video", "oldvideo123"),
+                ("source_audio_track", "id:alt"),
+                ("language", "ko"),
+            ]),
+            &[],
+        )
+        .await;
+        let html = response_body(response).await;
+        assert!(html.contains("Video đã thay đổi"));
+        assert!(html.contains("value=\"und\" selected"));
+        assert!(episodes::list(&state.pool, &Default::default())
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -603,128 +766,6 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        assert!(episodes::list(&state.pool, &Default::default())
-            .await
-            .unwrap()
-            .is_empty());
-    }
-
-    #[tokio::test]
-    async fn create_accepts_a_header_only_csrf_token() {
-        let state = test_state().await;
-        let show_id = create_show(&state).await;
-        let show_id = show_id.to_string();
-        let body = form(&[
-            ("_csrf", ""),
-            ("url", WATCH),
-            ("show_id", &show_id),
-            ("minutes", "10"),
-        ]);
-        let response = post(&state, "/episodes", body, &[("x-csrf-token", TOKEN)]).await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert_eq!(
-            episodes::list(&state.pool, &Default::default())
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
-    }
-
-    #[tokio::test]
-    async fn create_accepts_an_empty_voice_override() {
-        let state = test_state().await;
-        let show_id = create_show(&state).await;
-        let body = format!("{}&voice_id=", create_form(show_id));
-
-        let response = post(&state, "/episodes", body, &[]).await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        let episodes = episodes::list(&state.pool, &Default::default())
-            .await
-            .unwrap();
-        assert_eq!(episodes.len(), 1);
-        assert_eq!(episodes[0].voice_id, None);
-    }
-
-    #[tokio::test]
-    async fn create_persists_the_review_checkbox() {
-        let state = test_state().await;
-        let show_id = create_show(&state).await;
-        let body = form(&[
-            ("_csrf", TOKEN),
-            ("url", WATCH),
-            ("show_id", &show_id.to_string()),
-            ("minutes", "10"),
-            ("review_required", "on"),
-        ]);
-        let response = post(&state, "/episodes", body, &[]).await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        let episodes = episodes::list(&state.pool, &Default::default())
-            .await
-            .unwrap();
-        assert!(episodes[0].review_required);
-    }
-
-    #[tokio::test]
-    async fn create_requires_a_voice_when_the_show_has_none() {
-        let state = test_state().await;
-        let show = shows::create(
-            &state.pool,
-            NewShow {
-                title: "No voice".into(),
-                ..NewShow::default()
-            },
-        )
-        .await
-        .unwrap();
-
-        let response = post(&state, "/episodes", create_form(show.id), &[]).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert!(episodes::list(&state.pool, &Default::default())
-            .await
-            .unwrap()
-            .is_empty());
-    }
-
-    #[tokio::test]
-    async fn create_stores_a_ready_voice_override() {
-        let server = MockServer::start().await;
-        mount_ready_voice(&server).await;
-        let state = state_with_omnivoice(&server).await;
-        let show_id = create_show(&state).await;
-        let body = form(&[
-            ("_csrf", TOKEN),
-            ("url", WATCH),
-            ("show_id", &show_id.to_string()),
-            ("minutes", "10"),
-            ("voice_id", "42"),
-        ]);
-
-        let response = post(&state, "/episodes", body, &[]).await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        let episodes = episodes::list(&state.pool, &Default::default())
-            .await
-            .unwrap();
-        assert_eq!(episodes.len(), 1);
-        assert_eq!(episodes[0].voice_id, Some(42));
-    }
-
-    #[tokio::test]
-    async fn create_rejects_an_invalid_voice_without_creating_an_episode() {
-        let server = MockServer::start().await;
-        mount_ready_voice(&server).await;
-        let state = state_with_omnivoice(&server).await;
-        let show_id = create_show(&state).await;
-        let body = form(&[
-            ("_csrf", TOKEN),
-            ("url", WATCH),
-            ("show_id", &show_id.to_string()),
-            ("minutes", "10"),
-            ("voice_id", "99"),
-        ]);
-
-        let response = post(&state, "/episodes", body, &[]).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(episodes::list(&state.pool, &Default::default())
             .await
             .unwrap()
@@ -798,37 +839,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn index_selects_the_requested_show_and_its_default_minutes() {
-        let state = test_state().await;
-        for (title, minutes) in [("Alpha", 10), ("Beta", 15)] {
-            shows::create(
-                &state.pool,
-                NewShow {
-                    title: title.into(),
-                    default_minutes: minutes,
-                    ..NewShow::default()
-                },
-            )
-            .await
-            .unwrap();
-        }
-        let beta = shows::list(&state.pool)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|show| show.title == "Beta")
-            .unwrap();
-
-        let html = response_body(get(&state, &format!("/?show={}", beta.id)).await).await;
-
-        assert!(html.contains(&format!(
-            "value=\"{}\" data-default-minutes=\"15\" selected",
-            beta.id
-        )));
-        assert!(html.contains("value=\"15\" checked"));
-    }
-
-    #[tokio::test]
     async fn queue_renders_progress_bars_and_vietnamese_labels() {
         let state = test_state().await;
         let show_id = create_show(&state).await;
@@ -895,80 +905,6 @@ mod tests {
                 "Không xem trước được video. Vui lòng thử lại sau."
             );
         }
-    }
-
-    fn preview_voice(id: i64) -> Voice {
-        use crate::services::omnivoice::VoiceDesignInfo;
-
-        Voice {
-            id,
-            name: Some("Phượng".into()),
-            status: "ready".into(),
-            language: Some("vi".into()),
-            preview_url: None,
-            design: Some(VoiceDesignInfo {
-                gender: Some("female".into()),
-                age: Some("middle_aged".into()),
-                ..Default::default()
-            }),
-        }
-    }
-
-    fn preview_template() -> PreviewTemplate {
-        PreviewTemplate {
-            title: "Video".into(),
-            channel: "Channel".into(),
-            duration: "10:00".into(),
-            language_label: "Tiếng Việt".into(),
-            has_captions: true,
-            thumbnail: String::new(),
-            has_thumbnail: false,
-            voice_name: Some("Phượng".into()),
-            voice_missing: false,
-            catalog_error: false,
-            show_voice_ready: true,
-            voices: vec![preview_voice(42)],
-            selected_voice_id: Some(42),
-        }
-    }
-
-    #[test]
-    fn preview_renders_the_detected_language_voice_options() {
-        let html = preview_template().render().unwrap();
-        assert!(html.contains("name=\"voice_id\""));
-        assert!(html.contains("Theo show"));
-        assert!(html.contains("Phượng"));
-        assert!(html.contains("Nữ"));
-        assert!(html.contains("Trung niên"));
-        assert!(html.contains("value=\"42\" selected"));
-    }
-
-    #[test]
-    fn preview_selects_the_first_voice_when_the_show_has_no_ready_voice() {
-        let mut template = preview_template();
-        template.show_voice_ready = false;
-        template.selected_voice_id = None;
-        template.voices = vec![preview_voice(42), preview_voice(99)];
-
-        let html = template.render().unwrap();
-        assert!(html.contains("Chọn một giọng"));
-        assert!(html.contains("value=\"42\" selected"));
-        assert!(!html.contains("data-voice-missing"));
-    }
-
-    #[test]
-    fn preview_shows_a_catalog_notice_without_hiding_the_form() {
-        let mut template = preview_template();
-        template.catalog_error = true;
-        template.show_voice_ready = false;
-        template.voices = Vec::new();
-        template.selected_voice_id = None;
-
-        let html = template.render().unwrap();
-        assert!(html
-            .contains("Không tải được danh sách giọng. Sẽ dùng giọng mặc định của show nếu có."));
-        assert!(!html.contains("name=\"voice_id\""));
-        assert!(!html.contains("data-voice-missing"));
     }
 
     #[tokio::test]

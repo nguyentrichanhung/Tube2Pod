@@ -30,6 +30,8 @@ pub struct NewEpisode {
     pub source_thumbnail_url: Option<String>,
     pub source_upload_date: Option<String>,
     pub language: String,
+    pub source_audio_track: Option<String>,
+    pub source_description: Option<String>,
     pub target_minutes: i64,
     pub review_required: bool,
 }
@@ -50,8 +52,8 @@ pub async fn create(pool: &SqlitePool, new: NewEpisode) -> AppResult<Episode> {
         "INSERT INTO episodes (
             uuid, show_id, video_id, source_url, source_title, source_channel,
             source_duration_s, source_thumbnail_url, source_upload_date, language,
-            target_minutes, review_required, stage, status, created_at, updated_at
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15)
+            target_minutes, review_required, stage, status, created_at, updated_at, source_audio_track, source_description
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?16,?17)
          RETURNING *",
     )
     .bind(uuid)
@@ -69,6 +71,8 @@ pub async fn create(pool: &SqlitePool, new: NewEpisode) -> AppResult<Episode> {
     .bind(stage::QUEUED)
     .bind(status::QUEUED)
     .bind(now)
+    .bind(new.source_audio_track)
+    .bind(new.source_description)
     .fetch_one(pool)
     .await?;
     if let Err(error) = stage_events::open(pool, &row.uuid, stage::QUEUED).await {
@@ -761,6 +765,8 @@ mod tests {
             source_thumbnail_url: None,
             source_upload_date: None,
             language: "vi".into(),
+            source_audio_track: None,
+            source_description: None,
             target_minutes: 10,
             review_required: false,
         }
@@ -1364,6 +1370,8 @@ mod tests {
                 source_thumbnail_url: None,
                 source_upload_date: None,
                 language: "vi".into(),
+                source_audio_track: None,
+                source_description: None,
                 target_minutes: 10,
                 review_required: false,
             },

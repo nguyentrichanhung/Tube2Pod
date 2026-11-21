@@ -285,6 +285,8 @@ mod tests {
                 source_thumbnail_url: None,
                 source_upload_date: None,
                 language: "vi".into(),
+                source_audio_track: None,
+                source_description: None,
                 target_minutes: 10,
                 review_required: false,
             },

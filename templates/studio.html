@@ -9,15 +9,13 @@
 <div class="grid two">
 <section class="card">
   <h2>Video và show</h2>
-  <form method="post" action="/episodes" class="stack" hx-boost="false">
+  <form method="post" action="/episodes" class="stack" hx-boost="false" hx-sync="closest form:replace">
     <input type="hidden" name="_csrf" value="{{ csrf }}">
     <label>Link YouTube
-      <input name="url" type="url" required placeholder="https://www.youtube.com/watch?v=..."
-             hx-post="/api/preview" hx-target="#preview" hx-trigger="keyup changed delay:600ms"
+      <input name="url" type="url" value="{{ url }}" required placeholder="https://www.youtube.com/watch?v=..."
+             hx-post="/api/preview" hx-target="#preview" hx-trigger="input changed delay:600ms"
              hx-include="closest form">
     </label>
-    <div id="preview" class="source-preview" aria-live="polite">Thông tin video sẽ hiện sau khi dán link.</div>
-
     <div class="source-options">
       <label>Show
         <select name="show_id" required
@@ -28,20 +26,11 @@
           {% endfor %}
         </select>
       </label>
-      <fieldset class="stack">
-        <legend>Thời lượng</legend>
-        <div class="row">
-          {% for minutes in [5, 10, 15, 20] %}
-          <label class="badge"><input type="radio" name="minutes" value="{{ minutes }}" {% if minutes.clone() == selected_minutes %}checked{% endif %}> {{ minutes }} phút</label>
-          {% endfor %}
-        </div>
-      </fieldset>
     </div>
 
-    <label class="row">
-      <input type="checkbox" name="review_required" value="on" style="width:auto">
-      Dừng sau tóm tắt để duyệt
-    </label>
+    {% if !error.is_empty() %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+    <div id="preview" class="source-preview" aria-live="polite">{% if preview.is_empty() %}Thông tin video sẽ hiện sau khi dán link.{% else %}{{ preview|safe }}{% endif %}</div>
+
 
     <div class="row between">
       {% if shows.is_empty() %}<a href="/shows">Tạo show trước</a>{% endif %}
@@ -76,24 +65,10 @@
   {% endif %}
 </section>
 <script>
-  const showSelect = document.querySelector("select[name='show_id']");
-  if (showSelect) {
-    showSelect.addEventListener("change", () => {
-      const minutes = showSelect.selectedOptions[0]?.dataset.defaultMinutes;
-      document.querySelectorAll("input[name='minutes']").forEach((radio) => {
-        radio.checked = radio.value === minutes;
-      });
-    });
-  }
-</script>
-<script>
-  document.body.addEventListener("htmx:afterSwap", (event) => {
-    if (event.detail.target.id !== "preview") return;
-    const submit = document.querySelector("form[action='/episodes'] button[type='submit']");
-    if (submit) {
-      const noShows = submit.dataset.noShows === "true";
-      submit.disabled = noShows || Boolean(event.detail.target.querySelector("[data-voice-missing]"));
-    }
+  document.querySelector("form[action='/episodes']").addEventListener("change", (event) => {
+    if (event.target.name !== "source_audio_track") return;
+    const language = event.currentTarget.querySelector("select[name='language']");
+    if (language) language.value = "und";
   });
 </script>
 {% endblock %}

@@ -30,7 +30,7 @@
       <label>Tên show<input name="title" value="{{ show.title }}" required></label>
       <label>Tác giả<input name="author" value="{{ show.author }}"></label>
       <label>Mô tả<textarea name="description">{{ show.description }}</textarea></label>
-      <label>Ngôn ngữ
+      <label>Ngôn ngữ mặc định
         <select name="language">
           <option value="vi" {% if show.language == "vi" %}selected{% endif %}>Tiếng Việt</option>
           <option value="en" {% if show.language == "en" %}selected{% endif %}>English</option>
