@@ -8,7 +8,6 @@ use tokio::sync::{Mutex, Notify};
 pub struct CachedHealth {
     pub checked_at: Instant,
     pub ok: bool,
-    pub message: Option<String>,
 }
 
 #[derive(Clone)]

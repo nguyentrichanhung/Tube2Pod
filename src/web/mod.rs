@@ -193,7 +193,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn base_shell_exposes_sticky_topbar_and_skip_link() {
+    async fn base_shell_exposes_navigation_and_skip_link() {
         let response = get("/", None).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
@@ -201,6 +201,7 @@ mod tests {
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("skip-link"));
+        assert!(html.contains("class=\"app-shell\""));
         assert!(html.contains("class=\"topbar\""));
     }
 
@@ -255,7 +256,7 @@ mod tests {
     #[tokio::test]
     async fn browser_form_redirect_is_not_rewritten_as_html_error() {
         let body = format!(
-            "_csrf={VALID}&owner_name=Owner&owner_email=owner@example.com&auto_publish_default=on&max_source_minutes=120&min_source_seconds=30&retention_old_audio_days=7&retention_tmp_hours=24"
+            "_csrf={VALID}&owner_name=Owner&owner_email=owner@example.com&auto_publish_default=on&max_source_minutes=120&min_source_seconds=30"
         );
         let response = admin_router(test_state().await)
             .oneshot(
@@ -336,8 +337,9 @@ mod tests {
             .await
             .unwrap();
         let css = String::from_utf8(bytes.to_vec()).unwrap();
-        assert!(css.contains("--ink:#33251d"));
-        assert!(css.contains("--paper:#fbf7ef"));
+        assert!(css.contains("--ink:#202522"));
+        assert!(css.contains("--paper:#fdfcf8"));
+        assert!(css.contains(".app-shell"));
         assert!(css.contains(".cover-fallback"));
         assert!(css.contains(".voice-preview-bar"));
         assert!(css.contains(".voice-preview-button"));

@@ -5,7 +5,7 @@
   <input type="hidden" name="_csrf" value="{{ csrf }}">
   <h3>Chọn giọng {{ language_label }}</h3>
   {% if voices.is_empty() %}
-  <div class="notice error" role="alert">Chưa có giọng {{ language_label }} sẵn sàng trong Omnivoice. Liên hệ admin.</div>
+  <div class="notice error" role="alert">Chưa có giọng {{ language_label }} sẵn sàng.</div>
   {% else %}
   <div class="voice-preview-bar">
     <span class="voice-preview-label">Chọn “Nghe” để nghe thử giọng.</span>

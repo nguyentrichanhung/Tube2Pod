@@ -1,8 +1,9 @@
 {% extends "base.html" %}
+{% block title %}{{ episode.source_title }}{% endblock %}
 {% block content %}
-<div class="row between">
+<header class="page-header">
   <div>
-    <p class="muted"><a href="/shows/{{ show.id }}">{{ show.title }}</a></p>
+    <p class="context"><a href="/library">Thư viện</a> / <a href="/shows/{{ show.id }}">{{ show.title }}</a></p>
     <h1>{{ episode.source_title }}</h1>
     <div class="muted">{{ episode.source_channel }} · {{ episode.target_minutes }} phút · {{ episode.language }}</div>
   </div>
@@ -15,7 +16,7 @@
     <span class="badge">{% if episode.is_active() && episode.stage_label() != episode.status_label() %}{{ episode.status_label() }} · {{ episode.stage_label() }}{% else %}{{ episode.status_label() }}{% endif %}</span>
     {% endif %}
   </div>
-</div>
+</header>
 
 {% if duplicate %}
 <div class="notice" role="status">Tập này đã có trong thư viện; không tạo thêm bản sao.</div>
@@ -51,22 +52,28 @@
     </div>
     {% endif %}
 
-    <div class="card">
-      {% if audio_url.is_some() %}
-      <audio controls preload="metadata" src="/episodes/{{ episode.uuid }}/audio" style="width:100%" aria-label="Audio tập {{ episode.source_title }}"></audio>
+    <div class="card stack">
+      <div class="row between">
+        <h2>Audio podcast</h2>
+        {% if episode.audio_path.is_some() %}<span class="muted">MP3</span>{% endif %}
+      </div>
+      {% if episode.audio_path.is_some() %}
+      <div class="recording">
+        <audio controls preload="metadata" src="/episodes/{{ episode.uuid }}/audio" aria-label="Audio tập {{ episode.source_title }}"></audio>
+      </div>
       {% else %}
       <div class="empty-state">Audio chưa sẵn sàng.</div>
       {% endif %}
-      {% if audio_url.is_some() %}
+      {% if episode.audio_path.is_some() %}
       {% if episode.audio_needs_reread() %}
-      <div class="row" style="margin-top:.75rem"><span class="badge badge-err">Cần đọc lại</span></div>
+      <div class="row"><span class="badge badge-err">Cần đọc lại</span></div>
       {% else %}
-      <div class="row" style="margin-top:.75rem"><span class="badge badge-ok">Audio khớp</span></div>
+      <div class="row"><span class="badge badge-ok">Audio khớp</span></div>
       {% endif %}
       {% endif %}
-      <div class="row between" style="margin-top:.75rem">
-        <a href="{{ feed_url }}" target="_blank" rel="noreferrer">Feed URL</a>
-        <a href="{{ episode.source_url }}" target="_blank" rel="noreferrer">Video nguồn</a>
+      <div class="row between">
+        <a href="/shows/{{ show.id }}?tab=feed">Feed RSS của show</a>
+        <a href="{{ episode.source_url }}" target="_blank" rel="noreferrer">Mở video trên YouTube</a>
       </div>
     </div>
 
@@ -83,7 +90,7 @@
       {% if transcript.is_empty() %}
       <div class="empty-state">Chưa có transcript.</div>
       {% else %}
-      <details><summary>Xem transcript</summary><pre style="white-space:pre-wrap">{{ transcript }}</pre></details>
+      <details><summary>Xem transcript</summary><pre class="summary-text">{{ transcript }}</pre></details>
       {% endif %}
     </div>
   </section>

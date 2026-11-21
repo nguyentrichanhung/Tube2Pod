@@ -58,22 +58,9 @@ pub async fn omnivoice_health(state: &AppState) -> CachedHealth {
     )
     .await;
 
-    let health = match result {
-        Ok(Ok(_)) => CachedHealth {
-            checked_at: Instant::now(),
-            ok: true,
-            message: None,
-        },
-        Ok(Err(_)) => CachedHealth {
-            checked_at: Instant::now(),
-            ok: false,
-            message: Some("Không kết nối được Omnivoice.".into()),
-        },
-        Err(_) => CachedHealth {
-            checked_at: Instant::now(),
-            ok: false,
-            message: Some("Omnivoice không phản hồi trong 5 giây.".into()),
-        },
+    let health = CachedHealth {
+        checked_at: Instant::now(),
+        ok: matches!(result, Ok(Ok(_))),
     };
     *state.health_cache.lock().await = Some(health.clone());
     health
@@ -86,6 +73,12 @@ pub struct StageLatency {
     pub p50_secs: Option<i64>,
     pub p95_secs: Option<i64>,
     pub p95_percent: u8,
+}
+
+impl StageLatency {
+    pub fn label(&self) -> &'static str {
+        crate::models::stage_label_for(self.stage)
+    }
 }
 
 #[derive(Debug, Clone)]

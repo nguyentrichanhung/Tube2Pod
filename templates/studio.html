@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-header">
+<header class="page-header">
   <div>
-    <div class="eyebrow">Studio</div>
-    <h1>Tạo tập mới</h1>
-    <p class="muted">Dán link YouTube, chọn show và thời lượng.</p>
+    <h1>Tạo tập từ YouTube</h1>
   </div>
-</div>
+</header>
 
-<section class="card stack">
+<div class="grid two">
+<section class="card">
+  <h2>Video và show</h2>
   <form method="post" action="/episodes" class="stack" hx-boost="false">
     <input type="hidden" name="_csrf" value="{{ csrf }}">
     <label>Link YouTube
@@ -16,9 +16,9 @@
              hx-post="/api/preview" hx-target="#preview" hx-trigger="keyup changed delay:600ms"
              hx-include="closest form">
     </label>
-    <div id="preview" class="notice" aria-live="polite">Preview sẽ xuất hiện sau khi dán link.</div>
+    <div id="preview" class="source-preview" aria-live="polite">Thông tin video sẽ hiện sau khi dán link.</div>
 
-    <div class="grid two">
+    <div class="source-options">
       <label>Show
         <select name="show_id" required
                 hx-post="/api/preview" hx-target="#preview" hx-trigger="change"
@@ -44,29 +44,35 @@
     </label>
 
     <div class="row between">
-      <span></span>
+      {% if shows.is_empty() %}<a href="/shows">Tạo show trước</a>{% endif %}
       <button type="submit" data-no-shows="{% if shows.is_empty() %}true{% else %}false{% endif %}" {% if shows.is_empty() %}disabled{% endif %}>Tạo tập</button>
     </div>
   </form>
 </section>
 
-<section class="card stack" style="margin-top:1rem">
-  <div class="row between"><h2>Đang xử lý</h2><span class="muted">tự cập nhật</span></div>
+<section class="card stack">
+  <h2>Hàng đợi</h2>
   <div hx-get="/api/queue" hx-trigger="load, every 2s" hx-swap="innerHTML">
     <div class="empty-state">Đang tải…</div>
   </div>
 </section>
+</div>
 
-<section class="card stack" style="margin-top:1rem">
-  <h2>Tập gần đây</h2>
+<section class="card stack">
+  <div class="row between"><h2>Tập gần đây</h2><a href="/library">Mở thư viện</a></div>
   {% if recent.is_empty() %}
   <div class="empty-state">Dán link YouTube để bắt đầu.</div>
   {% else %}
-  <div class="stack">
+  <ul class="episode-list">
     {% for episode in recent %}
-    <a href="/episodes/{{ episode.uuid }}">{{ episode.source_title }}</a>
+    <li>
+      <a class="episode-row" href="/episodes/{{ episode.uuid }}">
+        <span><strong>{{ episode.source_title }}</strong><small>{{ episode.source_channel }}</small></span>
+        <span class="badge{% if episode.status == "published" || episode.status == "ready" %} badge-ok{% else if episode.status == "failed" %} badge-err{% endif %}">{{ episode.status_label() }}</span>
+      </a>
+    </li>
     {% endfor %}
-  </div>
+  </ul>
   {% endif %}
 </section>
 <script>

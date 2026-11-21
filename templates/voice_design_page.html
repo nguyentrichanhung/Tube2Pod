@@ -1,8 +1,9 @@
 {% extends "base.html" %}
+{% block title %}Bản nghe thử{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
-    <div class="eyebrow">Voice Studio</div>
+    <p class="context"><a href="/voices">Giọng đọc</a></p>
     <h1>Thiết kế giọng {{ language_label }}</h1>
     {% if show_title.is_some() %}<p class="muted">Gán vào {{ show_title.as_deref().unwrap_or("") }}</p>{% endif %}
   </div>

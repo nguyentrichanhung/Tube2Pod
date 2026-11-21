@@ -130,9 +130,9 @@ backup while running.
 
 ### Retention
 
-Cleanup runs at startup and every 24 hours. Settings are stored in the
-database and can be changed in the admin UI. Values are clamped to at least
-one day/hour, and the UI accepts 1–365 days and 1–720 hours.
+Cleanup runs at startup and every 24 hours. It reads existing settings from
+the database and falls back to the defaults below. Values are clamped to at
+least one day/hour.
 
 - **Old or superseded audio** (`retention_old_audio_days`, default 7):
   deletes files in `audio/` that are not the episode's current

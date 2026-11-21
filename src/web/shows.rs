@@ -1747,7 +1747,8 @@ mod tests {
         let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("Email chủ sở hữu"));
-        assert!(html.contains("Feed URL"));
+        assert!(html.contains("Liên kết RSS"));
+        assert!(html.contains("Sao chép liên kết"));
         assert!(html.contains(&format!("hx-post=\"/shows/{}/feed/rotate\"", show.id)));
 
         let info = crate::web::admin_router(context.state.clone())
@@ -1808,7 +1809,8 @@ mod tests {
         assert!(html.contains(">L<"));
         assert!(html.contains("Technology"));
         assert!(html.contains("Tiếng Việt"));
-        assert!(html.contains("Quản lý show"));
+        assert!(html.contains(&format!("href=\"/shows/{}\"", show.id)));
+        assert!(html.contains(&format!("href=\"/shows/{}?tab=feed\"", show.id)));
         assert!(html.contains("Tạo tập"));
         assert!(!html.contains(&format!("src=\"/shows/{}/cover\"", show.id)));
 

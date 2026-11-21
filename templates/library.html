@@ -1,10 +1,11 @@
 {% extends "base.html" %}
+{% block title %}Thư viện{% endblock %}
 {% block content %}
-<div class="row between">
-  <div><h1>Thư viện</h1><p class="muted">Tất cả tập từ mọi show, mới nhất trước.</p></div>
+<header class="page-header">
+  <h1>Thư viện</h1>
   <a class="btn" href="/">Tạo tập</a>
-</div>
-<form class="card row" method="get" action="/library"
+</header>
+<form class="card library-filters" method="get" action="/library"
       hx-get="/api/library/rows" hx-target="#rows" hx-trigger="change, keyup changed delay:400ms" hx-include="closest form">
   <label>Show
     <select name="show_id">
@@ -26,6 +27,7 @@
     <input name="q" value="{{ query }}" placeholder="Tên video hoặc kênh">
   </label>
   <input type="hidden" name="page" value="1">
+  <a class="btn btn-secondary" href="/library">Xoá bộ lọc</a>
 </form>
 {% if bulk_message.is_some() %}
 <div class="notice" role="status">{{ bulk_message.as_deref().unwrap_or("") }}</div>
@@ -36,19 +38,14 @@
   {% if !selected_status.is_empty() %}<input type="hidden" name="status" value="{{ selected_status }}">{% endif %}
   {% if !query.is_empty() %}<input type="hidden" name="q" value="{{ query }}">{% endif %}
   <input type="hidden" name="page" value="{{ pagination.page }}">
-  <div class="row between">
-    <a class="btn btn-secondary" href="/library">Xoá bộ lọc</a>
-  </div>
-  <div class="row between">
-    <span class="muted"><strong id="bulk-count">0</strong> tập đã chọn</span>
-    <div class="row">
-      <input name="confirm" placeholder="Gõ XOA để xác nhận" aria-label="Gõ XOA để xác nhận xoá" required>
-      <button class="btn btn-danger" type="submit" id="bulk-submit" disabled>Xoá đã chọn</button>
-    </div>
-  </div>
   <section class="card" id="rows">
     {% include "partials/episode_rows.html" %}
   </section>
+  <div class="row between bulk-actions">
+    <span class="muted"><strong id="bulk-count">0</strong> tập đã chọn</span>
+    <label>Xác nhận xoá<input name="confirm" placeholder="Gõ XOA" required></label>
+    <button class="btn btn-danger" type="submit" id="bulk-submit" disabled>Xoá đã chọn</button>
+  </div>
 </form>
 <script>
   (function () {

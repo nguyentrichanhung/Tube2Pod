@@ -1,7 +1,6 @@
 use crate::db::settings;
 use crate::db::shows;
 use crate::error::{AppError, AppResult};
-use crate::services::storage::{dir_size, format_bytes};
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
 use askama::Template;
@@ -11,7 +10,6 @@ use axum::response::{Html, Redirect};
 use axum::Extension;
 use axum::Form;
 use serde::Deserialize;
-use std::path::Path;
 
 const OWNER_NAME: &str = "owner_name";
 const OWNER_EMAIL: &str = "owner_email";
@@ -19,8 +17,6 @@ const AUTO_PUBLISH: &str = "auto_publish_default";
 const DEFAULT_EXPLICIT: &str = "default_explicit";
 const MAX_SOURCE_MINUTES: &str = "max_source_minutes";
 const MIN_SOURCE_SECONDS: &str = "min_source_seconds";
-const RETENTION_OLD_AUDIO_DAYS: &str = "retention_old_audio_days";
-const RETENTION_TMP_HOURS: &str = "retention_tmp_hours";
 
 #[derive(Debug, Clone)]
 pub struct AppSettings {
@@ -30,16 +26,6 @@ pub struct AppSettings {
     pub default_explicit: bool,
     pub max_source_minutes: i64,
     pub min_source_seconds: i64,
-    pub retention_old_audio_days: i64,
-    pub retention_tmp_hours: i64,
-}
-
-#[derive(Debug, Clone)]
-pub struct StorageUsage {
-    pub total_human: String,
-    pub audio_human: String,
-    pub tmp_human: String,
-    pub audio_percent: u8,
 }
 
 #[derive(Template)]
@@ -47,11 +33,6 @@ pub struct StorageUsage {
 pub struct SettingsTemplate {
     csrf: String,
     settings: AppSettings,
-    public_base_url: String,
-    data_dir: String,
-    chunk_chars: usize,
-    omnivoice_base_url: String,
-    storage: StorageUsage,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -63,8 +44,6 @@ pub struct SettingsForm {
     pub default_explicit: Option<String>,
     pub max_source_minutes: i64,
     pub min_source_seconds: i64,
-    pub retention_old_audio_days: i64,
-    pub retention_tmp_hours: i64,
 }
 
 impl SettingsForm {
@@ -78,8 +57,6 @@ impl SettingsForm {
             default_explicit: None,
             max_source_minutes: 360,
             min_source_seconds: 60,
-            retention_old_audio_days: 7,
-            retention_tmp_hours: 24,
         }
     }
 }
@@ -89,16 +66,10 @@ pub async fn index(
     Extension(token): Extension<CsrfToken>,
 ) -> AppResult<Html<String>> {
     let settings = load(&state.pool).await?;
-    let storage = storage_usage(&state.cfg.data_dir).await;
     Ok(Html(
         SettingsTemplate {
             csrf: token.0,
             settings,
-            public_base_url: state.cfg.public_base_url.clone(),
-            data_dir: state.cfg.data_dir.display().to_string(),
-            chunk_chars: state.cfg.omnivoice.chunk_chars,
-            omnivoice_base_url: state.cfg.omnivoice.base_url.clone(),
-            storage,
         }
         .render()?,
     ))
@@ -114,8 +85,6 @@ pub async fn save(
     let values = validate(form)?;
     let max_source_minutes = values.max_source_minutes.to_string();
     let min_source_seconds = values.min_source_seconds.to_string();
-    let retention_old_audio_days = values.retention_old_audio_days.to_string();
-    let retention_tmp_hours = values.retention_tmp_hours.to_string();
     let pairs = [
         (OWNER_NAME, values.owner_name.as_str()),
         (OWNER_EMAIL, values.owner_email.as_str()),
@@ -137,8 +106,6 @@ pub async fn save(
         ),
         (MAX_SOURCE_MINUTES, max_source_minutes.as_str()),
         (MIN_SOURCE_SECONDS, min_source_seconds.as_str()),
-        (RETENTION_OLD_AUDIO_DAYS, retention_old_audio_days.as_str()),
-        (RETENTION_TMP_HOURS, retention_tmp_hours.as_str()),
     ];
     let mut tx = state.pool.begin().await?;
     settings::set_many_in_tx(&mut tx, &pairs).await?;
@@ -155,8 +122,6 @@ pub async fn load(pool: &sqlx::SqlitePool) -> AppResult<AppSettings> {
         default_explicit: settings::get_or(pool, DEFAULT_EXPLICIT, "false").await? == "true",
         max_source_minutes: settings::read_i64(pool, MAX_SOURCE_MINUTES, 360).await?,
         min_source_seconds: settings::read_i64(pool, MIN_SOURCE_SECONDS, 60).await?,
-        retention_old_audio_days: settings::read_i64(pool, RETENTION_OLD_AUDIO_DAYS, 7).await?,
-        retention_tmp_hours: settings::read_i64(pool, RETENTION_TMP_HOURS, 24).await?,
     })
 }
 
@@ -180,16 +145,6 @@ pub fn validate(form: SettingsForm) -> AppResult<AppSettings> {
             "Độ dài tối thiểu phải từ 10 đến 600 giây.".into(),
         ));
     }
-    if !(1..=365).contains(&form.retention_old_audio_days) {
-        return Err(AppError::BadRequest(
-            "Số ngày giữ audio cũ phải từ 1 đến 365.".into(),
-        ));
-    }
-    if !(1..=720).contains(&form.retention_tmp_hours) {
-        return Err(AppError::BadRequest(
-            "Số giờ giữ file tạm phải từ 1 đến 720.".into(),
-        ));
-    }
     Ok(AppSettings {
         owner_name,
         owner_email,
@@ -197,26 +152,7 @@ pub fn validate(form: SettingsForm) -> AppResult<AppSettings> {
         default_explicit: form.default_explicit.is_some(),
         max_source_minutes: form.max_source_minutes,
         min_source_seconds: form.min_source_seconds,
-        retention_old_audio_days: form.retention_old_audio_days,
-        retention_tmp_hours: form.retention_tmp_hours,
     })
-}
-
-async fn storage_usage(data_dir: &Path) -> StorageUsage {
-    let total = dir_size(data_dir).await;
-    let audio = dir_size(&data_dir.join("audio")).await;
-    let tmp = dir_size(&data_dir.join("tmp")).await;
-    let audio_percent = audio
-        .saturating_mul(100)
-        .checked_div(total)
-        .unwrap_or(0)
-        .min(100) as u8;
-    StorageUsage {
-        total_human: format_bytes(total),
-        audio_human: format_bytes(audio),
-        tmp_human: format_bytes(tmp),
-        audio_percent,
-    }
 }
 
 #[cfg(test)]
@@ -297,8 +233,6 @@ mod tests {
             ("auto_publish_default", "on"),
             ("max_source_minutes", "120"),
             ("min_source_seconds", "30"),
-            ("retention_old_audio_days", "14"),
-            ("retention_tmp_hours", "48"),
         ]
     }
 
@@ -319,14 +253,6 @@ mod tests {
         let mut negative = SettingsForm::default_values();
         negative.max_source_minutes = -1;
         assert!(validate(negative).is_err());
-
-        let mut no_retention = SettingsForm::default_values();
-        no_retention.retention_old_audio_days = 0;
-        assert!(validate(no_retention).is_err());
-
-        let mut too_many_tmp_hours = SettingsForm::default_values();
-        too_many_tmp_hours.retention_tmp_hours = 721;
-        assert!(validate(too_many_tmp_hours).is_err());
     }
 
     #[test]
@@ -334,14 +260,6 @@ mod tests {
         let mut form = SettingsForm::default_values();
         form.owner_email.clear();
         assert!(validate(form).is_ok());
-    }
-
-    #[test]
-    fn formats_storage() {
-        assert_eq!(format_bytes(0), "0 B");
-        assert_eq!(format_bytes(1536), "1.5 KB");
-        assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MB");
-        assert_eq!(format_bytes(2 * 1024 * 1024 * 1024), "2.0 GB");
     }
 
     #[test]
@@ -377,7 +295,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn settings_page_renders_defaults_and_storage() {
+    async fn settings_page_renders_only_service_settings() {
         let context = ctx().await;
         let response = send(
             &context,
@@ -393,7 +311,12 @@ mod tests {
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("Cài đặt"));
         assert!(html.contains("Giới hạn nguồn"));
-        assert!(html.contains("Dung lượng"));
+        assert!(!html.contains("Dung lượng"));
+        assert!(!html.contains("Thông tin triển khai"));
+        assert!(!html.contains("retention_old_audio_days"));
+        assert!(!html.contains("retention_tmp_hours"));
+        assert!(!html.contains("127.0.0.1"));
+        assert!(!html.contains("https://pod.example.ts.net:8443"));
         assert!(html.contains(&format!(r#"value="{TOKEN}""#)));
         assert!(html.contains(r#"name="max_source_minutes" min="30" max="600" value="360""#));
     }
@@ -413,33 +336,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn settings_page_hides_advanced_sections_in_a_disclosure() {
-        let context = ctx().await;
-        let response = send(
-            &context,
-            "GET",
-            "/settings",
-            "application/x-www-form-urlencoded",
-            Vec::new(),
-            &[],
-        )
-        .await;
-        let html = String::from_utf8(
-            to_bytes(response.into_body(), 1024 * 1024)
-                .await
-                .unwrap()
-                .to_vec(),
-        )
-        .unwrap();
-        assert!(html.contains("<details"));
-        assert!(html.contains("Nâng cao"));
-        assert!(html.contains("name=\"retention_old_audio_days\""));
-        assert!(html.contains("name=\"retention_tmp_hours\""));
-    }
-
-    #[tokio::test]
     async fn saves_valid_settings_and_redirects() {
         let context = ctx().await;
+        db_settings::set(&context.state.pool, "retention_old_audio_days", "14")
+            .await
+            .unwrap();
+        db_settings::set(&context.state.pool, "retention_tmp_hours", "48")
+            .await
+            .unwrap();
         let response = send(
             &context,
             "POST",
@@ -466,8 +370,18 @@ mod tests {
         assert!(!loaded.default_explicit);
         assert_eq!(loaded.max_source_minutes, 120);
         assert_eq!(loaded.min_source_seconds, 30);
-        assert_eq!(loaded.retention_old_audio_days, 14);
-        assert_eq!(loaded.retention_tmp_hours, 48);
+        assert_eq!(
+            db_settings::read_i64(&context.state.pool, "retention_old_audio_days", 7)
+                .await
+                .unwrap(),
+            14
+        );
+        assert_eq!(
+            db_settings::read_i64(&context.state.pool, "retention_tmp_hours", 24)
+                .await
+                .unwrap(),
+            48
+        );
     }
 
     #[tokio::test]
@@ -553,33 +467,5 @@ mod tests {
             assert_eq!(show.owner_name, "Chủ Podcast");
             assert_eq!(show.owner_email, "owner@example.com");
         }
-    }
-
-    #[tokio::test]
-    async fn storage_usage_walks_nested_directories() {
-        let dir = tempfile::tempdir().unwrap();
-        tokio::fs::create_dir_all(dir.path().join("audio/nested"))
-            .await
-            .unwrap();
-        tokio::fs::create_dir_all(dir.path().join("tmp"))
-            .await
-            .unwrap();
-        tokio::fs::write(dir.path().join("audio/a.mp3"), vec![0u8; 1024])
-            .await
-            .unwrap();
-        tokio::fs::write(dir.path().join("audio/nested/b.mp3"), vec![0u8; 512])
-            .await
-            .unwrap();
-        tokio::fs::write(dir.path().join("tmp/c.part"), vec![0u8; 256])
-            .await
-            .unwrap();
-
-        let usage = storage_usage(dir.path()).await;
-        assert_eq!(dir_size(dir.path()).await, 1792);
-        assert_eq!(dir_size(&dir.path().join("audio")).await, 1536);
-        assert_eq!(usage.audio_human, "1.5 KB");
-        assert_eq!(usage.tmp_human, "256 B");
-        assert_eq!(usage.total_human, "1.8 KB");
-        assert_eq!(usage.audio_percent, 85);
     }
 }

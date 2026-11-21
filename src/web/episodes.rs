@@ -21,8 +21,6 @@ pub struct EpisodeTemplate {
     csrf: String,
     episode: Episode,
     show: Show,
-    feed_url: String,
-    audio_url: Option<String>,
     transcript: String,
     duplicate: bool,
     progress_active: bool,
@@ -62,13 +60,6 @@ pub async fn detail(
     let show = shows::get(&state.pool, episode.show_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    let feed_url = format!("{}/feed/{}.xml", state.cfg.public_base_url, show.feed_token);
-    let audio_url = episode.audio_path.as_ref().map(|_| {
-        format!(
-            "{}/audio/{}/{}-{}.mp3",
-            state.cfg.public_base_url, show.feed_token, episode.uuid, episode.audio_version
-        )
-    });
     let transcript = read_transcript(&episode).await;
     let progress_active = episode.is_active();
     Ok(Html(
@@ -76,8 +67,6 @@ pub async fn detail(
             csrf: token.0,
             episode,
             show,
-            feed_url,
-            audio_url,
             transcript,
             duplicate: query.duplicate.as_deref() == Some("1"),
             progress_active,
@@ -682,8 +671,8 @@ mod tests {
         let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
         assert!(html.contains(&format!("src=\"/episodes/{}/audio\"", episode.uuid)));
         assert!(html.contains(&format!(
-            "https://pod.example.ts.net:8443/feed/{}.xml",
-            show.feed_token
+            "href=\"/shows/{}?tab=feed\"",
+            show.id
         )));
         assert!(!show.feed_enabled);
 
