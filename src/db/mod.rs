@@ -50,6 +50,24 @@ pub async fn test_pool() -> SqlitePool {
 }
 
 #[cfg(test)]
+pub async fn test_pool_0004() -> SqlitePool {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    let all = sqlx::migrate!("./migrations");
+    let old = sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            all.iter().filter(|m| m.version <= 4).cloned().collect(),
+        ),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    old.run(&pool).await.unwrap();
+    pool
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

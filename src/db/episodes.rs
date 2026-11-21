@@ -720,6 +720,22 @@ mod tests {
     use crate::db::shows::{self, NewShow};
     use crate::models::status;
 
+    #[tokio::test]
+    async fn source_audio_fields_round_trip() {
+        let pool = crate::db::test_pool_0004().await;
+        sqlx::query("INSERT INTO shows (id, title, feed_token, created_at, updated_at) VALUES (1, 'Show', 'token', 0, 0)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO episodes (uuid, show_id, video_id, source_url, source_title, language, target_minutes, stage, status, created_at, updated_at) VALUES ('old', 1, 'old', 'url', 'Old', 'vi', 10, 'queued', 'queued', 0, 0)").execute(&pool).await.unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        let old = get(&pool, "old").await.unwrap().unwrap();
+        assert_eq!(old.source_audio_track, None);
+        assert_eq!(old.source_description, None);
+        sqlx::query("UPDATE episodes SET source_audio_track = 'track-1', source_description = 'Description', language = 'und' WHERE uuid = 'old'").execute(&pool).await.unwrap();
+        let updated = get(&pool, "old").await.unwrap().unwrap();
+        assert_eq!(updated.source_audio_track.as_deref(), Some("track-1"));
+        assert_eq!(updated.source_description.as_deref(), Some("Description"));
+        assert_eq!(updated.language, "und");
+    }
+
     async fn setup() -> (sqlx::SqlitePool, i64) {
         let pool = crate::db::test_pool().await;
         let show = shows::create(

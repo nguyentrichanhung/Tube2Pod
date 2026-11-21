@@ -644,32 +644,7 @@ pub async fn purge_episode_files(data_dir: &std::path::Path, episode: &Episode) 
     if let Some(path) = &episode.transcript_path {
         let _ = tokio::fs::remove_file(path).await;
     }
-    let transcript_dir = data_dir.join("transcripts");
-    let transcript_prefix = format!("{}.", episode.uuid);
-    if let Ok(mut entries) = tokio::fs::read_dir(&transcript_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(transcript_prefix.as_str())
-            {
-                let _ = tokio::fs::remove_file(entry.path()).await;
-            }
-        }
-    }
-    let _ = tokio::fs::remove_dir_all(data_dir.join("tmp").join(&episode.uuid)).await;
-    let audio_dir = data_dir.join("audio");
-    if let Ok(mut entries) = tokio::fs::read_dir(&audio_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(&episode.uuid)
-            {
-                let _ = tokio::fs::remove_file(entry.path()).await;
-            }
-        }
-    }
+    let _ = crate::cleanup::purge_episode_files(data_dir, episode, false).await;
 }
 
 fn form_value(body: &[u8], key: &str) -> Option<String> {
