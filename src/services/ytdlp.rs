@@ -21,6 +21,9 @@ pub struct CaptionTrack {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Metadata {
     pub title: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub formats: Vec<AudioFormat>,
     pub channel: Option<String>,
     pub duration: Option<i64>,
     pub upload_date: Option<String>,
@@ -33,6 +36,90 @@ pub struct Metadata {
     pub subtitles: HashMap<String, Vec<CaptionTrack>>,
     #[serde(default)]
     pub automatic_captions: HashMap<String, Vec<CaptionTrack>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AudioFormat {
+    pub format_id: String,
+    pub acodec: Option<String>,
+    pub vcodec: Option<String>,
+    pub language: Option<String>,
+    pub language_preference: Option<i32>,
+    pub format_note: Option<String>,
+    pub audio_track_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioTrack {
+    pub key: String,
+    pub format_id: String,
+    pub source_language: Option<String>,
+    pub is_default: bool,
+    pub is_original: bool,
+}
+
+pub fn audio_tracks(meta: &Metadata) -> Vec<AudioTrack> {
+    let mut tracks: Vec<(AudioTrack, bool, bool)> = Vec::new();
+    for format in &meta.formats {
+        if format.format_id.is_empty() || matches!(format.acodec.as_deref(), None | Some("none")) {
+            continue;
+        }
+        let note = format.format_note.as_deref().unwrap_or("");
+        let label = note.split(',').next().unwrap_or("").trim();
+        let label = label.strip_suffix(" (default)").unwrap_or(label).trim();
+        let label = label.strip_suffix(" (original)").unwrap_or(label).trim();
+        let label = if matches!(label, "tiny" | "low" | "medium" | "high" | "") {
+            ""
+        } else {
+            label
+        };
+        let identifiable = format
+            .audio_track_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty())
+            || (format.language.is_some() && !label.is_empty());
+        let key = if let Some(id) = format.audio_track_id.as_deref().filter(|id| !id.is_empty()) {
+            format!("id:{id}")
+        } else {
+            // yt-dlp exposes the display name and language, but not YouTube's track ID.
+            format!(
+                "metadata:{}",
+                serde_json::to_string(&(format.language.as_deref(), label)).unwrap()
+            )
+        };
+        let lower_note = note.to_ascii_lowercase();
+        let is_default = lower_note.contains("(default)") || format.language_preference == Some(5);
+        let is_original = lower_note.contains("original") || format.language_preference == Some(10);
+        let audio_only = format.vcodec.as_deref() == Some("none");
+        if let Some((track, existing_audio_only, _)) =
+            tracks.iter_mut().find(|(track, _, _)| track.key == key)
+        {
+            track.is_default |= is_default;
+            track.is_original |= is_original;
+            if audio_only && !*existing_audio_only {
+                track.format_id.clone_from(&format.format_id);
+                *existing_audio_only = true;
+            }
+        } else {
+            tracks.push((
+                AudioTrack {
+                    key,
+                    format_id: format.format_id.clone(),
+                    source_language: format.language.clone(),
+                    is_default,
+                    is_original,
+                },
+                audio_only,
+                identifiable,
+            ));
+        }
+    }
+    // Unlabelled formats cannot be mapped to a particular track in a multi-track source.
+    if tracks.len() > 1 {
+        tracks.retain(|(_, _, identifiable)| *identifiable);
+    }
+    tracks.sort_by_key(|(track, _, _)| !track.is_default);
+    tracks.into_iter().map(|(track, _, _)| track).collect()
 }
 
 #[derive(Debug, Clone)]
@@ -291,6 +378,73 @@ pub fn classify_source_error(error: &AppError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn groups_codecs_and_orders_youtube_default_first() {
+        let meta: Metadata =
+            serde_json::from_str(include_str!("../../tests/fixtures/ytdlp_audio_tracks.json"))
+                .unwrap();
+        let tracks = audio_tracks(&meta);
+        assert_eq!(tracks.len(), 3);
+        assert!(tracks[0].is_default);
+        assert_eq!(tracks[0].source_language.as_deref(), Some("en"));
+        assert!(tracks
+            .iter()
+            .any(|track| track.is_original && track.source_language.as_deref() == Some("ko")));
+        let mut changed = meta.clone();
+        changed
+            .formats
+            .retain(|format| format.format_id != "140-en");
+        assert_eq!(tracks[0].key, audio_tracks(&changed)[0].key);
+    }
+
+    #[test]
+    fn suggests_a_track_when_default_flag_is_missing() {
+        let meta: Metadata = serde_json::from_str(r#"{"title":"x","formats":[{"format_id":"140","acodec":"aac","vcodec":"none","format_note":"low"},{"format_id":"251","acodec":"opus","vcodec":"none","format_note":"medium"}]}"#).unwrap();
+        let tracks = audio_tracks(&meta);
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].format_id, "140");
+        assert!(!tracks[0].is_default);
+        let empty: Metadata = serde_json::from_str(r#"{"title":"x"}"#).unwrap();
+        assert!(audio_tracks(&empty).is_empty());
+    }
+
+    #[test]
+    fn does_not_merge_distinct_tracks_with_same_language() {
+        let meta: Metadata =
+            serde_json::from_str(include_str!("../../tests/fixtures/ytdlp_audio_tracks.json"))
+                .unwrap();
+        let tracks = audio_tracks(&meta);
+        let english: Vec<_> = tracks
+            .iter()
+            .filter(|track| track.source_language.as_deref() == Some("en"))
+            .collect();
+        assert_eq!(english.len(), 2);
+        assert_ne!(english[0].key, english[1].key);
+    }
+
+    #[test]
+    fn groups_real_extractor_metadata_and_prefers_audio_only() {
+        // Safe fields from the authorized multitrack probe; no media URLs are retained.
+        let meta: Metadata = serde_json::from_str(r#"{"title":"sample","formats":[
+            {"format_id":"139-0","format_note":"English (US), low","language":"en-US","language_preference":-1,"acodec":"mp4a.40.5","vcodec":"none"},
+            {"format_id":"139-1","format_note":"Urdu original (default), low","language":"ur","language_preference":10,"acodec":"mp4a.40.5","vcodec":"none"},
+            {"format_id":"251-1","format_note":"Urdu original (default), medium","language":"ur","language_preference":10,"acodec":"opus","vcodec":"none"}
+        ]}"#).unwrap();
+        let tracks = audio_tracks(&meta);
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].source_language.as_deref(), Some("ur"));
+        assert!(tracks[0].is_original && tracks[0].is_default);
+
+        let meta: Metadata = serde_json::from_str(
+            r#"{"title":"x","formats":[
+            {"format_id":"muxed","acodec":"aac","vcodec":"h264","audio_track_id":"track.1"},
+            {"format_id":"audio","acodec":"opus","vcodec":"none","audio_track_id":"track.1"}
+        ]}"#,
+        )
+        .unwrap();
+        assert_eq!(audio_tracks(&meta)[0].format_id, "audio");
+    }
 
     #[test]
     fn accepts_watch_shorts_mobile_and_short_links() {

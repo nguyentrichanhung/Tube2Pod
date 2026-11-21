@@ -1,0 +1,9 @@
+{
+  "title": "Audio tracks",
+  "formats": [
+    {"format_id": "140-ko", "acodec": "mp4a.40.2", "vcodec": "none", "language": "ko", "language_preference": 10, "format_note": "Korean original, medium"},
+    {"format_id": "140-en", "acodec": "mp4a.40.2", "vcodec": "none", "language": "en", "language_preference": 5, "format_note": "English (default), medium"},
+    {"format_id": "251-en", "acodec": "opus", "vcodec": "none", "language": "en", "language_preference": 5, "format_note": "English (default), low"},
+    {"format_id": "140-en-alt", "acodec": "mp4a.40.2", "vcodec": "none", "language": "en", "language_preference": -1, "format_note": "English descriptive, medium"}
+  ]
+}
