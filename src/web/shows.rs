@@ -1649,7 +1649,7 @@ mod tests {
         )
         .await
         .unwrap();
-        episodes::finish(
+        episodes::fixture_finish(
             &context.state.pool,
             &episode.uuid,
             stage::READY,

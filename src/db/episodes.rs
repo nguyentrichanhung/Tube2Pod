@@ -521,20 +521,36 @@ pub async fn finish(
         "UPDATE episodes SET stage = ?1, status = ?2, error_code = NULL, error_message = NULL,
             next_attempt_at = NULL, updated_at = ?3,
             published_at = CASE WHEN ?4 THEN COALESCE(published_at, ?3) ELSE published_at END
-         WHERE uuid = ?5 AND status != ?6",
+         WHERE uuid = ?5 AND status = ?6 AND stage = ?7",
     )
     .bind(final_stage)
     .bind(final_status)
     .bind(now)
     .bind(set_published_at_if_null)
     .bind(uuid)
-    .bind(status::CANCELLED)
+    .bind(status::RUNNING)
+    .bind(stage::PUBLISHING)
     .execute(pool)
     .await?;
     if result.rows_affected() > 0 {
         close_event(pool, uuid, stage_events::OUTCOME_OK, None, "finish").await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub async fn fixture_finish(
+    pool: &SqlitePool,
+    uuid: &str,
+    final_stage: &str,
+    final_status: &str,
+    published: bool,
+) -> AppResult<()> {
+    sqlx::query("UPDATE episodes SET status='running', stage='publishing' WHERE uuid=?1")
+        .bind(uuid)
+        .execute(pool)
+        .await?;
+    finish(pool, uuid, final_stage, final_status, published).await
 }
 
 pub async fn record_running_failure(
@@ -855,7 +871,7 @@ mod tests {
             .unwrap();
         set_review(&pool, &ep.uuid).await.unwrap();
         assert!(approve_review(&pool, &ep.uuid).await.unwrap());
-        finish(&pool, &ep.uuid, stage::READY, status::REVIEW, false)
+        fixture_finish(&pool, &ep.uuid, stage::READY, status::REVIEW, false)
             .await
             .unwrap();
 
@@ -1177,7 +1193,7 @@ mod tests {
         set_audio(&pool, &ep.uuid, "/data/audio/x-2.mp3", 1234, 61, "hash", 2)
             .await
             .unwrap();
-        finish(&pool, &ep.uuid, stage::PUBLISHED, status::PUBLISHED, true)
+        fixture_finish(&pool, &ep.uuid, stage::PUBLISHED, status::PUBLISHED, true)
             .await
             .unwrap();
         let got = get(&pool, &ep.uuid).await.unwrap().unwrap();
@@ -1279,7 +1295,7 @@ mod tests {
     async fn delete_if_terminal_removes_published_but_not_running() {
         let (pool, show_id) = setup().await;
         let published = create(&pool, episode(show_id, "pub")).await.unwrap();
-        finish(
+        fixture_finish(
             &pool,
             &published.uuid,
             stage::PUBLISHED,

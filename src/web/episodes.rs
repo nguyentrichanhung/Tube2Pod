@@ -832,7 +832,7 @@ mod tests {
         )
         .await
         .unwrap();
-        episodes::finish(
+        episodes::fixture_finish(
             &context.state.pool,
             &episode.uuid,
             stage::PUBLISHED,
@@ -1419,9 +1419,15 @@ mod tests {
         assert!(html.contains("hx-trigger=\"every 2s\""));
         assert!(html.contains("aria-live=\"polite\""));
 
-        crate::db::episodes::finish(&context.state.pool, &episode.uuid, "ready", "ready", false)
-            .await
-            .unwrap();
+        crate::db::episodes::fixture_finish(
+            &context.state.pool,
+            &episode.uuid,
+            "ready",
+            "ready",
+            false,
+        )
+        .await
+        .unwrap();
         let done = send(
             &context,
             Method::GET,

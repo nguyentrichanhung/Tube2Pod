@@ -366,7 +366,7 @@ mod tests {
             health_cache: Arc::new(tokio::sync::Mutex::new(None)),
         };
         install_audio(&state, &episode).await;
-        episodes::finish(
+        episodes::fixture_finish(
             &state.pool,
             &episode.uuid,
             stage::PUBLISHED,
@@ -573,13 +573,13 @@ mod tests {
         install_audio(&fx.state, &unpublished).await;
 
         let no_audio = add_episode(&fx.state, fx.show_id, "no-audio").await;
-        episodes::finish(pool, &no_audio.uuid, stage::READY, status::READY, true)
+        episodes::fixture_finish(pool, &no_audio.uuid, stage::READY, status::READY, true)
             .await
             .unwrap();
 
         let missing = add_episode(&fx.state, fx.show_id, "missing").await;
         install_audio(&fx.state, &missing).await;
-        episodes::finish(
+        episodes::fixture_finish(
             pool,
             &missing.uuid,
             stage::PUBLISHED,
@@ -628,7 +628,7 @@ mod tests {
         let fx = fixture().await;
         let second = add_episode(&fx.state, fx.show_id, "v2").await;
         install_audio(&fx.state, &second).await;
-        episodes::finish(
+        episodes::fixture_finish(
             &fx.state.pool,
             &second.uuid,
             stage::PUBLISHED,
@@ -664,7 +664,7 @@ mod tests {
         let fx = fixture().await;
         let second = add_episode(&fx.state, fx.show_id, "v2").await;
         install_audio(&fx.state, &second).await;
-        episodes::finish(
+        episodes::fixture_finish(
             &fx.state.pool,
             &second.uuid,
             stage::PUBLISHED,
