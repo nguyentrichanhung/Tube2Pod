@@ -157,7 +157,7 @@ pub fn stage_label_for(stage: &str) -> &'static str {
         stage::ASSEMBLING => "Đang chuyển đổi audio",
         stage::PUBLISHING => "Đang phát hành",
         stage::READY => "Sẵn sàng",
-        stage::PUBLISHED => "Đã đăng",
+        stage::PUBLISHED => "Đã phát hành",
         stage::REVIEW => "Xử lý trước đây",
         _ => "Đang xử lý",
     }
@@ -168,7 +168,7 @@ pub fn status_label_for(status: &str) -> &'static str {
         status::QUEUED => "Đang chờ",
         status::RUNNING => "Đang xử lý",
         status::READY => "Sẵn sàng",
-        status::PUBLISHED => "Đã đăng",
+        status::PUBLISHED => "Đã phát hành",
         status::FAILED => "Lỗi",
         status::CANCELLED => "Đã huỷ",
         status::REVIEW => "Chờ duyệt",
@@ -237,13 +237,6 @@ impl Episode {
 
     pub fn is_active(&self) -> bool {
         matches!(self.status.as_str(), status::QUEUED | status::RUNNING)
-    }
-
-    pub fn is_terminal(&self) -> bool {
-        matches!(
-            self.status.as_str(),
-            status::PUBLISHED | status::READY | status::FAILED | status::CANCELLED
-        )
     }
 
     pub fn summary(&self) -> &str {
@@ -337,6 +330,8 @@ mod tests {
         assert_eq!(stage_label_for("review"), "Xử lý trước đây");
         assert_eq!(status_label_for("review"), "Chờ duyệt");
         assert_eq!(status_label_for("ready"), "Sẵn sàng");
+        assert_eq!(status_label_for("published"), "Đã phát hành");
+        assert_eq!(stage_label_for("published"), "Đã phát hành");
         assert_eq!(status_label_for("cancelled"), "Đã huỷ");
         assert_eq!(
             error_label_for(Some("voice_not_selected")),

@@ -31,17 +31,6 @@ pub async fn stage_changed(pool: &SqlitePool, uuid: &str, stage: &str) {
     }
 }
 
-pub async fn is_cancelled(pool: &SqlitePool, uuid: &str) -> bool {
-    match episodes::get(pool, uuid).await {
-        Ok(Some(episode)) => episode.status == status::CANCELLED,
-        Ok(None) => true,
-        Err(error) => {
-            tracing::warn!(%error, %uuid, "cancellation check failed");
-            false
-        }
-    }
-}
-
 async fn wait_for_cancellation(pool: &SqlitePool, uuid: &str) {
     loop {
         tokio::time::sleep(CANCEL_POLL_INTERVAL).await;

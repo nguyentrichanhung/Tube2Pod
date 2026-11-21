@@ -18,7 +18,7 @@ h1 + :is(p,div) { margin-top:.5rem; }
 
 .app-shell { display:grid; grid-template-columns:216px minmax(0,1fr); grid-template-rows:1fr auto; min-height:100vh; }
 .topbar { grid-row:1 / span 2; background:var(--rail); color:var(--paper); padding:36px 24px; }
-.brand { display:flex; align-items:center; gap:12px; color:inherit; font-size:1.3rem; font-weight:600; text-decoration:none; }
+.brand { display:flex; white-space:nowrap; align-items:center; gap:12px; color:inherit; font-size:1.3rem; font-weight:600; text-decoration:none; }
 .brand-mark { width:30px; flex:0 0 30px; display:flex; align-items:center; justify-content:center; gap:3px; color:#a5cdb4; }
 .brand-mark i { display:block; width:3px; height:12px; border-radius:2px; background:currentColor; }
 .brand-mark i:nth-child(2) { height:24px; }
@@ -134,6 +134,10 @@ details.card > :is(h2,.metrics-list) { margin-top:16px; }
   .topbar { padding-inline:16px; }
   .grid.two { grid-template-columns:minmax(0,1fr); }
   .library-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (min-width:641px) and (max-width:1100px) {
+  .brand { font-size:1.1rem; gap:8px; }
+  .brand-mark { width:24px; flex-basis:24px; }
 }
 @media (max-width:640px) {
   .app-shell { display:block; }

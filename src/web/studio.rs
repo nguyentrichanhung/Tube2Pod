@@ -438,6 +438,12 @@ pub async fn queue(
     )
     .await?;
     for episode in recent {
+        if matches!(
+            episode.status.as_str(),
+            crate::models::status::READY | crate::models::status::PUBLISHED
+        ) {
+            continue;
+        }
         if !episodes
             .iter()
             .any(|existing| existing.uuid == episode.uuid)
@@ -852,6 +858,44 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response_body(response).await.contains("Queued video"));
+    }
+
+    #[tokio::test]
+    async fn queue_excludes_completed_episodes_but_keeps_active_and_retryable() {
+        let state = test_state().await;
+        let show_id = create_show(&state).await;
+        for (index, status) in [
+            "queued",
+            "running",
+            "failed",
+            "cancelled",
+            "ready",
+            "published",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let episode = episodes::create(
+                &state.pool,
+                new_episode(show_id, &format!("queue{index:06}"), status),
+            )
+            .await
+            .unwrap();
+            sqlx::query("UPDATE episodes SET status = ?1 WHERE uuid = ?2")
+                .bind(status)
+                .bind(&episode.uuid)
+                .execute(&state.pool)
+                .await
+                .unwrap();
+        }
+        let html = response_body(get(&state, "/api/queue").await).await;
+        for title in ["queued", "running", "failed", "cancelled"] {
+            assert!(html.contains(&format!(">{title}</strong>")), "{title}");
+        }
+        for title in ["ready", "published"] {
+            assert!(!html.contains(&format!(">{title}</strong>")), "{title}");
+        }
+        assert_eq!(html.matches(">Thử lại</button>").count(), 2);
     }
 
     #[tokio::test]
