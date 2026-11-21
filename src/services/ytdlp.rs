@@ -59,27 +59,38 @@ pub struct AudioTrack {
 }
 
 pub fn audio_tracks(meta: &Metadata) -> Vec<AudioTrack> {
-    let mut tracks: Vec<(AudioTrack, bool, bool)> = Vec::new();
-    for format in &meta.formats {
+    let mut tracks: Vec<(AudioTrack, bool, bool, usize)> = Vec::new();
+    for (index, format) in meta.formats.iter().enumerate() {
         if format.format_id.is_empty() || matches!(format.acodec.as_deref(), None | Some("none")) {
             continue;
         }
         let note = format.format_note.as_deref().unwrap_or("");
         let label = note.split(',').next().unwrap_or("").trim();
-        let label = label.strip_suffix(" (default)").unwrap_or(label).trim();
-        let label = label.strip_suffix(" (original)").unwrap_or(label).trim();
+        let mut label = label;
+        while let Some(stripped) = label
+            .strip_suffix(" (default)")
+            .or_else(|| label.strip_suffix(" (original)"))
+        {
+            label = stripped.trim();
+        }
         let label = if matches!(label, "tiny" | "low" | "medium" | "high" | "") {
             ""
         } else {
             label
         };
-        let identifiable = format
-            .audio_track_id
-            .as_deref()
-            .is_some_and(|id| !id.is_empty())
-            || (format.language.is_some() && !label.is_empty());
+        let lower_note = note.to_ascii_lowercase();
+        let is_default = lower_note.contains("(default)") || format.language_preference == Some(5);
+        let is_original = lower_note.contains("original") || format.language_preference == Some(10);
+        let identifiable = (is_default && format.language.is_none())
+            || format
+                .audio_track_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+            || !label.is_empty();
         let key = if let Some(id) = format.audio_track_id.as_deref().filter(|id| !id.is_empty()) {
             format!("id:{id}")
+        } else if is_default && format.language.is_none() && label.is_empty() {
+            "default".to_owned()
         } else {
             // yt-dlp exposes the display name and language, but not YouTube's track ID.
             format!(
@@ -87,18 +98,16 @@ pub fn audio_tracks(meta: &Metadata) -> Vec<AudioTrack> {
                 serde_json::to_string(&(format.language.as_deref(), label)).unwrap()
             )
         };
-        let lower_note = note.to_ascii_lowercase();
-        let is_default = lower_note.contains("(default)") || format.language_preference == Some(5);
-        let is_original = lower_note.contains("original") || format.language_preference == Some(10);
         let audio_only = format.vcodec.as_deref() == Some("none");
-        if let Some((track, existing_audio_only, _)) =
-            tracks.iter_mut().find(|(track, _, _)| track.key == key)
+        if let Some((track, existing_audio_only, _, preferred_index)) =
+            tracks.iter_mut().find(|(track, _, _, _)| track.key == key)
         {
             track.is_default |= is_default;
             track.is_original |= is_original;
-            if audio_only && !*existing_audio_only {
+            if audio_only || !*existing_audio_only {
                 track.format_id.clone_from(&format.format_id);
-                *existing_audio_only = true;
+                *existing_audio_only = audio_only;
+                *preferred_index = index;
             }
         } else {
             tracks.push((
@@ -111,15 +120,16 @@ pub fn audio_tracks(meta: &Metadata) -> Vec<AudioTrack> {
                 },
                 audio_only,
                 identifiable,
+                index,
             ));
         }
     }
     // Unlabelled formats cannot be mapped to a particular track in a multi-track source.
     if tracks.len() > 1 {
-        tracks.retain(|(_, _, identifiable)| *identifiable);
+        tracks.retain(|(_, _, identifiable, _)| *identifiable);
     }
-    tracks.sort_by_key(|(track, _, _)| !track.is_default);
-    tracks.into_iter().map(|(track, _, _)| track).collect()
+    tracks.sort_by_key(|(track, _, _, index)| (!track.is_default, std::cmp::Reverse(*index)));
+    tracks.into_iter().map(|(track, _, _, _)| track).collect()
 }
 
 #[derive(Debug, Clone)]
@@ -403,10 +413,65 @@ mod tests {
         let meta: Metadata = serde_json::from_str(r#"{"title":"x","formats":[{"format_id":"140","acodec":"aac","vcodec":"none","format_note":"low"},{"format_id":"251","acodec":"opus","vcodec":"none","format_note":"medium"}]}"#).unwrap();
         let tracks = audio_tracks(&meta);
         assert_eq!(tracks.len(), 1);
-        assert_eq!(tracks[0].format_id, "140");
+        assert_eq!(tracks[0].format_id, "251");
         assert!(!tracks[0].is_default);
         let empty: Metadata = serde_json::from_str(r#"{"title":"x"}"#).unwrap();
         assert!(audio_tracks(&empty).is_empty());
+    }
+
+    #[test]
+    fn prefers_later_extractor_formats_and_tracks_but_keeps_default_first() {
+        let meta: Metadata = serde_json::from_str(r#"{"title":"x","formats":[
+            {"format_id":"default-low","acodec":"aac","vcodec":"none","language":"en","format_note":"English (default), low"},
+            {"format_id":"other-low","acodec":"aac","vcodec":"none","language":"ko","format_note":"Korean, low"},
+            {"format_id":"default-high","acodec":"opus","vcodec":"none","language":"en","format_note":"English (default), medium"},
+            {"format_id":"other-high","acodec":"opus","vcodec":"none","language":"ko","format_note":"Korean, medium"}
+        ]}"#).unwrap();
+        let tracks = audio_tracks(&meta);
+        assert_eq!(
+            tracks
+                .iter()
+                .map(|t| t.format_id.as_str())
+                .collect::<Vec<_>>(),
+            ["default-high", "other-high"]
+        );
+        let mut no_default = meta.clone();
+        for format in &mut no_default.formats {
+            format.format_note = format
+                .format_note
+                .as_ref()
+                .map(|note| note.replace(" (default)", ""));
+        }
+        assert_eq!(audio_tracks(&no_default)[0].format_id, "other-high");
+    }
+
+    #[test]
+    fn keeps_default_track_without_language_alongside_named_tracks() {
+        let meta: Metadata = serde_json::from_str(r#"{"title":"x","formats":[
+            {"format_id":"default-low","acodec":"aac","vcodec":"none","format_note":"Original (default), low"},
+            {"format_id":"english","acodec":"aac","vcodec":"none","language":"en","format_note":"English, medium"},
+            {"format_id":"default-high","acodec":"opus","vcodec":"none","format_note":"Original (default), medium"}
+        ]}"#).unwrap();
+        let tracks = audio_tracks(&meta);
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].format_id, "default-high");
+        assert!(tracks[0].is_default);
+        assert_eq!(tracks[0].source_language, None);
+        assert_eq!(tracks[1].source_language.as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn groups_markers_in_either_order_and_keeps_descriptive_tracks_without_language() {
+        let meta: Metadata = serde_json::from_str(r#"{"title":"x","formats":[
+            {"format_id":"first","acodec":"aac","vcodec":"none","language":"en","format_note":"English (default) (original), low"},
+            {"format_id":"second","acodec":"opus","vcodec":"none","language":"en","format_note":"English (original) (default), medium"},
+            {"format_id":"commentary","acodec":"aac","vcodec":"none","format_note":"Commentary, medium"}
+        ]}"#).unwrap();
+        let tracks = audio_tracks(&meta);
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].format_id, "second");
+        assert!(tracks[0].is_default && tracks[0].is_original);
+        assert_eq!(tracks[1].format_id, "commentary");
     }
 
     #[test]
