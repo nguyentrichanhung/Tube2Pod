@@ -26,7 +26,7 @@
         </div>
         {% if row.episode.error_label().is_some() %}<div class="error">{{ row.episode.error_label().unwrap() }}</div>{% endif %}
       </td>
-      <td>{{ row.episode.target_minutes }} phút</td>
+      <td>{% if let Some(seconds) = row.episode.audio_duration_s %}{{ seconds / 60 }} phút {{ seconds % 60 }} giây{% else %}—{% endif %}</td>
       <td>{{ row.episode.created_label() }}</td>
     </tr>
   {% endfor %}

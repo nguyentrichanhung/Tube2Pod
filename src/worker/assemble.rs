@@ -81,7 +81,6 @@ mod tests {
         }
         let mut cfg = Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net".into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
             "DATA_DIR" => Some(root.display().to_string()),
             _ => None,
         })
@@ -112,8 +111,6 @@ mod tests {
                 language: "en".into(),
                 source_audio_track: Some("id:alt".into()),
                 source_description: None,
-                target_minutes: 10,
-                review_required: false,
             },
         )
         .await

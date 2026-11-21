@@ -7,8 +7,6 @@ pub mod public;
 pub mod settings;
 pub mod shows;
 pub mod studio;
-pub mod voice_studio;
-pub mod voices;
 
 use crate::services::cover;
 use crate::state::AppState;
@@ -53,27 +51,11 @@ pub fn admin_router(state: AppState) -> Router {
         .route("/episodes/{uuid}/delete", post(episodes::delete))
         .route("/episodes/{uuid}/retry", post(episodes::retry))
         .route("/episodes/{uuid}/cancel", post(episodes::cancel))
-        .route("/episodes/{uuid}/reread", post(episodes::reread))
         .route("/episodes/{uuid}/publish", post(episodes::publish))
-        .route("/episodes/{uuid}/approve", post(episodes::approve))
         .route("/api/queue", get(studio::queue))
         .route("/library", get(library::index))
         .route("/library/bulk-delete", post(library::bulk_delete))
         .route("/api/library/rows", get(library::rows))
-        .route("/voices", get(voice_studio::index))
-        .route("/voices/new", get(voice_studio::new_design))
-        .route("/voices/designs", post(voice_studio::create_design))
-        .route("/voices/designs/{id}", get(voice_studio::design))
-        .route("/voices/designs/{id}/card", get(voice_studio::design_card))
-        .route(
-            "/voices/designs/{id}/candidates/{index}/audio",
-            get(voice_studio::candidate_audio),
-        )
-        .route("/voices/designs/{id}/save", post(voice_studio::save_design))
-        .route("/voices/{id}", get(voice_studio::detail))
-        .route("/voices/{id}/card", get(voice_studio::detail_card))
-        .route("/voices/{id}/preview", get(voice_studio::preview))
-        .route("/voices/{id}/delete", post(voice_studio::delete))
         .route("/shows", get(shows::index).post(shows::create))
         .route(
             "/shows/{id}",
@@ -88,14 +70,6 @@ pub fn admin_router(state: AppState) -> Router {
             get(shows::cover_preview)
                 .post(shows::upload_cover)
                 .layer(DefaultBodyLimit::max(cover::MAX_UPLOAD_BYTES + 1024 * 1024)),
-        )
-        .route(
-            "/shows/{id}/voices/{language}",
-            get(voices::picker).post(voices::select),
-        )
-        .route(
-            "/shows/{id}/voices/{language}/preview",
-            get(voices::preview),
         )
         .route("/shows/{id}/feed/toggle", post(shows::toggle_feed))
         .route("/shows/{id}/feed/rotate", post(shows::rotate_feed))
@@ -124,7 +98,6 @@ mod tests {
     async fn test_state() -> AppState {
         let cfg = Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
             "DATA_DIR" => Some("/tmp/t2p-shell".into()),
             _ => None,
         })
@@ -133,7 +106,6 @@ mod tests {
             pool: crate::db::test_pool().await,
             cfg: Arc::new(cfg),
             notify: Arc::new(Notify::new()),
-            health_cache: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -330,7 +302,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stylesheet_exposes_paper_ink_tokens_and_voice_classes() {
+    async fn stylesheet_exposes_paper_ink_tokens() {
         let response = get("/assets/app.css", None).await;
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
@@ -341,7 +313,30 @@ mod tests {
         assert!(css.contains("--paper:#fdfcf8"));
         assert!(css.contains(".app-shell"));
         assert!(css.contains(".cover-fallback"));
-        assert!(css.contains(".voice-preview-bar"));
-        assert!(css.contains(".voice-preview-button"));
+    }
+    #[tokio::test]
+    async fn retired_voice_and_review_routes_are_absent() {
+        for path in ["/voices", "/voices/new", "/shows/1/voices/vi"] {
+            assert_eq!(
+                get(path, None).await.status(),
+                StatusCode::NOT_FOUND,
+                "{path}"
+            );
+        }
+        for path in ["/episodes/example/approve", "/episodes/example/reread"] {
+            let response = admin_router(test_state().await)
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header(header::COOKIE, format!("t2p_csrf={VALID}"))
+                        .header("x-csrf-token", VALID)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
     }
 }

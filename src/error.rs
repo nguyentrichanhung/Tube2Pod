@@ -59,7 +59,7 @@ impl IntoResponse for AppError {
         }
         let message = match status {
             StatusCode::INTERNAL_SERVER_ERROR => "Lỗi nội bộ; xem log.".to_string(),
-            StatusCode::BAD_GATEWAY => "Dịch vụ đọc chưa sẵn sàng.".to_string(),
+            StatusCode::BAD_GATEWAY => "Không tải được nguồn. Vui lòng thử lại.".to_string(),
             _ => self.to_string(),
         };
         (status, Json(json!({ "ok": false, "error": message }))).into_response()

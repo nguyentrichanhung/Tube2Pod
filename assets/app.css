@@ -58,7 +58,7 @@ summary { cursor:pointer; font-weight:500; }
 .settings-section + .settings-section,.settings-actions { border-top:1px solid var(--line); }
 .settings-section > .stack:first-child { gap:8px; }
 .settings-actions { display:flex; justify-content:flex-end; padding-top:16px; }
-.source-options { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.source-options { grid-template-columns:minmax(0,1fr); }
 
 label,.field { display:grid; gap:6px; font-weight:500; font-size:.925rem; }
 .field-help { color:var(--muted); font-size:.81rem; font-weight:400; }
@@ -125,18 +125,6 @@ details.card > :is(h2,.metrics-list) { margin-top:16px; }
 .cover-fallback { display:grid; place-items:center; background:var(--tint); color:var(--accent); font:400 2rem Georgia,serif; }
 .card > .cover { max-width:240px; margin-bottom:16px; }
 
-.voice-library-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
-.voice-row { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:12px 0; border-bottom:1px solid var(--line); }
-.voice-row:last-child { border:0; }
-.voice-row-meta,.voice-preview-label { color:var(--muted); font-size:.82rem; }
-.voice-option,.voice-option-main { display:flex; align-items:center; gap:8px; min-width:0; }
-.voice-option { padding:8px; border:1px solid var(--line); border-radius:var(--radius-sm); }
-.voice-option-main { flex:1; }
-.voice-option.selected,.voice-preview-bar { background:var(--tint); }
-.voice-preview-bar { display:grid; gap:8px; padding:12px; border-radius:var(--radius-sm); }
-.voice-preview-bar audio { width:100%; }
-.voice-preview-button { background:var(--paper); color:var(--accent); border-color:var(--line-strong); }
-.voice-preview-button:hover { background:var(--tint); }
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 :focus-visible { outline:3px solid #50866b; outline-offset:2px; }
 .topbar :focus-visible { outline-color:#a5cdb4; }
@@ -159,7 +147,6 @@ details.card > :is(h2,.metrics-list) { margin-top:16px; }
   .card,.recording { padding:16px; }
   .settings-section,.source-options { grid-template-columns:minmax(0,1fr); }
   .table-wrap table { min-width:28rem; }
-  .voice-row { flex-direction:column; align-items:flex-start; }
 }
 @media (max-width:380px) {
   .library-filters { grid-template-columns:minmax(0,1fr); }

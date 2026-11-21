@@ -1,17 +1,15 @@
 # Tube2Pod
 
-YouTube URL → RSS podcast. Tube2Pod fetches captions, builds an extractive
-summary in Rust, sends the spoken script to Omnivoice, assembles MP3s with
-ffmpeg, and publishes one private RSS feed per show.
+YouTube URL → RSS podcast. Tube2Pod downloads the selected source audio with
+`yt-dlp`, converts the full track to MP3 with `ffmpeg`, measures it with
+`ffprobe`, and publishes one RSS feed per show.
 
 ### Local development
 
-Requirements: Rust 1.85+, `yt-dlp`, `ffmpeg`, `ffprobe`, and a reachable
-Omnivoice instance.
+Requirements: Rust 1.85+, `yt-dlp`, `ffmpeg`, and `ffprobe`.
 
 ```bash
 export PUBLIC_BASE_URL=https://pod.example.ts.net:8443
-export OMNIVOICE_TAILNET_USER=owner@example.com
 export DATA_DIR=./data
 export YTDLP_PATH=yt-dlp
 export FFMPEG_PATH=ffmpeg
@@ -21,27 +19,18 @@ cargo test
 cargo run
 ```
 
-Open `http://127.0.0.1:8400` for admin. The public listener is
-`http://127.0.0.1:8401`; feed URLs still use `PUBLIC_BASE_URL`.
+The admin and public listeners bind to `http://127.0.0.1:8400` and
+`http://127.0.0.1:8401`. Open the admin through the existing HTTPS proxy;
+form Origin verification requires HTTPS. Feed URLs use `PUBLIC_BASE_URL`.
 
-### Omnivoice authentication
+### Upgrade from the old pipeline
 
-Tube2Pod supports two Omnivoice authentication modes:
-
-- **Tailscale (default):** set `OMNIVOICE_AUTH_MODE=tailscale` and
-  `OMNIVOICE_TAILNET_USER=<tailnet identity>`. Tube2Pod sends that identity to
-  Omnivoice, which must trust the tailnet connection. This is the recommended
-  mode when both services run on the same tailnet.
-- **Password:** set `OMNIVOICE_AUTH_MODE=password` and
-  `OMNIVOICE_PASSWORD=<long random secret>`. Tube2Pod logs in through
-  Omnivoice's `/api/auth/login`, stores the returned session cookie, and
-  retries once after a `401`. Use this when Omnivoice is not protected by
-  Tailscale identity.
-
-The populated environment file is a secret. Keep
-`/etc/tube2pod/tube2pod.env` at mode `0600`, owned by `root:root` or
-`tube2pod`. Never commit it or put real credentials in
-`deploy/tube2pod.env.example`.
+Before upgrading, back up the database and data directory and verify the upgrade
+on a copy. On the first upgrade, episodes in `queued`, `running`, or `review`
+from the old pipeline are deleted with their files, including any previously
+published audio being reread. Other episodes retain their audio, transcripts,
+summaries, and URLs. Restarting an interrupted upgrade can resume cleanup.
+Do not upgrade a running service until ready to apply this change.
 
 ### Production install
 

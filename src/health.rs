@@ -25,7 +25,6 @@ mod tests {
     async fn state() -> crate::state::AppState {
         let cfg = crate::config::Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
             "DATA_DIR" => Some("/tmp/t2p-health".into()),
             _ => None,
         })
@@ -34,7 +33,6 @@ mod tests {
             pool: crate::db::test_pool().await,
             cfg: Arc::new(cfg),
             notify: Arc::new(Notify::new()),
-            health_cache: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 

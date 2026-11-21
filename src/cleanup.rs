@@ -274,9 +274,6 @@ async fn cleanup_tmp(pool: &SqlitePool, cfg: &Config, hours: i64) -> AppResult<(
             .and_then(system_secs)
             .unwrap_or(now);
         if is_expired(now, modified, ttl) {
-            if current.is_some() {
-                db::episodes::clear_chunk_state(pool, &name).await?;
-            }
             let _ = tokio::fs::remove_dir_all(entry.path()).await;
         }
     }
@@ -487,7 +484,6 @@ mod tests {
     fn config(dir: &Path) -> Config {
         Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
             "DATA_DIR" => Some(dir.display().to_string()),
             _ => None,
         })
@@ -538,8 +534,6 @@ mod tests {
                 language: "vi".into(),
                 source_audio_track: None,
                 source_description: None,
-                target_minutes: 10,
-                review_required: false,
             },
         )
         .await
@@ -553,17 +547,6 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
-    }
-
-    async fn set_resume_state(pool: &SqlitePool, uuid: &str) {
-        sqlx::query(
-            "UPDATE episodes SET active_take_id = 11, take_ids_json = '[11]',
-                chunk_done = 1, chunk_count = 3 WHERE uuid = ?1",
-        )
-        .bind(uuid)
-        .execute(pool)
-        .await
-        .unwrap();
     }
 
     async fn retention(pool: &SqlitePool, days: &str, hours: &str) {
@@ -633,7 +616,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_once_removes_terminal_tmp_dir_and_clears_chunk_state() {
+    async fn run_once_removes_terminal_tmp_dir() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = config(dir.path());
         let pool = crate::db::test_pool().await;
@@ -641,7 +624,6 @@ mod tests {
 
         let failed = episode(&pool, "failed").await;
         set_status(&pool, &failed.uuid, "failed").await;
-        set_resume_state(&pool, &failed.uuid).await;
         let failed_dir = aged_tmp_dir(&cfg, &failed.uuid, 2 * 60 * 60);
 
         run_once(&pool, &cfg).await.unwrap();
@@ -650,14 +632,6 @@ mod tests {
             !failed_dir.exists(),
             "expired terminal tmp dir must be removed"
         );
-        let got = db::episodes::get(&pool, &failed.uuid)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(got.active_take_id, None);
-        assert_eq!(got.take_ids_json, None);
-        assert_eq!(got.chunk_done, 0);
-        assert_eq!(got.chunk_count, None);
     }
 
     #[tokio::test]
@@ -753,11 +727,11 @@ mod tests {
         sqlx::query(
             "INSERT INTO episodes (
                 uuid, show_id, video_id, source_url, source_title, language,
-                target_minutes, stage, status, created_at, updated_at
+                stage, status, created_at, updated_at
              ) VALUES ('u1', 1, 'v1', 'https://example.com/watch', 'Episode 1',
-                       'en', 10, 'queued', 'done', 0, 0),
+                       'en', 'queued', 'done', 0, 0),
                       ('u2', 1, 'v2', 'https://example.com/watch', 'Episode 2',
-                       'en', 10, 'queued', 'done', 0, 0)",
+                       'en', 'queued', 'done', 0, 0)",
         )
         .execute(&pool)
         .await

@@ -56,7 +56,6 @@ printf '%s\n' "$out"
     let cfg = Arc::new(
         Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
             "DATA_DIR" => Some(dir.path().display().to_string()),
             "YTDLP_PATH" => Some(dir.path().join("yt-dlp").display().to_string()),
             "FFMPEG_PATH" => Some(dir.path().join("ffmpeg").display().to_string()),
@@ -88,7 +87,6 @@ printf '%s\n' "$out"
         pool: pool.clone(),
         cfg: cfg.clone(),
         notify: Arc::new(Notify::new()),
-        health_cache: Arc::new(tokio::sync::Mutex::new(None)),
     };
     let csrf = "a".repeat(64);
     let body = url::form_urlencoded::Serializer::new(String::new())

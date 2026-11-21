@@ -304,7 +304,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = crate::config::Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some(BASE.into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
             "DATA_DIR" => Some(dir.path().display().to_string()),
             _ => None,
         })
@@ -353,8 +352,6 @@ mod tests {
                 language: "vi".into(),
                 source_audio_track: None,
                 source_description: None,
-                target_minutes: 10,
-                review_required: false,
             },
         )
         .await
@@ -363,7 +360,6 @@ mod tests {
             pool,
             cfg: Arc::new(cfg),
             notify: Arc::new(Notify::new()),
-            health_cache: Arc::new(tokio::sync::Mutex::new(None)),
         };
         install_audio(&state, &episode).await;
         episodes::fixture_finish(
@@ -423,8 +419,6 @@ mod tests {
                 language: "vi".into(),
                 source_audio_track: None,
                 source_description: None,
-                target_minutes: 10,
-                review_required: false,
             },
         )
         .await
@@ -495,15 +489,8 @@ mod tests {
     #[tokio::test]
     async fn feed_description_uses_the_display_summary_not_the_audio_script() {
         let fx = fixture().await;
-        episodes::set_summary(
-            &fx.state.pool,
-            &fx.uuid,
-            "Tóm tắt hiển thị.",
-            "SCRIPT_NOI_DAY_DU_KHONG_DUOC_LO",
-            "hash",
-        )
-        .await
-        .unwrap();
+        sqlx::query("UPDATE episodes SET summary_text='Tóm tắt hiển thị.', audio_script='SCRIPT_NOI_DAY_DU_KHONG_DUOC_LO' WHERE uuid=?1")
+            .bind(&fx.uuid).execute(&fx.state.pool).await.unwrap();
 
         let xml = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
         assert!(xml.contains("Tóm tắt hiển thị."), "{xml}");
@@ -598,7 +585,11 @@ mod tests {
         .await
         .unwrap();
 
-        episodes::reset_for_reread(pool, &fx.uuid).await.unwrap();
+        sqlx::query("UPDATE episodes SET stage = 'queued', status = 'queued' WHERE uuid = ?1")
+            .bind(&fx.uuid)
+            .execute(pool)
+            .await
+            .unwrap();
         let xml = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
 
         assert_eq!(xml.matches("<item>").count(), 1, "{xml}");
@@ -611,7 +602,9 @@ mod tests {
     #[tokio::test]
     async fn feed_drops_previously_published_legacy_episode_purged_on_upgrade() {
         let fx = fixture().await;
-        episodes::reset_for_reread(&fx.state.pool, &fx.uuid)
+        sqlx::query("UPDATE episodes SET stage = 'queued', status = 'queued' WHERE uuid = ?1")
+            .bind(&fx.uuid)
+            .execute(&fx.state.pool)
             .await
             .unwrap();
         let before = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
@@ -649,7 +642,9 @@ mod tests {
             .execute(&fx.state.pool)
             .await
             .unwrap();
-        episodes::reset_for_reread(&fx.state.pool, &fx.uuid)
+        sqlx::query("UPDATE episodes SET stage = 'queued', status = 'queued' WHERE uuid = ?1")
+            .bind(&fx.uuid)
+            .execute(&fx.state.pool)
             .await
             .unwrap();
 

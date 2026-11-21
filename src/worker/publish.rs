@@ -78,8 +78,6 @@ mod tests {
                 language: "vi".into(),
                 source_audio_track: None,
                 source_description: None,
-                target_minutes: 10,
-                review_required: false,
             },
         )
         .await

@@ -19,7 +19,6 @@ pub struct ObservabilityTemplate {
     csrf: String,
     window: &'static str,
     metrics: Metrics,
-    generation_available: bool,
 }
 
 pub async fn index(
@@ -30,13 +29,11 @@ pub async fn index(
     let window = Window::parse(query.window.as_deref());
     let now = crate::db::now_ts();
     let metrics = observability::load_metrics(&state.pool, window, now).await?;
-    let generation_available = observability::omnivoice_health(&state).await.ok;
     Ok(Html(
         ObservabilityTemplate {
             csrf: token.0,
             window: window.label(),
             metrics,
-            generation_available,
         }
         .render()?,
     ))
@@ -58,8 +55,6 @@ mod tests {
     async fn context() -> AppState {
         let cfg = Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
-            "OMNIVOICE_BASE_URL" => Some("http://127.0.0.1:1".into()),
             "DATA_DIR" => Some("/tmp/t2p-observability-web".into()),
             _ => None,
         })
@@ -68,7 +63,6 @@ mod tests {
             pool: db::test_pool().await,
             cfg: Arc::new(cfg),
             notify: Arc::new(Notify::new()),
-            health_cache: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -130,15 +124,13 @@ mod tests {
                 language: "vi".into(),
                 source_audio_track: None,
                 source_description: None,
-                target_minutes: 10,
-                review_required: false,
             },
         )
         .await
         .unwrap();
         sqlx::query(
             "UPDATE stage_events SET exited_at = entered_at + 10, outcome = 'failed',
-                error_code = 'tts_unavailable'
+                error_code = 'source_unavailable'
              WHERE episode_uuid = ?1 AND exited_at IS NULL",
         )
         .bind(&ep.uuid)
@@ -148,8 +140,8 @@ mod tests {
 
         let html = body(get(&state, "/observability?window=7d").await).await;
         assert!(html.contains("Tập lỗi"));
-        assert!(html.contains("Dịch vụ đọc chưa sẵn sàng"));
-        assert!(html.contains("Tạm gián đoạn tạo audio"));
+        assert!(html.contains("Không tải được video"));
+        assert!(!html.contains("Tạm gián đoạn tạo audio"));
         assert!(html.contains("window=24h"));
     }
 }

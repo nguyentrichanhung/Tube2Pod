@@ -1,9 +1,6 @@
 pub mod assemble;
 pub mod fetch;
 pub mod publish;
-pub mod summarize;
-pub mod synth;
-pub mod voice;
 
 use crate::config::Config;
 use crate::db::episodes;
@@ -127,8 +124,6 @@ impl Pipeline {
                 }
                 stage::PUBLISHING => {
                     publish::publish_episode(&self.pool, &episode).await?;
-                    let parts = synth::parts_dir(&self.cfg, &episode.uuid);
-                    let _ = tokio::fs::remove_dir_all(parts).await;
                 }
                 stage::REVIEW => return Ok(()),
                 stage::READY | stage::PUBLISHED => return Ok(()),
@@ -289,8 +284,6 @@ mod tests {
                 language: "vi".into(),
                 source_audio_track: None,
                 source_description: None,
-                target_minutes: 10,
-                review_required: false,
             },
         )
         .await
@@ -304,7 +297,6 @@ mod tests {
         let cfg = Arc::new(
             Config::from_lookup(|key| match key {
                 "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net".into()),
-                "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
                 _ => None,
             })
             .unwrap(),

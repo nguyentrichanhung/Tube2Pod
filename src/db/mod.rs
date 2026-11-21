@@ -81,4 +81,50 @@ mod tests {
                 .unwrap();
         assert!(!columns.iter().any(|name| name == "summary_edited_at"));
     }
+    #[tokio::test]
+    async fn migration_retires_only_operational_voice_fields() {
+        let pool = test_pool_0004().await;
+        migrate(&pool).await.unwrap();
+        let episode_columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('episodes')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        for name in [
+            "voice_id",
+            "voice_design_id",
+            "active_take_id",
+            "take_ids_json",
+            "chunk_count",
+            "chunk_done",
+            "review_required",
+            "target_minutes",
+        ] {
+            assert!(
+                !episode_columns.iter().any(|column| column == name),
+                "{name}"
+            );
+        }
+        for name in ["audio_script", "summary_text", "transcript_path"] {
+            assert!(
+                episode_columns.iter().any(|column| column == name),
+                "{name}"
+            );
+        }
+        let show_columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('shows')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        for name in ["voice_preset_json", "default_minutes"] {
+            assert!(!show_columns.iter().any(|column| column == name), "{name}");
+        }
+        let table: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='show_voices'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(table, 0);
+    }
 }

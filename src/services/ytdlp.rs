@@ -1,8 +1,6 @@
 use crate::config::Config;
 use crate::error::{AppError, AppResult};
-use crate::models::supported_language;
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -11,11 +9,6 @@ use tokio::process::Command;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoId {
     pub id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CaptionTrack {
-    pub ext: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -29,13 +22,7 @@ pub struct Metadata {
     pub upload_date: Option<String>,
     pub thumbnail: Option<String>,
     #[serde(default)]
-    pub language: Option<String>,
-    #[serde(default)]
     pub is_live: bool,
-    #[serde(default)]
-    pub subtitles: HashMap<String, Vec<CaptionTrack>>,
-    #[serde(default)]
-    pub automatic_captions: HashMap<String, Vec<CaptionTrack>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -132,13 +119,6 @@ pub fn audio_tracks(meta: &Metadata) -> Vec<AudioTrack> {
     tracks.into_iter().map(|(track, _, _, _)| track).collect()
 }
 
-#[derive(Debug, Clone)]
-pub struct Caption {
-    pub lang: String,
-    pub ext: String,
-    pub automatic: bool,
-}
-
 pub fn validate_url(input: &str) -> AppResult<VideoId> {
     let raw = input.trim();
     if raw.is_empty() {
@@ -232,91 +212,6 @@ pub async fn probe(cfg: &Config, video: &VideoId) -> AppResult<Metadata> {
     Ok(meta)
 }
 
-pub fn source_language(meta: &Metadata) -> AppResult<&'static str> {
-    if let Some(lang) = meta.language.as_deref().and_then(supported_language) {
-        return Ok(lang);
-    }
-    let mut candidates: Vec<&str> = meta
-        .subtitles
-        .keys()
-        .chain(meta.automatic_captions.keys())
-        .map(String::as_str)
-        .collect();
-    candidates.sort();
-    for lang in candidates {
-        if let Some(supported) = supported_language(lang) {
-            return Ok(supported);
-        }
-    }
-    Err(AppError::BadRequest(
-        "Chỉ hỗ trợ tiếng Việt, Anh, Hàn.".into(),
-    ))
-}
-
-fn score_track(language: &str, key: &str, automatic: bool) -> i32 {
-    let exact = supported_language(key) == Some(language);
-    let base = supported_language(key).is_some();
-    let orig = key.ends_with("-orig");
-    let mut score = 0;
-    if exact {
-        score += 100;
-    }
-    if base {
-        score += 20;
-    }
-    if orig {
-        score += 5;
-    }
-    if !automatic {
-        score += 10;
-    }
-    score
-}
-
-pub fn choose_caption(meta: &Metadata, language: &str) -> Option<Caption> {
-    let mut best: Option<(i32, Caption)> = None;
-    for (key, tracks) in &meta.subtitles {
-        if supported_language(key).is_none() {
-            continue;
-        }
-        for track in tracks {
-            if !matches!(track.ext.as_str(), "json3" | "vtt") {
-                continue;
-            }
-            let caption = Caption {
-                lang: key.clone(),
-                ext: track.ext.clone(),
-                automatic: false,
-            };
-            let score =
-                score_track(language, key, false) + if track.ext == "json3" { 2 } else { 0 };
-            if best.as_ref().is_none_or(|(s, _)| score > *s) {
-                best = Some((score, caption));
-            }
-        }
-    }
-    for (key, tracks) in &meta.automatic_captions {
-        if supported_language(key).is_none() {
-            continue;
-        }
-        for track in tracks {
-            if !matches!(track.ext.as_str(), "json3" | "vtt") {
-                continue;
-            }
-            let caption = Caption {
-                lang: key.clone(),
-                ext: track.ext.clone(),
-                automatic: true,
-            };
-            let score = score_track(language, key, true) + if track.ext == "json3" { 1 } else { 0 };
-            if best.as_ref().is_none_or(|(s, _)| score > *s) {
-                best = Some((score, caption));
-            }
-        }
-    }
-    best.map(|(_, caption)| caption)
-}
-
 pub async fn download_audio(
     cfg: &Config,
     video: &VideoId,
@@ -377,65 +272,6 @@ pub async fn download_audio(
     Ok(path)
 }
 
-pub async fn download_caption(
-    cfg: &Config,
-    video: &VideoId,
-    caption: &Caption,
-    dir: &Path,
-    uuid: &str,
-) -> AppResult<PathBuf> {
-    tokio::fs::create_dir_all(dir).await?;
-    let mut args = vec![
-        "--skip-download".to_string(),
-        "--no-playlist".to_string(),
-        "--sub-langs".to_string(),
-        caption.lang.clone(),
-        "--sub-format".to_string(),
-        caption.ext.clone(),
-        "-o".to_string(),
-        dir.join(format!("{uuid}.%(ext)s")).display().to_string(),
-    ];
-    if caption.automatic {
-        args.push("--write-auto-subs".into());
-    } else {
-        args.push("--write-subs".into());
-    }
-    args.push(format!("https://www.youtube.com/watch?v={}", video.id));
-
-    let output = tokio::time::timeout(
-        Duration::from_secs(60),
-        Command::new(&cfg.ytdlp_path)
-            .kill_on_drop(true)
-            .args(&args)
-            .env("HOME", cfg.data_dir.join("tmp/yt-dlp"))
-            .env("XDG_CACHE_HOME", cfg.data_dir.join("tmp/yt-dlp/cache"))
-            .stdin(Stdio::null())
-            .output(),
-    )
-    .await
-    .map_err(|_| AppError::Upstream("yt-dlp subtitle timed out".into()))?
-    .map_err(|e| AppError::Internal(e.into()))?;
-
-    if !output.status.success() {
-        let tail = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError::Upstream(format!(
-            "yt-dlp subtitle failed: {tail}"
-        )));
-    }
-    let path = std::fs::read_dir(dir)?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .find(|path| {
-            path.extension().and_then(|v| v.to_str()) == Some(caption.ext.as_str())
-                && path
-                    .file_name()
-                    .and_then(|v| v.to_str())
-                    .is_some_and(|name| name.starts_with(uuid))
-        })
-        .ok_or_else(|| AppError::Upstream("subtitle file was not created".into()))?;
-    Ok(path)
-}
-
 pub fn classify_source_error(error: &AppError) -> &'static str {
     match error {
         AppError::BadRequest(m) if m.contains("playlist") => "playlist_not_supported",
@@ -459,7 +295,6 @@ mod tests {
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut cfg = Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net".into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
             "DATA_DIR" => Some(root.path().display().to_string()),
             _ => None,
         })
@@ -653,15 +488,5 @@ mod tests {
         assert!(validate_url("https://www.youtube.com/@channel").is_err());
         assert!(validate_url("https://example.com/watch?v=dQw4w9WgXcQ").is_err());
         assert!(validate_url("javascript:alert(1)").is_err());
-    }
-
-    #[test]
-    fn parses_fixture_and_chooses_manual_then_auto_caption() {
-        let meta: Metadata =
-            serde_json::from_str(include_str!("../../tests/fixtures/ytdlp_vi.json")).unwrap();
-        assert_eq!(source_language(&meta).unwrap(), "vi");
-        let caption = choose_caption(&meta, "vi").unwrap();
-        assert_eq!(caption.lang, "vi");
-        assert!(!caption.automatic);
     }
 }

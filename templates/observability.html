@@ -12,16 +12,13 @@
   </div>
 </header>
 
-{% if !generation_available %}
-<p class="notice error" role="status">Tạm gián đoạn tạo audio</p>
-{% endif %}
+
 
 <div class="grid two">
   <section class="card stack metrics-list">
     <h2>Hàng đợi</h2>
     <div class="row between"><a href="/library?status=queued">Đang chờ</a><strong>{{ metrics.queued }}</strong></div>
     <div class="row between"><a href="/library?status=running">Đang xử lý</a><strong>{{ metrics.running }}</strong></div>
-    <div class="row between"><a href="/library?status=review">Chờ duyệt</a><strong>{{ metrics.review }}</strong></div>
     <div class="row between"><a href="/library?status=failed">Lỗi</a><strong>{{ metrics.failed }}</strong></div>
     <div class="row between"><span>Sẵn sàng hoặc đã phát hành</span><strong>{{ metrics.ready }}</strong></div>
     {% if let Some(secs) = metrics.oldest_queued_secs %}

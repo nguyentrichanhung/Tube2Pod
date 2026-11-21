@@ -17,7 +17,6 @@
       <a href="/">Tạo tập</a>
       <a href="/library">Thư viện</a>
       <a href="/shows">Show</a>
-      <a href="/voices">Giọng đọc</a>
       <a href="/observability">Hoạt động</a>
       <a href="/settings">Cài đặt</a>
     </nav>
@@ -38,22 +37,6 @@
       }
     });
   </script>
-  <script>
-    if (!window.__tube2podVoicePreview) {
-      window.__tube2podVoicePreview = true;
-      document.addEventListener("click", (event) => {
-        const target = event.target;
-        if (!(target instanceof Element)) return;
-        const button = target.closest(".voice-preview-button");
-        if (!button) return;
-        const scope = button.closest("[data-voice-preview]");
-        if (!scope) return;
-        const audio = scope.querySelector("audio");
-        if (!audio) return;
-        audio.src = button.dataset.previewUrl;
-        audio.play().catch(() => {});
-      });
-    }
-  </script>
+
 </body>
 </html>

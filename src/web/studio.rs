@@ -61,7 +61,10 @@ struct PreviewTrack {
     recommended: bool,
 }
 
-fn audio_language(code: &str) -> &str {
+pub(crate) fn audio_language(code: &str) -> &str {
+    if code == "und" {
+        return "Chưa rõ ngôn ngữ";
+    }
     match crate::models::supported_language(code) {
         Some("vi") => "Tiếng Việt",
         Some("en") => "Tiếng Anh",
@@ -282,8 +285,6 @@ pub async fn create(
             source_description: meta.description,
             source_audio_track: Some(track.key),
             language,
-            target_minutes: show.default_minutes,
-            review_required: false,
         },
     )
     .await
@@ -471,7 +472,6 @@ mod tests {
     async fn test_state() -> AppState {
         let cfg = Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
             "DATA_DIR" => Some("/tmp/t2p-studio".into()),
             _ => None,
         })
@@ -480,7 +480,6 @@ mod tests {
             pool: crate::db::test_pool().await,
             cfg: Arc::new(cfg),
             notify: Arc::new(Notify::new()),
-            health_cache: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -494,9 +493,6 @@ mod tests {
         )
         .await
         .unwrap();
-        shows::upsert_voice(&state.pool, show.id, "vi", 42, "Default")
-            .await
-            .unwrap();
         show.id
     }
 
@@ -566,8 +562,6 @@ mod tests {
             language: "vi".into(),
             source_audio_track: None,
             source_description: None,
-            target_minutes: 10,
-            review_required: false,
         }
     }
 
@@ -870,21 +864,17 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::db::episodes::set_stage(
-            &state.pool,
-            &episode.uuid,
-            crate::models::stage::SYNTHESIZING,
-        )
-        .await
-        .unwrap();
-        crate::db::episodes::set_chunk_progress(&state.pool, &episode.uuid, "[1,2]", 2, 4)
+        crate::db::episodes::set_stage(&state.pool, &episode.uuid, crate::models::stage::FETCHING)
+            .await
+            .unwrap();
+        crate::db::episodes::set_progress(&state.pool, &episode.uuid, r#"{"percent":22}"#)
             .await
             .unwrap();
         let response = get(&state, "/api/queue").await;
         let html = response_body(response).await;
         assert!(html.contains("role=\"progressbar\""));
-        assert!(html.contains("Đang tạo audio"));
-        assert!(html.contains("67%"));
+        assert!(html.contains("Đang tải"));
+        assert!(html.contains("22%"));
     }
 
     #[tokio::test]

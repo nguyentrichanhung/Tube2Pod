@@ -1,0 +1,11 @@
+DROP TABLE show_voices;
+ALTER TABLE shows DROP COLUMN voice_preset_json;
+ALTER TABLE shows DROP COLUMN default_minutes;
+ALTER TABLE episodes DROP COLUMN voice_id;
+ALTER TABLE episodes DROP COLUMN voice_design_id;
+ALTER TABLE episodes DROP COLUMN active_take_id;
+ALTER TABLE episodes DROP COLUMN take_ids_json;
+ALTER TABLE episodes DROP COLUMN chunk_count;
+ALTER TABLE episodes DROP COLUMN chunk_done;
+ALTER TABLE episodes DROP COLUMN review_required;
+ALTER TABLE episodes DROP COLUMN target_minutes;

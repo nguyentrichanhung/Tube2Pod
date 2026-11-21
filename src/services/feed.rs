@@ -200,9 +200,7 @@ mod tests {
             cover_custom: false,
             feed_token: "token123".into(),
             feed_enabled: true,
-            default_minutes: 10,
             auto_publish: true,
-            voice_preset_json: "{}".into(),
             created_at: 0,
             updated_at: 0,
         }
