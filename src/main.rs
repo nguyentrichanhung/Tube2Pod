@@ -37,6 +37,9 @@ async fn main() -> anyhow::Result<()> {
 
     let pool = db::connect(&cfg.database_path()).await?;
     db::migrate(&pool).await?;
+    cleanup::remove_legacy_pending_episodes(&pool, &cfg.data_dir)
+        .await
+        .context("purge legacy pending episodes")?;
     let capped = db::episodes::cap_legacy_summaries(&pool)
         .await
         .context("cap legacy display summaries")?;

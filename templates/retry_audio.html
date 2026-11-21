@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Chọn bản audio</h1>
+<form method="post" action="/episodes/{{ uuid }}/retry">
+  <input type="hidden" name="_csrf" value="{{ csrf }}">
+  {{ preview|safe }}
+  <button type="submit">Xác nhận và thử lại</button>
+</form>
+{% endblock %}

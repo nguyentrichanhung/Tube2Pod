@@ -129,6 +129,49 @@ pub async fn concat_audio(
     Ok(Probe { bytes, duration_s })
 }
 
+pub async fn convert_to_mp3(cfg: &Config, source: &Path, out: &Path) -> AppResult<Probe> {
+    let output = run_with_exec_retry(
+        || {
+            let mut command = Command::new(&cfg.ffmpeg_path);
+            command
+                .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+                .arg(source)
+                .args([
+                    "-map",
+                    "0:a:0",
+                    "-ac",
+                    "2",
+                    "-c:a",
+                    "libmp3lame",
+                    "-b:a",
+                    "128k",
+                    "-f",
+                    "mp3",
+                ])
+                .arg(out);
+            command
+        },
+        Duration::from_secs(900),
+        "ffmpeg timed out",
+    )
+    .await?;
+    if !output.status.success() {
+        return Err(AppError::Upstream(format!(
+            "ffmpeg failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let bytes = tokio::fs::metadata(out).await?.len();
+    if bytes == 0 {
+        return Err(AppError::Upstream("assembled audio is empty".into()));
+    }
+    let duration_s = probe(cfg, out).await?;
+    if !duration_s.is_finite() || duration_s <= 0.0 {
+        return Err(AppError::Upstream("assembled audio is empty".into()));
+    }
+    Ok(Probe { bytes, duration_s })
+}
+
 pub async fn probe(cfg: &Config, path: &Path) -> AppResult<f64> {
     let output = run_with_exec_retry(
         || {
@@ -172,6 +215,27 @@ pub fn format_duration(seconds: i64) -> String {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn converts_selected_stream_to_stereo_and_probes_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = test_config(dir.path());
+        let args = dir.path().join("args");
+        fake_binary(dir.path(), "ffmpeg", &format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nfor a in \"$@\"; do out=\"$a\"; done\nprintf audio > \"$out\"\n", args.display()));
+        fake_binary(dir.path(), "ffprobe", "#!/bin/sh\nprintf '12.5\\n'\n");
+        let result = convert_to_mp3(
+            &cfg,
+            &dir.path().join("source"),
+            &dir.path().join("out.mp3"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.bytes, 5);
+        assert_eq!(result.duration_s, 12.5);
+        let args = std::fs::read_to_string(args).unwrap();
+        assert!(args.contains("-map\n0:a:0\n"));
+        assert!(args.contains("-ac\n2\n"));
+    }
 
     #[test]
     fn escapes_single_quotes_in_concat_lines() {

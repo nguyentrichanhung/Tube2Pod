@@ -537,6 +537,17 @@ pub async fn finish(
     Ok(())
 }
 
+pub async fn record_running_failure(
+    pool: &SqlitePool,
+    uuid: &str,
+    code: &str,
+    message: &str,
+    retry_at: Option<i64>,
+) -> AppResult<()> {
+    record_failure_inner(pool, uuid, code, message, retry_at, true).await
+}
+
+#[cfg(test)]
 pub async fn record_failure(
     pool: &SqlitePool,
     uuid: &str,
@@ -544,11 +555,22 @@ pub async fn record_failure(
     message: &str,
     retry_at: Option<i64>,
 ) -> AppResult<()> {
+    record_failure_inner(pool, uuid, code, message, retry_at, false).await
+}
+
+async fn record_failure_inner(
+    pool: &SqlitePool,
+    uuid: &str,
+    code: &str,
+    message: &str,
+    retry_at: Option<i64>,
+    running_only: bool,
+) -> AppResult<()> {
     let retry = retry_at.is_some();
     let result = sqlx::query(
         "UPDATE episodes SET status = ?1, error_code = ?2, error_message = ?3,
             attempts = attempts + 1, next_attempt_at = ?4, updated_at = ?5
-         WHERE uuid = ?6 AND status != ?7",
+         WHERE uuid = ?6 AND status != ?7 AND (?8 = 0 OR status = 'running')",
     )
     .bind(if retry {
         status::QUEUED
@@ -561,6 +583,7 @@ pub async fn record_failure(
     .bind(now_ts())
     .bind(uuid)
     .bind(status::CANCELLED)
+    .bind(running_only)
     .execute(pool)
     .await?;
     if result.rows_affected() > 0 {

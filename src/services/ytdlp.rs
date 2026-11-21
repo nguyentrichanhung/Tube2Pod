@@ -317,6 +317,66 @@ pub fn choose_caption(meta: &Metadata, language: &str) -> Option<Caption> {
     best.map(|(_, caption)| caption)
 }
 
+pub async fn download_audio(
+    cfg: &Config,
+    video: &VideoId,
+    format_id: &str,
+    dir: &Path,
+) -> AppResult<PathBuf> {
+    tokio::fs::create_dir_all(dir).await?;
+    let dir = tokio::fs::canonicalize(dir).await?;
+    let template = dir.join("source.%(ext)s");
+    let output = tokio::time::timeout(
+        Duration::from_secs(900),
+        Command::new(&cfg.ytdlp_path)
+            .kill_on_drop(true)
+            .args([
+                "--no-playlist",
+                "--no-simulate",
+                "--fixup",
+                "never",
+                "-f",
+                format_id,
+                "-o",
+            ])
+            .arg(template)
+            .args(["--print", "after_move:filepath"])
+            .arg(format!("https://www.youtube.com/watch?v={}", video.id))
+            .env("HOME", cfg.data_dir.join("tmp/yt-dlp"))
+            .env("XDG_CACHE_HOME", cfg.data_dir.join("tmp/yt-dlp/cache"))
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await
+    .map_err(|_| AppError::Upstream("yt-dlp timed out".into()))??;
+    if !output.status.success() {
+        return Err(AppError::Upstream(format!(
+            "yt-dlp failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .chars()
+                .take(4096)
+                .collect::<String>()
+        )));
+    }
+    let output_path = String::from_utf8(output.stdout)
+        .map_err(|_| AppError::Upstream("invalid yt-dlp output path".into()))?;
+    let mut lines = output_path.lines();
+    let path = lines
+        .next()
+        .filter(|line| !line.is_empty())
+        .ok_or_else(|| AppError::Upstream("missing yt-dlp output path".into()))?;
+    if lines.next().is_some() {
+        return Err(AppError::Upstream("multiple yt-dlp output paths".into()));
+    }
+    let path = tokio::fs::canonicalize(path).await?;
+    if path.parent() != Some(dir.as_path()) || !tokio::fs::metadata(&path).await?.is_file() {
+        return Err(AppError::Upstream(
+            "yt-dlp output is outside the episode directory".into(),
+        ));
+    }
+    Ok(path)
+}
+
 pub async fn download_caption(
     cfg: &Config,
     video: &VideoId,
@@ -388,6 +448,56 @@ pub fn classify_source_error(error: &AppError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn downloads_the_requested_format_into_episode_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("yt-dlp");
+        let args = root.path().join("args");
+        std::fs::write(&script, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nwhile [ $# -gt 0 ]; do if [ \"$1\" = '-o' ]; then shift; out=$1; fi; shift; done\nout=$(printf '%s' \"$out\" | sed 's/%(ext)s/webm/')\nprintf audio > \"$out\"\nprintf '%s\\n' \"$out\"\n", args.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut cfg = Config::from_lookup(|key| match key {
+            "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net".into()),
+            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
+            "DATA_DIR" => Some(root.path().display().to_string()),
+            _ => None,
+        })
+        .unwrap();
+        cfg.ytdlp_path = script.display().to_string();
+        let path = download_audio(
+            &cfg,
+            &VideoId {
+                id: "dQw4w9WgXcQ".into(),
+            },
+            "251-1",
+            &root.path().join("episode"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"audio");
+        let args = std::fs::read_to_string(args).unwrap();
+        assert!(args.contains("-f\n251-1\n"));
+        assert!(args.contains("--fixup\nnever\n"));
+        assert!(args.contains("after_move:filepath"));
+        let outside = root.path().join("outside");
+        std::fs::write(&outside, b"audio").unwrap();
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf '%s\\n' '{}'\n", outside.display()),
+        )
+        .unwrap();
+        assert!(download_audio(
+            &cfg,
+            &VideoId {
+                id: "dQw4w9WgXcQ".into()
+            },
+            "251-1",
+            &root.path().join("episode")
+        )
+        .await
+        .is_err());
+    }
 
     #[test]
     fn groups_codecs_and_orders_youtube_default_first() {

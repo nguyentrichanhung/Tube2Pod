@@ -225,7 +225,11 @@ fn to_feed_episode(show: &crate::models::Show, episode: &Episode, base_url: &str
     FeedEpisode {
         uuid: episode.uuid.clone(),
         title: episode.source_title.clone(),
-        description: episode.summary().to_string(),
+        description: episode
+            .source_description
+            .as_deref()
+            .unwrap_or_else(|| episode.summary())
+            .to_string(),
         source_url: episode.source_url.clone(),
         published_at: episode.published_at.unwrap_or(episode.created_at),
         updated_at: episode.updated_at,
@@ -602,6 +606,21 @@ mod tests {
         for hidden in [&unpublished.uuid, &no_audio.uuid, &missing.uuid] {
             assert!(!xml.contains(hidden), "{hidden} leaked into {xml}");
         }
+    }
+
+    #[tokio::test]
+    async fn feed_drops_previously_published_legacy_episode_purged_on_upgrade() {
+        let fx = fixture().await;
+        episodes::reset_for_reread(&fx.state.pool, &fx.uuid)
+            .await
+            .unwrap();
+        let before = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
+        assert!(before.contains(&fx.uuid));
+        crate::cleanup::remove_legacy_pending_episodes(&fx.state.pool, &fx.state.cfg.data_dir)
+            .await
+            .unwrap();
+        let after = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
+        assert!(!after.contains(&fx.uuid));
     }
 
     #[tokio::test]

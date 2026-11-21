@@ -43,6 +43,22 @@ pub struct CsrfForm {
     pub _csrf: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RetryForm {
+    pub _csrf: String,
+    pub preview_video: Option<String>,
+    pub source_audio_track: Option<String>,
+    pub language: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "retry_audio.html")]
+struct RetryAudioTemplate {
+    uuid: String,
+    csrf: String,
+    preview: String,
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct CsrfQuery {
     pub _csrf: Option<String>,
@@ -154,7 +170,7 @@ pub async fn retry(
     Extension(token): Extension<CsrfToken>,
     headers: HeaderMap,
     Path(uuid): Path<String>,
-    Form(form): Form<CsrfForm>,
+    Form(form): Form<RetryForm>,
 ) -> AppResult<Response> {
     csrf::verify(&token, &headers, &form._csrf)?;
     let episode = episodes::get(&state.pool, &uuid)
@@ -165,7 +181,48 @@ pub async fn retry(
             "Chỉ thử lại được tập đã lỗi hoặc đã huỷ.".into(),
         ));
     }
-    episodes::retry(&state.pool, &uuid).await?;
+    if episode.source_audio_track.is_none() {
+        let video = crate::services::ytdlp::validate_url(&episode.source_url)?;
+        let meta = crate::services::ytdlp::probe(&state.cfg, &video).await?;
+        let show = shows::get(&state.pool, episode.show_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        if let Some(key) = form.source_audio_track.as_deref() {
+            if form.preview_video.as_deref() != Some(video.id.as_str()) {
+                return Err(AppError::BadRequest(
+                    "Video đã thay đổi. Vui lòng chọn lại bản audio.".into(),
+                ));
+            }
+            let (track, language) = crate::web::studio::selected_track(
+                &meta,
+                &show.language,
+                key,
+                form.language.as_deref(),
+            )?;
+            let result = sqlx::query("UPDATE episodes SET source_audio_track=?1, language=?2, stage='queued', status='queued', attempts=0, next_attempt_at=NULL, progress_json=NULL, error_code=NULL, error_message=NULL, updated_at=?3 WHERE uuid=?4 AND source_url=?5 AND source_audio_track IS NULL AND status IN ('failed','cancelled')")
+                .bind(track.key).bind(language).bind(crate::db::now_ts()).bind(&uuid).bind(&episode.source_url).execute(&state.pool).await?;
+            if result.rows_affected() == 0 {
+                return Err(AppError::Conflict(
+                    "Tập đã thay đổi. Vui lòng thử lại.".into(),
+                ));
+            }
+        } else {
+            let preview =
+                crate::web::studio::preview_template(&meta, &video.id, &show.language, None, None)
+                    .render()?;
+            return Ok(Html(
+                RetryAudioTemplate {
+                    uuid,
+                    csrf: token.0,
+                    preview,
+                }
+                .render()?,
+            )
+            .into_response());
+        }
+    } else {
+        episodes::retry(&state.pool, &uuid).await?;
+    }
     state.notify.notify_one();
     Ok(redirect_response(&headers, &format!("/episodes/{uuid}")))
 }
@@ -672,10 +729,7 @@ mod tests {
 
         let html = body(get(&context, &format!("/episodes/{}", episode.uuid)).await).await;
         assert!(html.contains(&format!("src=\"/episodes/{}/audio\"", episode.uuid)));
-        assert!(html.contains(&format!(
-            "href=\"/shows/{}?tab=feed\"",
-            show.id
-        )));
+        assert!(html.contains(&format!("href=\"/shows/{}?tab=feed\"", show.id)));
         assert!(!show.feed_enabled);
 
         let response = get(&context, &format!("/episodes/{}/audio", episode.uuid)).await;
@@ -871,6 +925,11 @@ mod tests {
             .unwrap();
 
         for uuid in [&failed.uuid, &cancelled.uuid] {
+            sqlx::query("UPDATE episodes SET source_audio_track='id:alt' WHERE uuid=?1")
+                .bind(uuid)
+                .execute(&context.state.pool)
+                .await
+                .unwrap();
             let response = send(
                 &context,
                 Method::POST,
@@ -911,6 +970,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn legacy_retry_waits_for_track_confirmation() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut context = ctx().await;
+        let tool = context._dir.path().join("yt-dlp");
+        std::fs::write(&tool, "#!/bin/sh\nprintf '%s' '{\"title\":\"Video\",\"duration\":600,\"formats\":[{\"format_id\":\"main\",\"audio_track_id\":\"main\",\"acodec\":\"opus\",\"vcodec\":\"none\",\"format_note\":\"main (default)\"},{\"format_id\":\"alt\",\"audio_track_id\":\"alt\",\"acodec\":\"opus\",\"vcodec\":\"none\",\"format_note\":\"alternate\"}]}'\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Arc::make_mut(&mut context.state.cfg).ytdlp_path = tool.display().to_string();
+        let show = create_show(&context, "Show").await;
+        let ep = create_episode(&context, show.id, "Old").await;
+        sqlx::query("UPDATE episodes SET source_url='https://www.youtube.com/watch?v=dQw4w9WgXcQ', status='failed', summary_text='historical' WHERE uuid=?1").bind(&ep.uuid).execute(&context.state.pool).await.unwrap();
+        let path = format!("/episodes/{}/retry", ep.uuid);
+        let response = send(
+            &context,
+            Method::POST,
+            &path,
+            Some(csrf_form().into_bytes()),
+            &[],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let before = episodes::get(&context.state.pool, &ep.uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.status, status::FAILED);
+        assert!(before.source_audio_track.is_none());
+        let body = form(&[
+            ("_csrf", TOKEN),
+            ("preview_video", "dQw4w9WgXcQ"),
+            ("source_audio_track", "id:alt"),
+            ("language", "en"),
+        ]);
+        let response = send(&context, Method::POST, &path, Some(body.into_bytes()), &[]).await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        crate::cleanup::remove_legacy_pending_episodes(&context.state.pool, context._dir.path())
+            .await
+            .unwrap();
+        let after = episodes::get(&context.state.pool, &ep.uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.status, status::QUEUED);
+        assert_eq!(after.source_audio_track.as_deref(), Some("id:alt"));
+        assert_eq!(after.language, "en");
+        assert_eq!(after.summary_text.as_deref(), Some("historical"));
+    }
+
+    #[tokio::test]
     async fn header_only_csrf_token_can_retry() {
         let context = ctx().await;
         let show = create_show(&context, "Show").await;
@@ -919,6 +1026,11 @@ mod tests {
             .await
             .unwrap();
 
+        sqlx::query("UPDATE episodes SET source_audio_track='id:alt' WHERE uuid=?1")
+            .bind(&episode.uuid)
+            .execute(&context.state.pool)
+            .await
+            .unwrap();
         let response = send(
             &context,
             Method::POST,
