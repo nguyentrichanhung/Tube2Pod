@@ -65,10 +65,28 @@
   {% endif %}
 </section>
 <script>
-  document.querySelector("form[action='/episodes']").addEventListener("change", (event) => {
-    if (event.target.name !== "source_audio_track") return;
-    const language = event.currentTarget.querySelector("select[name='language']");
-    if (language) language.value = "und";
+  const form = document.querySelector("form[action='/episodes']");
+  const languages = new Map();
+  let video = form.querySelector("input[name='preview_video']")?.value;
+  let track = form.querySelector("input[name='source_audio_track']:checked")?.value;
+
+  form.addEventListener("change", (event) => {
+    const language = form.querySelector("select[name='language']");
+    if (event.target.name === "language" && track) languages.set(track, event.target.value);
+    if (event.target.name === "source_audio_track") {
+      track = event.target.value;
+      if (language) language.value = languages.get(track) || "und";
+    }
+  });
+  document.body.addEventListener("htmx:afterSwap", (event) => {
+    if (event.detail.target.id !== "preview") return;
+    const currentVideo = form.querySelector("input[name='preview_video']")?.value;
+    const selected = form.querySelector("input[name='source_audio_track']:checked");
+    if (currentVideo !== video || !selected) languages.clear();
+    video = currentVideo;
+    track = selected?.value;
+    const language = form.querySelector("select[name='language']");
+    if (track && language) languages.set(track, language.value);
   });
 </script>
 {% endblock %}

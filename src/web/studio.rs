@@ -35,7 +35,7 @@ pub struct QueueTemplate {
 
 #[derive(Template)]
 #[template(path = "partials/preview.html")]
-pub struct PreviewTemplate {
+pub(crate) struct PreviewTemplate {
     title: String,
     channel: String,
     duration: String,
@@ -77,7 +77,6 @@ fn preview_tracks(
     _language: Option<&str>,
 ) -> Vec<PreviewTrack> {
     let tracks = ytdlp::audio_tracks(meta);
-    let selected = selected.filter(|key| tracks.iter().any(|track| track.key == *key));
     let recommended = !tracks.iter().any(|track| track.is_default);
     tracks
         .iter()
@@ -133,13 +132,18 @@ pub(crate) fn selected_track(
     Ok((track, label))
 }
 
-fn preview_template(
+pub(crate) fn preview_template(
     meta: &ytdlp::Metadata,
     video_id: &str,
     show_language: &str,
     selected: Option<&str>,
     language: Option<&str>,
 ) -> PreviewTemplate {
+    let valid_selection = selected.is_none_or(|key| {
+        ytdlp::audio_tracks(meta)
+            .iter()
+            .any(|track| track.key == key)
+    });
     PreviewTemplate {
         title: meta.title.clone(),
         channel: meta.channel.clone().unwrap_or_default(),
@@ -148,7 +152,12 @@ fn preview_template(
         has_thumbnail: meta.thumbnail.is_some(),
         video_id: video_id.into(),
         tracks: preview_tracks(meta, show_language, selected, language),
-        language: language.unwrap_or("und").into(),
+        language: if valid_selection {
+            language.unwrap_or("und")
+        } else {
+            "und"
+        }
+        .into(),
     }
 }
 
@@ -312,22 +321,7 @@ async fn create_error(
         shows.iter().find(|show| show.id == form.show_id),
         ytdlp::validate_url(&form.url),
     ) {
-        preview_template(
-            meta,
-            &video.id,
-            &show.language,
-            None,
-            if form
-                .preview_video
-                .as_deref()
-                .is_some_and(|id| id != video.id)
-            {
-                None
-            } else {
-                form.language.as_deref()
-            },
-        )
-        .render()?
+        preview_template(meta, &video.id, &show.language, Some(""), None).render()?
     } else {
         String::new()
     };
@@ -362,7 +356,7 @@ pub async fn preview(
         let meta = probe(&state, &video).await?;
         let show = match form.show_id { Some(id) => shows::get(&state.pool, id).await?, None => None };
         let same_video = form.preview_video.as_deref() == Some(video.id.as_str());
-        let selected = if same_video { form.source_audio_track.as_deref() } else { None };
+        let selected = if same_video { Some(form.source_audio_track.as_deref().unwrap_or("")) } else { None };
         let language = if same_video { form.language.as_deref() } else { None };
         let template = preview_template(&meta, &video.id, show.as_ref().map_or("vi", |s| s.language.as_str()), selected, language);
         if template.tracks.is_empty() { return Err(AppError::BadRequest("Video không có bản audio khả dụng.".into())); }
@@ -696,6 +690,8 @@ mod tests {
         let html = response_body(response).await;
         assert!(html.contains("không còn khả dụng"));
         assert!(html.contains("name=\"source_audio_track\""));
+        assert!(!html.contains("value=\"id:main\" checked"));
+        assert!(!html.contains("value=\"id:alt\" checked"));
         assert!(episodes::list(&state.pool, &Default::default())
             .await
             .unwrap()
@@ -728,6 +724,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preview_lost_track_requires_a_new_choice() {
+        let (state, _dir) = state_with_probe().await;
+        let show = create_show(&state).await;
+        let response = post(
+            &state,
+            "/api/preview",
+            form(&[
+                ("_csrf", TOKEN),
+                ("url", WATCH),
+                ("show_id", &show.to_string()),
+                ("preview_video", VIDEO_ID),
+                ("source_audio_track", "missing"),
+                ("language", "ko"),
+            ]),
+            &[("hx-request", "true")],
+        )
+        .await;
+        let html = response_body(response).await;
+        assert!(!html.contains("value=\"id:main\" checked"));
+        assert!(!html.contains("value=\"id:alt\" checked"));
+        assert!(html.contains("value=\"und\" selected"));
+    }
+
+    #[tokio::test]
     async fn create_rejects_stale_video_selection() {
         let (state, _dir) = state_with_probe().await;
         let show = create_show(&state).await;
@@ -747,6 +767,8 @@ mod tests {
         .await;
         let html = response_body(response).await;
         assert!(html.contains("Video đã thay đổi"));
+        assert!(!html.contains("value=\"id:main\" checked"));
+        assert!(!html.contains("value=\"id:alt\" checked"));
         assert!(html.contains("value=\"und\" selected"));
         assert!(episodes::list(&state.pool, &Default::default())
             .await
