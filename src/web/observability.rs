@@ -1,6 +1,5 @@
 use crate::error::AppResult;
 use crate::services::observability::{self, Metrics, Window};
-use crate::services::storage::{dir_size, format_bytes};
 use crate::state::AppState;
 use crate::web::csrf::CsrfToken;
 use askama::Template;
@@ -20,13 +19,6 @@ pub struct ObservabilityTemplate {
     csrf: String,
     window: &'static str,
     metrics: Metrics,
-    total: String,
-    audio: String,
-    transcripts: String,
-    shows: String,
-    omnivoice_ok: bool,
-    omnivoice_message: Option<String>,
-    omnivoice_checked: String,
 }
 
 pub async fn index(
@@ -37,29 +29,11 @@ pub async fn index(
     let window = Window::parse(query.window.as_deref());
     let now = crate::db::now_ts();
     let metrics = observability::load_metrics(&state.pool, window, now).await?;
-    let health = observability::omnivoice_health(&state).await;
-    let checked_secs = health.checked_at.elapsed().as_secs();
-    let omnivoice_checked = if checked_secs < 60 {
-        format!("{checked_secs} giây trước")
-    } else {
-        format!("{} phút trước", checked_secs / 60)
-    };
-    let total = dir_size(&state.cfg.data_dir).await;
-    let audio = dir_size(&state.cfg.data_dir.join("audio")).await;
-    let transcripts = dir_size(&state.cfg.data_dir.join("transcripts")).await;
-    let shows = dir_size(&state.cfg.data_dir.join("shows")).await;
     Ok(Html(
         ObservabilityTemplate {
             csrf: token.0,
             window: window.label(),
             metrics,
-            total: format_bytes(total),
-            audio: format_bytes(audio),
-            transcripts: format_bytes(transcripts),
-            shows: format_bytes(shows),
-            omnivoice_ok: health.ok,
-            omnivoice_message: health.message,
-            omnivoice_checked,
         }
         .render()?,
     ))
@@ -81,8 +55,6 @@ mod tests {
     async fn context() -> AppState {
         let cfg = Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
-            "OMNIVOICE_BASE_URL" => Some("http://127.0.0.1:1".into()),
             "DATA_DIR" => Some("/tmp/t2p-observability-web".into()),
             _ => None,
         })
@@ -91,7 +63,6 @@ mod tests {
             pool: db::test_pool().await,
             cfg: Arc::new(cfg),
             notify: Arc::new(Notify::new()),
-            health_cache: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -119,9 +90,12 @@ mod tests {
         let response = get(&state, "/observability").await;
         assert_eq!(response.status(), StatusCode::OK);
         let html = body(response).await;
-        assert!(html.contains("Vận hành"));
+        assert!(html.contains("Hoạt động"));
         assert!(html.contains("Chưa có dữ liệu vận hành"));
         assert!(html.contains("window=7d"));
+        assert!(!html.contains("Dung lượng"));
+        assert!(!html.contains("Omnivoice"));
+        assert!(!html.contains("127.0.0.1"));
     }
 
     #[tokio::test]
@@ -148,15 +122,15 @@ mod tests {
                 source_thumbnail_url: None,
                 source_upload_date: None,
                 language: "vi".into(),
-                target_minutes: 10,
-                review_required: false,
+                source_audio_track: None,
+                source_description: None,
             },
         )
         .await
         .unwrap();
         sqlx::query(
             "UPDATE stage_events SET exited_at = entered_at + 10, outcome = 'failed',
-                error_code = 'tts_unavailable'
+                error_code = 'source_unavailable'
              WHERE episode_uuid = ?1 AND exited_at IS NULL",
         )
         .bind(&ep.uuid)
@@ -166,8 +140,8 @@ mod tests {
 
         let html = body(get(&state, "/observability?window=7d").await).await;
         assert!(html.contains("Tập lỗi"));
-        assert!(html.contains("Dịch vụ đọc chưa sẵn sàng"));
-        assert!(html.contains("Không kết nối được"));
+        assert!(html.contains("Không tải được video"));
+        assert!(!html.contains("Tạm gián đoạn tạo audio"));
         assert!(html.contains("window=24h"));
     }
 }

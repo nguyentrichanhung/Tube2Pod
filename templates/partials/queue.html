@@ -1,9 +1,9 @@
 {% if episodes.is_empty() %}
 <div class="empty-state">Không có tập nào đang xử lý.</div>
 {% else %}
-<div class="stack">
+<div class="queue-list">
   {% for episode in episodes %}
-  <div class="stack" style="padding:.75rem 0;border-bottom:1px solid var(--line)">
+  <div class="stack queue-item">
     <div class="row between">
       <a href="/episodes/{{ episode.uuid }}"><strong>{{ episode.source_title }}</strong></a>
       <span class="badge{% if episode.status == "failed" %} badge-err{% else if episode.status == "published" || episode.status == "ready" %} badge-ok{% endif %}">{{ episode.status_label() }}</span>
@@ -13,18 +13,14 @@
       <div class="progress-bar{% if episode.status == "failed" %} err{% else if episode.status == "published" || episode.status == "ready" %} ok{% endif %}" style="width:{{ episode.progress_percent() }}%"></div>
     </div>
     <div class="progress-meta">
-      <span>{% if episode.progress_detail().is_some() %}{{ episode.progress_detail().unwrap() }}{% else %}{{ episode.stage_label() }}{% endif %}</span>
       <span>{{ episode.progress_percent() }}%</span>
     </div>
-    <div class="row">
-      <a class="button secondary" href="/episodes/{{ episode.uuid }}">Mở tập</a>
-      {% if episode.status == "failed" || episode.status == "cancelled" %}
-      <form method="post" action="/episodes/{{ episode.uuid }}/retry" class="row" hx-boost="false">
-        <input type="hidden" name="_csrf" value="{{ csrf }}">
-        <button type="submit" class="secondary">Thử lại</button>
-      </form>
-      {% endif %}
-    </div>
+    {% if episode.status == "failed" || episode.status == "cancelled" %}
+    <form method="post" action="/episodes/{{ episode.uuid }}/retry" class="row" hx-boost="false">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <button type="submit" class="secondary">Thử lại</button>
+    </form>
+    {% endif %}
     {% if episode.error_label().is_some() %}
     <div class="notice error">{{ episode.error_label().unwrap() }}</div>
     {% endif %}

@@ -2,7 +2,6 @@ use crate::db::episodes::{self, EpisodeFilter};
 use crate::db::shows;
 use crate::error::{AppError, AppResult};
 use crate::models::{status, Episode, Show};
-use crate::services::omnivoice::OmnivoiceClient;
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
 use crate::web::shows::purge_episode_files;
@@ -14,14 +13,13 @@ use axum::response::{Html, IntoResponse, Redirect};
 use axum::Extension;
 use serde::Deserialize;
 
-const STATUSES: [&str; 7] = [
+const STATUSES: [&str; 6] = [
     status::QUEUED,
     status::RUNNING,
     status::READY,
     status::PUBLISHED,
     status::FAILED,
     status::CANCELLED,
-    status::REVIEW,
 ];
 const PAGE_SIZE: i64 = 50;
 
@@ -328,7 +326,6 @@ pub async fn bulk_delete(
             "Chỉ xoá được tối đa 200 tập mỗi lần.".into(),
         ));
     }
-    let mut take_ids = Vec::new();
     let mut deleted = 0usize;
     let mut skipped = 0usize;
     for uuid in uuids {
@@ -336,24 +333,8 @@ pub async fn bulk_delete(
             skipped += 1;
             continue;
         };
-        if let Some(take_id) = episode.active_take_id {
-            take_ids.push(take_id);
-        }
         purge_episode_files(&state.cfg.data_dir, &episode).await;
         deleted += 1;
-    }
-    if !take_ids.is_empty() {
-        let cfg = state.cfg.clone();
-        tokio::spawn(async move {
-            let client = OmnivoiceClient::new(&cfg.omnivoice);
-            for take_id in take_ids {
-                let _ = tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    client.delete_speech(take_id),
-                )
-                .await;
-            }
-        });
     }
     if deleted > 0 {
         state.notify.notify_one();
@@ -446,7 +427,6 @@ mod tests {
         let path = dir.path().to_path_buf();
         let cfg = Config::from_lookup(move |key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
             "DATA_DIR" => Some(path.display().to_string()),
             _ => None,
         })
@@ -456,7 +436,6 @@ mod tests {
                 pool: crate::db::test_pool().await,
                 cfg: Arc::new(cfg),
                 notify: Arc::new(Notify::new()),
-                health_cache: Arc::new(tokio::sync::Mutex::new(None)),
             },
             _dir: dir,
         }
@@ -508,8 +487,8 @@ mod tests {
                 source_thumbnail_url: None,
                 source_upload_date: None,
                 language: "vi".into(),
-                target_minutes: 10,
-                review_required: false,
+                source_audio_track: None,
+                source_description: None,
             },
         )
         .await
@@ -566,8 +545,8 @@ mod tests {
         assert!(html.contains("Gõ XOA"));
         assert!(html.contains("Xoá đã chọn"));
         assert!(html.contains("disabled"));
-        assert!(html.contains("value=\"review\""));
-        assert!(html.contains("Chờ duyệt"));
+        assert!(!html.contains("value=\"review\""));
+        assert!(!html.contains("Chờ duyệt"));
         assert!(html.contains("2 tập"));
     }
 
@@ -663,8 +642,8 @@ mod tests {
                 source_thumbnail_url: None,
                 source_upload_date: None,
                 language: "vi".into(),
-                target_minutes: 10,
-                review_required: false,
+                source_audio_track: None,
+                source_description: None,
             },
         )
         .await

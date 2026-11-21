@@ -11,7 +11,7 @@
          style="width:{{ episode.progress_percent() }}%"></div>
   </div>
   <div class="progress-meta">
-    <span>{% if episode.progress_detail().is_some() %}{{ episode.progress_detail().unwrap() }}{% else %}{{ episode.status_label() }}{% endif %}</span>
+    <span>{{ episode.status_label() }}</span>
     <span>{{ episode.progress_percent() }}%</span>
   </div>
 </div>

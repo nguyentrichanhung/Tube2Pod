@@ -2,7 +2,6 @@ use crate::db::{episodes, settings, shows};
 use crate::error::{AppError, AppResult};
 use crate::models::{Episode, Show};
 use crate::services::cover;
-use crate::services::omnivoice::{OmnivoiceClient, Voice};
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
 use crate::web::library::{LibraryRow, Pagination};
@@ -84,71 +83,6 @@ impl ShowsTemplate {
     }
 }
 
-pub struct VoiceRow {
-    pub language: &'static str,
-    pub language_label: &'static str,
-    pub voice_name: Option<String>,
-    pub voice_id: Option<i64>,
-    pub gender: Option<String>,
-    pub age: Option<String>,
-    pub ready: Option<bool>,
-    pub preview_url: Option<String>,
-}
-
-impl VoiceRow {
-    pub fn gender_label(&self) -> &'static str {
-        crate::models::voice_gender_label(self.gender.as_deref())
-    }
-
-    pub fn age_label(&self) -> &'static str {
-        crate::models::voice_age_label(self.age.as_deref())
-    }
-}
-
-pub fn build_voice_rows(
-    selected: &[(String, i64, String)],
-    catalog: Option<&[Voice]>,
-    show_id: i64,
-) -> Vec<VoiceRow> {
-    ["vi", "en", "ko"]
-        .into_iter()
-        .map(|language| {
-            let stored = selected.iter().find(|(lang, _, _)| lang == language);
-            let catalog_voice = stored.and_then(|(_, voice_id, _)| {
-                catalog.and_then(|voices| {
-                    voices
-                        .iter()
-                        .find(|voice| voice.id == *voice_id && voice.is_ready_for(language))
-                })
-            });
-            let ready = stored.and_then(|_| {
-                catalog.map(|_| catalog_voice.is_some_and(|voice| voice.is_ready_for(language)))
-            });
-            VoiceRow {
-                language,
-                language_label: crate::models::language_label(language),
-                voice_name: stored.map(|(_, _, name)| name.clone()),
-                voice_id: stored.map(|(_, id, _)| *id),
-                gender: catalog_voice
-                    .and_then(|voice| voice.design.as_ref())
-                    .and_then(|design| design.gender.clone()),
-                age: catalog_voice
-                    .and_then(|voice| voice.design.as_ref())
-                    .and_then(|design| design.age.clone()),
-                ready,
-                preview_url: catalog_voice
-                    .filter(|voice| voice.is_ready_for(language))
-                    .map(|voice| {
-                        format!(
-                            "/shows/{show_id}/voices/{language}/preview?voice_id={}",
-                            voice.id
-                        )
-                    }),
-            }
-        })
-        .collect()
-}
-
 #[derive(Template)]
 #[template(path = "show_detail.html")]
 pub struct ShowDetailTemplate {
@@ -161,8 +95,6 @@ pub struct ShowDetailTemplate {
     can_enable: bool,
     feed_url: String,
     cover_url: String,
-    voice_rows: Vec<VoiceRow>,
-    has_playable_voice: bool,
     selectable: bool,
     pagination: Pagination,
 }
@@ -173,7 +105,6 @@ pub struct CreateShowForm {
     pub title: String,
     pub language: String,
     pub category: String,
-    pub default_minutes: i64,
     pub description: String,
 }
 
@@ -187,7 +118,6 @@ pub struct ShowEditForm {
     pub website_url: String,
     pub category: String,
     pub explicit: Option<String>,
-    pub default_minutes: i64,
     pub auto_publish: Option<String>,
 }
 
@@ -280,7 +210,6 @@ pub async fn create(
             owner_email,
             explicit,
             language: form.language,
-            default_minutes: form.default_minutes,
             auto_publish,
             ..shows::NewShow::default()
         },
@@ -321,7 +250,6 @@ pub async fn detail(
     let tab = match query.tab.as_deref() {
         Some("info") => "info",
         Some("feed") => "feed",
-        Some("voices") => "voices",
         _ => "episodes",
     };
     let episodes = episodes::list_for_show(&state.pool, id, 200).await?;
@@ -338,17 +266,6 @@ pub async fn detail(
     let cover_url = format!("/shows/{}/cover", show.id);
     let checklist = feed_checklist(&show);
     let can_enable = checklist.iter().all(|item| item.ok);
-    let selected = shows::list_voices(&state.pool, id).await?;
-    let catalog = if tab != "voices" || selected.is_empty() {
-        None
-    } else {
-        OmnivoiceClient::new(&state.cfg.omnivoice)
-            .list_voices()
-            .await
-            .ok()
-    };
-    let voice_rows = build_voice_rows(&selected, catalog.as_deref(), id);
-    let has_playable_voice = voice_rows.iter().any(|row| row.preview_url.is_some());
     Ok(Html(
         ShowDetailTemplate {
             csrf: token.0,
@@ -360,8 +277,6 @@ pub async fn detail(
             can_enable,
             feed_url,
             cover_url,
-            voice_rows,
-            has_playable_voice,
             selectable: false,
             pagination,
         }
@@ -398,7 +313,6 @@ pub async fn update(
             explicit: Some(form.explicit.is_some()),
             language: Some(form.language),
             website_url: Some(form.website_url),
-            default_minutes: Some(form.default_minutes),
             auto_publish: Some(form.auto_publish.is_some()),
         },
     )
@@ -619,10 +533,6 @@ pub async fn delete(
         }
         let batch_len = batch.len();
         for episode in &batch {
-            if let Some(take_id) = episode.active_take_id {
-                let client = OmnivoiceClient::new(&state.cfg.omnivoice);
-                let _ = client.delete_speech(take_id).await;
-            }
             let _ = episodes::cancel(&state.pool, &episode.uuid).await;
             purge_episode_files(&state.cfg.data_dir, episode).await;
         }
@@ -644,32 +554,7 @@ pub async fn purge_episode_files(data_dir: &std::path::Path, episode: &Episode) 
     if let Some(path) = &episode.transcript_path {
         let _ = tokio::fs::remove_file(path).await;
     }
-    let transcript_dir = data_dir.join("transcripts");
-    let transcript_prefix = format!("{}.", episode.uuid);
-    if let Ok(mut entries) = tokio::fs::read_dir(&transcript_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(transcript_prefix.as_str())
-            {
-                let _ = tokio::fs::remove_file(entry.path()).await;
-            }
-        }
-    }
-    let _ = tokio::fs::remove_dir_all(data_dir.join("tmp").join(&episode.uuid)).await;
-    let audio_dir = data_dir.join("audio");
-    if let Ok(mut entries) = tokio::fs::read_dir(&audio_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(&episode.uuid)
-            {
-                let _ = tokio::fs::remove_file(entry.path()).await;
-            }
-        }
-    }
+    let _ = crate::cleanup::purge_episode_files(data_dir, episode, false).await;
 }
 
 fn form_value(body: &[u8], key: &str) -> Option<String> {
@@ -711,7 +596,6 @@ mod tests {
     use crate::config::Config;
     use crate::db::{episodes, shows};
     use crate::models::{stage, status, Show};
-    use crate::services::omnivoice::{Voice, VoiceDesignInfo};
     use crate::state::AppState;
     use axum::body::{to_bytes, Body};
     use axum::http::{header, Method, Request, StatusCode};
@@ -732,7 +616,6 @@ mod tests {
         let path = dir.path().to_path_buf();
         let cfg = Config::from_lookup(move |key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
             "DATA_DIR" => Some(path.display().to_string()),
             _ => None,
         })
@@ -742,7 +625,6 @@ mod tests {
                 pool: crate::db::test_pool().await,
                 cfg: Arc::new(cfg),
                 notify: Arc::new(Notify::new()),
-                health_cache: Arc::new(tokio::sync::Mutex::new(None)),
             },
             _dir: dir,
         }
@@ -765,9 +647,7 @@ mod tests {
             cover_custom: false,
             feed_token: "token".into(),
             feed_enabled: false,
-            default_minutes: 10,
             auto_publish: true,
-            voice_preset_json: "{}".into(),
             created_at: 0,
             updated_at: 0,
         }
@@ -885,66 +765,6 @@ mod tests {
         assert!(feed_checklist(&missing)
             .iter()
             .any(|item| !item.ok && item.label == "Email chủ sở hữu"));
-    }
-
-    #[test]
-    fn builds_voice_rows_with_metadata_readiness_and_preview() {
-        let selected = vec![("vi".to_string(), 42, "Phượng".to_string())];
-        let catalog = vec![Voice {
-            id: 42,
-            name: Some("Phượng".into()),
-            status: "ready".into(),
-            language: Some("vi".into()),
-            preview_url: Some("/api/voices/42/preview".into()),
-            design: Some(VoiceDesignInfo {
-                gender: Some("female".into()),
-                age: Some("middle_aged".into()),
-                ..Default::default()
-            }),
-        }];
-
-        let rows = build_voice_rows(&selected, Some(&catalog), 7);
-        let vi = rows.iter().find(|row| row.language == "vi").unwrap();
-        assert_eq!(vi.voice_name.as_deref(), Some("Phượng"));
-        assert_eq!(vi.gender_label(), "Nữ");
-        assert_eq!(vi.age_label(), "Trung niên");
-        assert_eq!(vi.ready, Some(true));
-        assert_eq!(
-            vi.preview_url.as_deref(),
-            Some("/shows/7/voices/vi/preview?voice_id=42")
-        );
-
-        let en = rows.iter().find(|row| row.language == "en").unwrap();
-        assert_eq!(en.voice_name, None);
-        assert_eq!(en.ready, None);
-    }
-
-    #[test]
-    fn marks_a_stored_voice_not_ready_without_a_preview() {
-        let selected = vec![("en".to_string(), 43, "Minh".to_string())];
-        let catalog = vec![Voice {
-            id: 43,
-            name: Some("Minh".into()),
-            status: "failed".into(),
-            language: Some("en".into()),
-            ..Default::default()
-        }];
-
-        let rows = build_voice_rows(&selected, Some(&catalog), 7);
-        let en = rows.iter().find(|row| row.language == "en").unwrap();
-        assert_eq!(en.ready, Some(false));
-        assert_eq!(en.preview_url, None);
-    }
-
-    #[test]
-    fn leaves_readiness_unknown_when_the_catalog_is_unavailable() {
-        let selected = vec![("vi".to_string(), 42, "Phượng".to_string())];
-
-        let rows = build_voice_rows(&selected, None, 7);
-        let vi = rows.iter().find(|row| row.language == "vi").unwrap();
-        assert_eq!(vi.voice_name.as_deref(), Some("Phượng"));
-        assert_eq!(vi.ready, None);
-        assert_eq!(vi.preview_url, None);
     }
 
     #[tokio::test]
@@ -1148,8 +968,8 @@ mod tests {
                 source_thumbnail_url: None,
                 source_upload_date: None,
                 language: "vi".into(),
-                target_minutes: 10,
-                review_required: false,
+                source_audio_track: None,
+                source_description: None,
             },
         )
         .await
@@ -1626,29 +1446,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn voices_tab_renders_missing_voice_state() {
-        let context = ctx().await;
-        let show = complete_show(&context, "Show").await;
-        let response = send(
-            &context,
-            Method::GET,
-            &format!("/shows/{}?tab=voices", show.id),
-            "",
-            Vec::new(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let html = String::from_utf8(
-            to_bytes(response.into_body(), 1024 * 1024)
-                .await
-                .unwrap()
-                .to_vec(),
-        )
-        .unwrap();
-        assert!(html.contains("Chưa chọn giọng"));
-    }
-
-    #[tokio::test]
     async fn publish_ready_publishes_all_ready_episodes_for_the_show() {
         let context = ctx().await;
         let show = complete_show(&context, "Show").await;
@@ -1664,13 +1461,13 @@ mod tests {
                 source_thumbnail_url: None,
                 source_upload_date: None,
                 language: "vi".into(),
-                target_minutes: 10,
-                review_required: false,
+                source_audio_track: None,
+                source_description: None,
             },
         )
         .await
         .unwrap();
-        episodes::finish(
+        episodes::fixture_finish(
             &context.state.pool,
             &episode.uuid,
             stage::READY,
@@ -1747,7 +1544,8 @@ mod tests {
         let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("Email chủ sở hữu"));
-        assert!(html.contains("Feed URL"));
+        assert!(html.contains("Liên kết RSS"));
+        assert!(html.contains("Sao chép liên kết"));
         assert!(html.contains(&format!("hx-post=\"/shows/{}/feed/rotate\"", show.id)));
 
         let info = crate::web::admin_router(context.state.clone())
@@ -1808,7 +1606,8 @@ mod tests {
         assert!(html.contains(">L<"));
         assert!(html.contains("Technology"));
         assert!(html.contains("Tiếng Việt"));
-        assert!(html.contains("Quản lý show"));
+        assert!(html.contains(&format!("href=\"/shows/{}\"", show.id)));
+        assert!(html.contains(&format!("href=\"/shows/{}?tab=feed\"", show.id)));
         assert!(html.contains("Tạo tập"));
         assert!(!html.contains(&format!("src=\"/shows/{}/cover\"", show.id)));
 

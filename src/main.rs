@@ -1,7 +1,6 @@
 mod cleanup;
 mod config;
 mod db;
-mod domain;
 #[cfg(test)]
 mod e2e;
 mod error;
@@ -37,12 +36,9 @@ async fn main() -> anyhow::Result<()> {
 
     let pool = db::connect(&cfg.database_path()).await?;
     db::migrate(&pool).await?;
-    let capped = db::episodes::cap_legacy_summaries(&pool)
+    cleanup::remove_legacy_pending_episodes(&pool, &cfg.data_dir)
         .await
-        .context("cap legacy display summaries")?;
-    if capped > 0 {
-        tracing::info!(capped, "capped legacy display summaries");
-    }
+        .context("purge legacy pending episodes")?;
     db::episodes::recover_running(&pool)
         .await
         .context("recover running episodes")?;
@@ -55,7 +51,6 @@ async fn main() -> anyhow::Result<()> {
         pool,
         cfg: cfg.clone(),
         notify,
-        health_cache: Arc::new(tokio::sync::Mutex::new(None)),
     };
     let admin_listener = tokio::net::TcpListener::bind(admin_addr)
         .await

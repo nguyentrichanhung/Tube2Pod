@@ -17,11 +17,9 @@ imageproc = { version = "0.25", default-features = false }
 mime_guess = "2"
 quick-xml = "0.37"
 rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rust-embed = "8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "chrono", "migrate", "macros"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
@@ -31,13 +29,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
-whatlang = "0.16"
 
 [dev-dependencies]
 http-body-util = "0.1"
 quickcheck = "1"
 tempfile = "3"
-wiremock = "0.6"
 
 [profile.release]
 lto = "thin"

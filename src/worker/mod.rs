@@ -1,15 +1,11 @@
 pub mod assemble;
 pub mod fetch;
 pub mod publish;
-pub mod summarize;
-pub mod synth;
-pub mod voice;
 
 use crate::config::Config;
 use crate::db::episodes;
 use crate::error::AppError;
 use crate::models::{stage, status};
-use crate::services::omnivoice::OmnivoiceClient;
 use sqlx::SqlitePool;
 use std::future::Future;
 use std::sync::Arc;
@@ -18,14 +14,20 @@ use tokio::sync::Notify;
 
 pub const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-pub async fn is_cancelled(pool: &SqlitePool, uuid: &str) -> bool {
-    match episodes::get(pool, uuid).await {
-        Ok(Some(episode)) => episode.status == status::CANCELLED,
-        Ok(None) => true,
-        Err(error) => {
-            tracing::warn!(%error, %uuid, "cancellation check failed");
-            false
+pub async fn stage_changed(pool: &SqlitePool, uuid: &str, stage: &str) {
+    let result: Result<(), sqlx::Error> = async {
+        let mut tx = pool.begin().await?;
+        let changed = sqlx::query("UPDATE stage_events SET exited_at=?1, outcome='ok' WHERE episode_uuid=?2 AND exited_at IS NULL AND EXISTS (SELECT 1 FROM episodes WHERE uuid=?2 AND status='running' AND stage=?3)")
+            .bind(crate::db::now_ts()).bind(uuid).bind(stage).execute(&mut *tx).await?;
+        if changed.rows_affected() > 0 {
+            sqlx::query("INSERT INTO stage_events (episode_uuid, stage, entered_at) VALUES (?1, ?2, ?3)")
+                .bind(uuid).bind(stage).bind(crate::db::now_ts()).execute(&mut *tx).await?;
         }
+        tx.commit().await?;
+        Ok(())
+    }.await;
+    if let Err(error) = result {
+        tracing::warn!(%error, %uuid, "stage event transition failed");
     }
 }
 
@@ -33,7 +35,7 @@ async fn wait_for_cancellation(pool: &SqlitePool, uuid: &str) {
     loop {
         tokio::time::sleep(CANCEL_POLL_INTERVAL).await;
         match episodes::get(pool, uuid).await {
-            Ok(Some(episode)) if episode.status != status::CANCELLED => {}
+            Ok(Some(episode)) if episode.status == status::RUNNING => {}
             Ok(Some(_)) | Ok(None) => return,
             Err(error) => {
                 tracing::warn!(%error, %uuid, "cancellation watch failed");
@@ -80,13 +82,11 @@ impl PipelineError {
 pub struct Pipeline {
     pub pool: SqlitePool,
     pub cfg: Arc<Config>,
-    pub omni: Arc<OmnivoiceClient>,
 }
 
 impl Pipeline {
     pub fn new(pool: SqlitePool, cfg: Arc<Config>) -> Self {
-        let omni = Arc::new(OmnivoiceClient::new(&cfg.omnivoice));
-        Self { pool, cfg, omni }
+        Self { pool, cfg }
     }
 
     pub async fn run_episode(&self, uuid: &str) -> Result<(), PipelineError> {
@@ -95,10 +95,7 @@ impl Pipeline {
                 .await
                 .map_err(|e| PipelineError::from_app(e, "internal"))?
                 .ok_or_else(|| PipelineError::new("internal", "episode disappeared", false))?;
-            if episode.status == status::CANCELLED {
-                return Ok(());
-            }
-            if episode.is_terminal() {
+            if episode.status != status::RUNNING {
                 return Ok(());
             }
             if let Err(error) =
@@ -111,22 +108,11 @@ impl Pipeline {
                 stage::QUEUED | stage::FETCHING => {
                     fetch::fetch_episode(&self.pool, &self.cfg, &episode).await?
                 }
-                stage::SUMMARIZING => {
-                    summarize::summarize_episode(&self.pool, &self.cfg, &episode).await?
-                }
-                stage::VOICING => {
-                    voice::resolve_voice(&self.pool, &self.cfg, &episode, &self.omni).await?;
-                }
-                stage::SYNTHESIZING => {
-                    synth::synthesize_episode(&self.pool, &self.cfg, &episode, &self.omni).await?
-                }
                 stage::ASSEMBLING => {
                     assemble::assemble_episode(&self.pool, &self.cfg, &episode).await?
                 }
                 stage::PUBLISHING => {
                     publish::publish_episode(&self.pool, &episode).await?;
-                    let parts = synth::parts_dir(&self.cfg, &episode.uuid);
-                    let _ = tokio::fs::remove_dir_all(parts).await;
                 }
                 stage::REVIEW => return Ok(()),
                 stage::READY | stage::PUBLISHED => return Ok(()),
@@ -158,12 +144,12 @@ async fn record_episode_failure(
     let Some(current) = episodes::get(pool, uuid).await? else {
         return Ok(None);
     };
-    if current.status == status::CANCELLED {
+    if current.status != status::RUNNING {
         return Ok(None);
     }
     let retryable = error.retryable && current.attempts < 3;
     let retry_at = retryable.then(|| crate::db::now_ts() + backoff_secs(current.attempts) as i64);
-    episodes::record_failure(pool, uuid, error.code, &error.message, retry_at).await?;
+    episodes::record_running_failure(pool, uuid, error.code, &error.message, retry_at).await?;
     Ok(retry_at)
 }
 
@@ -285,12 +271,42 @@ mod tests {
                 source_thumbnail_url: None,
                 source_upload_date: None,
                 language: "vi".into(),
-                target_minutes: 10,
-                review_required: false,
+                source_audio_track: None,
+                source_description: None,
             },
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn worker_returns_queued_episode_to_claim_loop() {
+        let pool = crate::db::test_pool().await;
+        let ep = seed_episode(&pool).await;
+        let cfg = Arc::new(
+            Config::from_lookup(|key| match key {
+                "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net".into()),
+                _ => None,
+            })
+            .unwrap(),
+        );
+        let pipeline = Pipeline::new(pool.clone(), cfg);
+        tokio::time::timeout(Duration::from_secs(1), pipeline.run_episode(&ep.uuid))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            episodes::get(&pool, &ep.uuid)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            status::QUEUED
+        );
+        assert_eq!(
+            episodes::claim_next(&pool).await.unwrap().unwrap().uuid,
+            ep.uuid
+        );
     }
 
     #[tokio::test]
@@ -316,17 +332,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn queued_retry_stops_old_work_and_ignores_old_failure() {
+        let pool = crate::db::test_pool().await;
+        let ep = seed_episode(&pool).await;
+        let waiting_pool = pool.clone();
+        let uuid = ep.uuid.clone();
+        let task = tokio::spawn(async move {
+            cancellable(&waiting_pool, &uuid, std::future::pending::<()>()).await
+        });
+        assert!(tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_none());
+        let error = PipelineError::new("old", "old failure", false);
+        assert!(record_episode_failure(&pool, &ep.uuid, &error)
+            .await
+            .unwrap()
+            .is_none());
+        let current = episodes::get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(current.status, status::QUEUED);
+        assert!(current.error_code.is_none());
+        episodes::record_running_failure(&pool, &ep.uuid, "old", "old failure", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            episodes::get(&pool, &ep.uuid)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            status::QUEUED
+        );
+    }
+
+    #[tokio::test]
     async fn failure_handler_retries_three_times_then_fails() {
         let pool = crate::db::test_pool().await;
         let ep = seed_episode(&pool).await;
         let error = PipelineError::new("tts_unavailable", "boom", true);
 
         for _ in 0..3 {
+            sqlx::query("UPDATE episodes SET status='running' WHERE uuid=?1")
+                .bind(&ep.uuid)
+                .execute(&pool)
+                .await
+                .unwrap();
             assert!(record_episode_failure(&pool, &ep.uuid, &error)
                 .await
                 .unwrap()
                 .is_some());
         }
+        sqlx::query("UPDATE episodes SET status='running' WHERE uuid=?1")
+            .bind(&ep.uuid)
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(record_episode_failure(&pool, &ep.uuid, &error)
             .await
             .unwrap()

@@ -64,7 +64,7 @@ mod tests {
     }
 
     async fn episode_for(pool: &SqlitePool, show_id: i64, video_id: &str) -> Episode {
-        db::episodes::create(
+        let episode = db::episodes::create(
             pool,
             db::episodes::NewEpisode {
                 show_id,
@@ -76,12 +76,25 @@ mod tests {
                 source_thumbnail_url: None,
                 source_upload_date: None,
                 language: "vi".into(),
-                target_minutes: 10,
-                review_required: false,
+                source_audio_track: None,
+                source_description: None,
             },
         )
         .await
-        .unwrap()
+        .unwrap();
+        assert_eq!(
+            db::episodes::claim_next(pool).await.unwrap().unwrap().uuid,
+            episode.uuid
+        );
+        sqlx::query("UPDATE episodes SET stage='publishing' WHERE uuid=?1")
+            .bind(&episode.uuid)
+            .execute(pool)
+            .await
+            .unwrap();
+        db::episodes::get(pool, &episode.uuid)
+            .await
+            .unwrap()
+            .unwrap()
     }
 
     #[tokio::test]
@@ -144,6 +157,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stale_publish_does_not_finish_a_cancelled_and_retried_episode() {
+        let pool = db::test_pool().await;
+        let show = complete_show(&pool, true, true).await;
+        let ep = episode_for(&pool, show.id, "v1").await;
+        db::episodes::cancel(&pool, &ep.uuid).await.unwrap();
+        db::episodes::retry(&pool, &ep.uuid).await.unwrap();
+        publish_episode(&pool, &ep).await.unwrap();
+        let got = db::episodes::get(&pool, &ep.uuid).await.unwrap().unwrap();
+        assert_eq!(got.status, status::QUEUED);
+        assert_eq!(got.stage, stage::PUBLISHING);
+        assert!(got.published_at.is_none());
+    }
+
+    #[tokio::test]
     async fn publish_does_not_resurrect_a_cancelled_episode() {
         let pool = db::test_pool().await;
         let show = complete_show(&pool, true, true).await;
@@ -154,7 +181,7 @@ mod tests {
 
         let got = db::episodes::get(&pool, &ep.uuid).await.unwrap().unwrap();
         assert_eq!(got.status, crate::models::status::CANCELLED);
-        assert_eq!(got.stage, stage::QUEUED);
+        assert_eq!(got.stage, stage::PUBLISHING);
         assert!(got.published_at.is_none());
     }
 }

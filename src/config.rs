@@ -3,41 +3,11 @@ use std::path::PathBuf;
 use url::Url;
 
 #[derive(Clone, Debug)]
-pub struct OmnivoiceConfig {
-    pub base_url: String,
-    pub auth_mode: AuthMode,
-    pub chunk_chars: usize,
-    pub request_timeout_secs: u64,
-    pub synthesis_timeout_secs: u64,
-}
-
-#[derive(Clone)]
-pub enum AuthMode {
-    Tailscale { user: String },
-    Password { password: String },
-}
-
-impl std::fmt::Debug for AuthMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AuthMode::Tailscale { user } => {
-                f.debug_struct("Tailscale").field("user", user).finish()
-            }
-            AuthMode::Password { .. } => f
-                .debug_struct("Password")
-                .field("password", &"<redacted>")
-                .finish(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
 pub struct Config {
     pub bind_admin: String,
     pub bind_public: String,
     pub public_base_url: String,
     pub data_dir: PathBuf,
-    pub omnivoice: OmnivoiceConfig,
     pub ytdlp_path: String,
     pub ffmpeg_path: String,
     pub ffprobe_path: String,
@@ -64,52 +34,11 @@ impl Config {
             bail!("PUBLIC_BASE_URL must not contain a path");
         }
 
-        let auth_mode = match value("OMNIVOICE_AUTH_MODE", Some("tailscale"))
-            .unwrap()
-            .as_str()
-        {
-            "tailscale" => {
-                let user = value("OMNIVOICE_TAILNET_USER", None)
-                    .context("OMNIVOICE_TAILNET_USER is required in tailscale mode")?;
-                AuthMode::Tailscale { user }
-            }
-            "password" => {
-                let password = value("OMNIVOICE_PASSWORD", None)
-                    .context("OMNIVOICE_PASSWORD is required in password mode")?;
-                AuthMode::Password { password }
-            }
-            other => bail!("unsupported OMNIVOICE_AUTH_MODE: {other}"),
-        };
-
-        let chunk_chars = value("CHUNK_CHARS", Some("4500"))
-            .unwrap()
-            .parse::<usize>()
-            .context("CHUNK_CHARS must be a number")?;
-        if chunk_chars == 0 || chunk_chars > 5000 {
-            bail!("CHUNK_CHARS must be between 1 and 5000");
-        }
-
         Ok(Self {
             bind_admin: value("BIND_ADMIN", Some("127.0.0.1:8400")).unwrap(),
             bind_public: value("BIND_PUBLIC", Some("127.0.0.1:8401")).unwrap(),
             public_base_url,
             data_dir: PathBuf::from(value("DATA_DIR", Some("./data")).unwrap()),
-            omnivoice: OmnivoiceConfig {
-                base_url: value("OMNIVOICE_BASE_URL", Some("http://127.0.0.1:8200"))
-                    .unwrap()
-                    .trim_end_matches('/')
-                    .to_string(),
-                auth_mode,
-                chunk_chars,
-                request_timeout_secs: value("OMNIVOICE_TIMEOUT_SECS", Some("60"))
-                    .unwrap()
-                    .parse()
-                    .context("OMNIVOICE_TIMEOUT_SECS must be a number")?,
-                synthesis_timeout_secs: value("SYNTHESIS_TIMEOUT_SECS", Some("7200"))
-                    .unwrap()
-                    .parse()
-                    .context("SYNTHESIS_TIMEOUT_SECS must be a number")?,
-            },
             ytdlp_path: value("YTDLP_PATH", Some("yt-dlp")).unwrap(),
             ffmpeg_path: value("FFMPEG_PATH", Some("ffmpeg")).unwrap(),
             ffprobe_path: value("FFPROBE_PATH", Some("ffprobe")).unwrap(),
@@ -138,53 +67,39 @@ mod tests {
     fn trims_public_base_url_and_requires_https() {
         let cfg = Config::from_lookup(env(&[
             ("PUBLIC_BASE_URL", "https://pod.example.ts.net:8443/"),
-            ("OMNIVOICE_TAILNET_USER", "owner@example.com"),
             ("DATA_DIR", "/tmp/tube2pod-test"),
         ]))
         .unwrap();
         assert_eq!(cfg.public_base_url, "https://pod.example.ts.net:8443");
 
-        let err = Config::from_lookup(env(&[
-            ("PUBLIC_BASE_URL", "http://pod.example.ts.net:8443"),
-            ("OMNIVOICE_TAILNET_USER", "owner@example.com"),
-        ]))
+        let err = Config::from_lookup(env(&[(
+            "PUBLIC_BASE_URL",
+            "http://pod.example.ts.net:8443",
+        )]))
         .unwrap_err();
         assert!(err.to_string().contains("PUBLIC_BASE_URL"));
     }
 
     #[test]
-    fn defaults_are_loopback_and_speech_safe() {
-        let cfg = Config::from_lookup(env(&[
-            ("PUBLIC_BASE_URL", "https://pod.example.ts.net:8443"),
-            ("OMNIVOICE_TAILNET_USER", "owner@example.com"),
-        ]))
-        .unwrap();
+    fn defaults_use_local_tools() {
+        let cfg =
+            Config::from_lookup(env(&[("PUBLIC_BASE_URL", "https://pod.example.ts.net")])).unwrap();
         assert_eq!(cfg.bind_admin, "127.0.0.1:8400");
-        assert_eq!(cfg.bind_public, "127.0.0.1:8401");
-        assert!(cfg.omnivoice.chunk_chars <= 5000);
-        assert_eq!(cfg.omnivoice.chunk_chars, 4500);
+        assert_eq!(cfg.ytdlp_path, "yt-dlp");
+        assert_eq!(cfg.ffmpeg_path, "ffmpeg");
+        assert_eq!(cfg.ffprobe_path, "ffprobe");
     }
-
     #[test]
-    fn debug_redacts_the_omnivoice_password() {
+    fn accepts_configured_tool_paths_without_provider_settings() {
         let cfg = Config::from_lookup(env(&[
-            ("PUBLIC_BASE_URL", "https://pod.example.ts.net:8443"),
-            ("OMNIVOICE_AUTH_MODE", "password"),
-            ("OMNIVOICE_PASSWORD", "s3cret"),
+            ("PUBLIC_BASE_URL", "https://pod.example.ts.net"),
+            ("YTDLP_PATH", "/usr/local/bin/yt-dlp"),
+            ("FFMPEG_PATH", "/usr/bin/ffmpeg"),
+            ("FFPROBE_PATH", "/usr/bin/ffprobe"),
         ]))
         .unwrap();
-        let debug = format!("{cfg:?}");
-        assert!(debug.contains("redacted"), "{debug}");
-        assert!(!debug.contains("s3cret"), "{debug}");
-    }
-
-    #[test]
-    fn password_mode_requires_a_password() {
-        let err = Config::from_lookup(env(&[
-            ("PUBLIC_BASE_URL", "https://pod.example.ts.net:8443"),
-            ("OMNIVOICE_AUTH_MODE", "password"),
-        ]))
-        .unwrap_err();
-        assert!(err.to_string().contains("OMNIVOICE_PASSWORD"));
+        assert_eq!(cfg.ytdlp_path, "/usr/local/bin/yt-dlp");
+        assert_eq!(cfg.ffmpeg_path, "/usr/bin/ffmpeg");
+        assert_eq!(cfg.ffprobe_path, "/usr/bin/ffprobe");
     }
 }

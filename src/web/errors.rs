@@ -35,7 +35,7 @@ pub async fn html_errors(request: Request, next: Next) -> Response {
     let mut rendered = (
         parts.status,
         Html(format!(
-            "<!doctype html><html lang=\"vi\"><head><meta charset=\"utf-8\"><link rel=\"stylesheet\" href=\"/assets/app.css\"><title>Lỗi</title></head><body><main class=\"page\"><div class=\"card stack\" role=\"alert\"><h1>Yêu cầu không hợp lệ</h1><p>{message}</p><p><a class=\"btn\" href=\"/\">Về trang chủ</a></p></div></main></body></html>"
+            "<!doctype html><html lang=\"vi\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" href=\"/assets/app.css\"><title>Lỗi · Tube2Pod</title></head><body><main class=\"page error-page\"><div class=\"card stack\" role=\"alert\"><h1>Yêu cầu không hợp lệ</h1><p>{message}</p><p><a class=\"btn\" href=\"/\">Về trang chủ</a></p></div></main></body></html>"
         )),
     )
         .into_response();

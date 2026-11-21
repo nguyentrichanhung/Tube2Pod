@@ -225,7 +225,11 @@ fn to_feed_episode(show: &crate::models::Show, episode: &Episode, base_url: &str
     FeedEpisode {
         uuid: episode.uuid.clone(),
         title: episode.source_title.clone(),
-        description: episode.summary().to_string(),
+        description: episode
+            .source_description
+            .as_deref()
+            .unwrap_or_else(|| episode.summary())
+            .to_string(),
         source_url: episode.source_url.clone(),
         published_at: episode.published_at.unwrap_or(episode.created_at),
         updated_at: episode.updated_at,
@@ -300,7 +304,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = crate::config::Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some(BASE.into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
             "DATA_DIR" => Some(dir.path().display().to_string()),
             _ => None,
         })
@@ -347,8 +350,8 @@ mod tests {
                 source_thumbnail_url: None,
                 source_upload_date: None,
                 language: "vi".into(),
-                target_minutes: 10,
-                review_required: false,
+                source_audio_track: None,
+                source_description: None,
             },
         )
         .await
@@ -357,10 +360,9 @@ mod tests {
             pool,
             cfg: Arc::new(cfg),
             notify: Arc::new(Notify::new()),
-            health_cache: Arc::new(tokio::sync::Mutex::new(None)),
         };
         install_audio(&state, &episode).await;
-        episodes::finish(
+        episodes::fixture_finish(
             &state.pool,
             &episode.uuid,
             stage::PUBLISHED,
@@ -415,8 +417,8 @@ mod tests {
                 source_thumbnail_url: None,
                 source_upload_date: None,
                 language: "vi".into(),
-                target_minutes: 10,
-                review_required: false,
+                source_audio_track: None,
+                source_description: None,
             },
         )
         .await
@@ -487,15 +489,8 @@ mod tests {
     #[tokio::test]
     async fn feed_description_uses_the_display_summary_not_the_audio_script() {
         let fx = fixture().await;
-        episodes::set_summary(
-            &fx.state.pool,
-            &fx.uuid,
-            "Tóm tắt hiển thị.",
-            "SCRIPT_NOI_DAY_DU_KHONG_DUOC_LO",
-            "hash",
-        )
-        .await
-        .unwrap();
+        sqlx::query("UPDATE episodes SET summary_text='Tóm tắt hiển thị.', audio_script='SCRIPT_NOI_DAY_DU_KHONG_DUOC_LO' WHERE uuid=?1")
+            .bind(&fx.uuid).execute(&fx.state.pool).await.unwrap();
 
         let xml = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
         assert!(xml.contains("Tóm tắt hiển thị."), "{xml}");
@@ -565,13 +560,13 @@ mod tests {
         install_audio(&fx.state, &unpublished).await;
 
         let no_audio = add_episode(&fx.state, fx.show_id, "no-audio").await;
-        episodes::finish(pool, &no_audio.uuid, stage::READY, status::READY, true)
+        episodes::fixture_finish(pool, &no_audio.uuid, stage::READY, status::READY, true)
             .await
             .unwrap();
 
         let missing = add_episode(&fx.state, fx.show_id, "missing").await;
         install_audio(&fx.state, &missing).await;
-        episodes::finish(
+        episodes::fixture_finish(
             pool,
             &missing.uuid,
             stage::PUBLISHED,
@@ -590,7 +585,11 @@ mod tests {
         .await
         .unwrap();
 
-        episodes::reset_for_reread(pool, &fx.uuid).await.unwrap();
+        sqlx::query("UPDATE episodes SET stage = 'queued', status = 'queued' WHERE uuid = ?1")
+            .bind(&fx.uuid)
+            .execute(pool)
+            .await
+            .unwrap();
         let xml = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
 
         assert_eq!(xml.matches("<item>").count(), 1, "{xml}");
@@ -601,11 +600,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn feed_drops_previously_published_legacy_episode_purged_on_upgrade() {
+        let fx = fixture().await;
+        sqlx::query("UPDATE episodes SET stage = 'queued', status = 'queued' WHERE uuid = ?1")
+            .bind(&fx.uuid)
+            .execute(&fx.state.pool)
+            .await
+            .unwrap();
+        let before = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
+        assert!(before.contains(&fx.uuid));
+        crate::cleanup::remove_legacy_pending_episodes(&fx.state.pool, &fx.state.cfg.data_dir)
+            .await
+            .unwrap();
+        let after = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
+        assert!(!after.contains(&fx.uuid));
+    }
+
+    #[tokio::test]
     async fn feed_orders_by_published_at_descending() {
         let fx = fixture().await;
         let second = add_episode(&fx.state, fx.show_id, "v2").await;
         install_audio(&fx.state, &second).await;
-        episodes::finish(
+        episodes::fixture_finish(
             &fx.state.pool,
             &second.uuid,
             stage::PUBLISHED,
@@ -626,7 +642,9 @@ mod tests {
             .execute(&fx.state.pool)
             .await
             .unwrap();
-        episodes::reset_for_reread(&fx.state.pool, &fx.uuid)
+        sqlx::query("UPDATE episodes SET stage = 'queued', status = 'queued' WHERE uuid = ?1")
+            .bind(&fx.uuid)
+            .execute(&fx.state.pool)
             .await
             .unwrap();
 
@@ -641,7 +659,7 @@ mod tests {
         let fx = fixture().await;
         let second = add_episode(&fx.state, fx.show_id, "v2").await;
         install_audio(&fx.state, &second).await;
-        episodes::finish(
+        episodes::fixture_finish(
             &fx.state.pool,
             &second.uuid,
             stage::PUBLISHED,

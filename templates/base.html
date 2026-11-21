@@ -4,51 +4,39 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf }}">
-  <title>Tube2Pod</title>
+  <title>{% block title %}Tạo tập{% endblock %} · Tube2Pod</title>
   <link rel="stylesheet" href="/assets/app.css">
 </head>
-<body hx-headers='{"X-CSRF-Token":"{{ csrf }}"}'>
+<body class="app-shell" hx-headers='{"X-CSRF-Token":"{{ csrf }}"}'>
   <a class="skip-link" href="#main">Bỏ qua điều hướng</a>
   <header class="topbar">
-    <a class="brand" href="/"><span class="brand-mark">T2</span> Tube2Pod</a>
+    <a class="brand" href="/">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>Tube2Pod
+    </a>
     <nav aria-label="Điều hướng chính">
       <a href="/">Tạo tập</a>
       <a href="/library">Thư viện</a>
       <a href="/shows">Show</a>
-      <a href="/voices">Giọng đọc</a>
-      <a href="/observability">Vận hành</a>
+      <a href="/observability">Hoạt động</a>
       <a href="/settings">Cài đặt</a>
     </nav>
   </header>
-  <main class="page" id="main">
+  <main class="page" id="main" tabindex="-1">
     {% block content %}{% endblock %}
   </main>
   <footer class="foot">
     <span>Bạn chịu trách nhiệm về quyền sử dụng nội dung nguồn.</span>
-    <span>Tube2Pod</span>
   </footer>
   <script src="/assets/htmx.min.js" defer></script>
   <script>
+    const activePath = location.pathname.startsWith("/episodes/") ? "/library" : location.pathname;
     document.querySelectorAll(".topbar nav a").forEach((link) => {
-      if (link.getAttribute("href") === location.pathname) link.classList.add("active");
+      const path = link.getAttribute("href");
+      if (path === activePath || (path !== "/" && activePath.startsWith(path + "/"))) {
+        link.setAttribute("aria-current", path === activePath ? "page" : "location");
+      }
     });
   </script>
-  <script>
-    if (!window.__tube2podVoicePreview) {
-      window.__tube2podVoicePreview = true;
-      document.addEventListener("click", (event) => {
-        const target = event.target;
-        if (!(target instanceof Element)) return;
-        const button = target.closest(".voice-preview-button");
-        if (!button) return;
-        const scope = button.closest("[data-voice-preview]");
-        if (!scope) return;
-        const audio = scope.querySelector("audio");
-        if (!audio) return;
-        audio.src = button.dataset.previewUrl;
-        audio.play().catch(() => {});
-      });
-    }
-  </script>
+
 </body>
 </html>

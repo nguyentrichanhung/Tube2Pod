@@ -161,9 +161,9 @@ mod tests {
         sqlx::query(
             "INSERT INTO episodes (
                 uuid, show_id, video_id, source_url, source_title, language,
-                target_minutes, stage, status, created_at, updated_at
+                stage, status, created_at, updated_at
              ) VALUES (?1, 1, ?2, 'https://example.com/watch', 'Test Episode',
-                       'en', 10, 'queued', ?3, 0, 0)",
+                       'en', 'queued', ?3, 0, 0)",
         )
         .bind(uuid)
         .bind(format!("video-{uuid}"))
@@ -279,8 +279,8 @@ mod tests {
                 source_thumbnail_url: None,
                 source_upload_date: None,
                 language: "vi".into(),
-                target_minutes: 10,
-                review_required: false,
+                source_audio_track: None,
+                source_description: None,
             },
         )
         .await

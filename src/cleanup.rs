@@ -40,6 +40,99 @@ pub async fn run_once(pool: &SqlitePool, cfg: &Config) -> AppResult<()> {
     Ok(())
 }
 
+pub async fn remove_legacy_pending_episodes(pool: &SqlitePool, data_dir: &Path) -> AppResult<u64> {
+    let episodes: Vec<crate::models::Episode> = sqlx::query_as(
+        "SELECT * FROM episodes WHERE source_audio_track IS NULL AND status IN ('queued', 'running', 'review')",
+    ).fetch_all(pool).await?;
+    let mut removed = 0;
+    for episode in episodes {
+        purge_episode_files(data_dir, &episode, true).await?;
+        db::episodes::delete(pool, &episode.uuid).await?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+pub(crate) async fn purge_episode_files(
+    data_dir: &Path,
+    episode: &crate::models::Episode,
+    upgrade: bool,
+) -> AppResult<()> {
+    if upgrade {
+        uuid::Uuid::parse_str(&episode.uuid)
+            .map_err(|error| crate::error::AppError::Internal(error.into()))?;
+    }
+    let uuid = &episode.uuid;
+    let mut first_error = None;
+    for (directory, prefix) in [
+        (
+            "audio",
+            if upgrade {
+                format!("{uuid}-")
+            } else {
+                uuid.clone()
+            },
+        ),
+        ("transcripts", format!("{uuid}.")),
+    ] {
+        if let Err(error) = purge_matching_files(&data_dir.join(directory), &prefix).await {
+            if first_error.is_none() {
+                first_error = Some(error);
+            }
+        }
+    }
+    let tmp = data_dir.join("tmp");
+    let result = match tokio::fs::symlink_metadata(&tmp).await {
+        Ok(metadata) if metadata.is_dir() => {
+            remove_missing_ok(tokio::fs::remove_dir_all(tmp.join(uuid)).await)
+        }
+        Ok(_) => Err(std::io::Error::other("tmp is not a directory").into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    };
+    if first_error.is_none() {
+        first_error = result.err();
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    Ok(())
+}
+
+async fn purge_matching_files(dir: &Path, prefix: &str) -> AppResult<()> {
+    let metadata = match tokio::fs::symlink_metadata(dir).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_dir() {
+        return Err(std::io::Error::other("episode directory is not a directory").into());
+    }
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    let mut first_error = None;
+    while let Some(entry) = entries.next_entry().await? {
+        if entry.file_name().to_string_lossy().starts_with(prefix) {
+            if let Err(error) = remove_missing_ok(tokio::fs::remove_file(entry.path()).await) {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn remove_missing_ok(result: std::io::Result<()>) -> AppResult<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 async fn purge_stage_events(pool: &SqlitePool, now: i64) -> AppResult<()> {
     let cutoff = now.saturating_sub(EVENT_RETENTION_DAYS * 86_400);
     match db::stage_events::purge_before(pool, cutoff).await {
@@ -181,9 +274,6 @@ async fn cleanup_tmp(pool: &SqlitePool, cfg: &Config, hours: i64) -> AppResult<(
             .and_then(system_secs)
             .unwrap_or(now);
         if is_expired(now, modified, ttl) {
-            if current.is_some() {
-                db::episodes::clear_chunk_state(pool, &name).await?;
-            }
             let _ = tokio::fs::remove_dir_all(entry.path()).await;
         }
     }
@@ -221,6 +311,154 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    #[tokio::test]
+    async fn upgrade_removes_only_legacy_pending_episodes() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::db::test_pool_0004().await;
+        sqlx::query("INSERT INTO shows (id, title, feed_token, created_at, updated_at) VALUES (1, 'Show', 'token', 0, 0)").execute(&pool).await.unwrap();
+        let mut episodes = Vec::new();
+        for status in [
+            "queued",
+            "running",
+            "review",
+            "ready",
+            "published",
+            "failed",
+            "cancelled",
+        ] {
+            let uuid = uuid::Uuid::new_v4().to_string();
+            sqlx::query("INSERT INTO episodes (uuid, show_id, video_id, source_url, source_title, language, target_minutes, stage, status, published_at, created_at, updated_at) VALUES (?1, 1, ?1, 'url', 'Title', 'vi', 10, ?2, ?2, 42, 0, 0)").bind(&uuid).bind(status).execute(&pool).await.unwrap();
+            for name in [
+                format!("audio/{uuid}-1.mp3"),
+                format!("audio/{uuid}-2.mp3"),
+                format!("transcripts/{uuid}.vi.vtt"),
+                format!("tmp/{uuid}/part"),
+            ] {
+                write(&dir.path().join(name), b"data");
+            }
+            sqlx::query(
+                "UPDATE episodes SET audio_path = ?1, transcript_path = ?2 WHERE uuid = ?3",
+            )
+            .bind(
+                dir.path()
+                    .join(format!("audio/{uuid}-2.mp3"))
+                    .to_string_lossy()
+                    .as_ref(),
+            )
+            .bind(
+                dir.path()
+                    .join(format!("transcripts/{uuid}.vi.vtt"))
+                    .to_string_lossy()
+                    .as_ref(),
+            )
+            .bind(&uuid)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO stage_events (episode_uuid, stage, entered_at) VALUES (?1, 'queued', 0)")
+                .bind(&uuid).execute(&pool).await.unwrap();
+            episodes.push((uuid, status));
+        }
+        let long_summary = "old summary ".repeat(300);
+        let retained_uuid = &episodes[3].0;
+        sqlx::query(
+            "UPDATE episodes SET summary_text = ?1, audio_script = 'old script' WHERE uuid = ?2",
+        )
+        .bind(&long_summary)
+        .bind(retained_uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        let new = episode(&pool, "new-track").await;
+        sqlx::query("UPDATE episodes SET source_audio_track = 'track' WHERE uuid = ?1")
+            .bind(&new.uuid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        write(
+            &dir.path().join(format!("audio/{}-1.mp3", new.uuid)),
+            b"new",
+        );
+        assert_eq!(
+            remove_legacy_pending_episodes(&pool, dir.path())
+                .await
+                .unwrap(),
+            3
+        );
+        let retained = db::episodes::get(&pool, retained_uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            retained.summary_text.as_deref(),
+            Some(long_summary.as_str())
+        );
+        assert_eq!(retained.audio_script.as_deref(), Some("old script"));
+        for (uuid, status) in episodes {
+            let keep = !["queued", "running", "review"].contains(&status);
+            assert_eq!(
+                db::episodes::get(&pool, &uuid).await.unwrap().is_some(),
+                keep
+            );
+            for name in [
+                format!("audio/{uuid}-1.mp3"),
+                format!("audio/{uuid}-2.mp3"),
+                format!("transcripts/{uuid}.vi.vtt"),
+                format!("tmp/{uuid}/part"),
+            ] {
+                assert_eq!(dir.path().join(name).exists(), keep);
+            }
+        }
+        let events: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(events, 5); // Four preserved legacy rows and the new episode.
+        assert!(db::episodes::get(&pool, &new.uuid).await.unwrap().is_some());
+        assert!(dir
+            .path()
+            .join(format!("audio/{}-1.mp3", new.uuid))
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn upgrade_retries_after_partial_file_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::db::test_pool().await;
+        let old = episode(&pool, "retry").await;
+        let audio = dir.path().join(format!("audio/{}-1.mp3", old.uuid));
+        write(&audio, b"audio");
+        let broken = dir.path().join(format!("transcripts/{}.vtt", old.uuid));
+        std::fs::create_dir_all(&broken).unwrap();
+        assert!(remove_legacy_pending_episodes(&pool, dir.path())
+            .await
+            .is_err());
+        assert!(!audio.exists());
+        assert!(db::episodes::get(&pool, &old.uuid).await.unwrap().is_some());
+        std::fs::remove_dir(&broken).unwrap();
+        assert_eq!(
+            remove_legacy_pending_episodes(&pool, dir.path())
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(db::episodes::get(&pool, &old.uuid).await.unwrap().is_none());
+        let new = episode(&pool, "retry-new").await;
+        sqlx::query("UPDATE episodes SET source_audio_track = 'track' WHERE uuid = ?1")
+            .bind(&new.uuid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            remove_legacy_pending_episodes(&pool, dir.path())
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(db::episodes::get(&pool, &new.uuid).await.unwrap().is_some());
+    }
+
     #[test]
     fn expiry_uses_strictly_older_than_ttl() {
         assert!(!is_expired(1_000, 1_000, 10));
@@ -246,7 +484,6 @@ mod tests {
     fn config(dir: &Path) -> Config {
         Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
-            "OMNIVOICE_TAILNET_USER" => Some("owner".into()),
             "DATA_DIR" => Some(dir.display().to_string()),
             _ => None,
         })
@@ -295,8 +532,8 @@ mod tests {
                 source_thumbnail_url: None,
                 source_upload_date: None,
                 language: "vi".into(),
-                target_minutes: 10,
-                review_required: false,
+                source_audio_track: None,
+                source_description: None,
             },
         )
         .await
@@ -310,17 +547,6 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
-    }
-
-    async fn set_resume_state(pool: &SqlitePool, uuid: &str) {
-        sqlx::query(
-            "UPDATE episodes SET active_take_id = 11, take_ids_json = '[11]',
-                chunk_done = 1, chunk_count = 3 WHERE uuid = ?1",
-        )
-        .bind(uuid)
-        .execute(pool)
-        .await
-        .unwrap();
     }
 
     async fn retention(pool: &SqlitePool, days: &str, hours: &str) {
@@ -390,7 +616,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_once_removes_terminal_tmp_dir_and_clears_chunk_state() {
+    async fn run_once_removes_terminal_tmp_dir() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = config(dir.path());
         let pool = crate::db::test_pool().await;
@@ -398,7 +624,6 @@ mod tests {
 
         let failed = episode(&pool, "failed").await;
         set_status(&pool, &failed.uuid, "failed").await;
-        set_resume_state(&pool, &failed.uuid).await;
         let failed_dir = aged_tmp_dir(&cfg, &failed.uuid, 2 * 60 * 60);
 
         run_once(&pool, &cfg).await.unwrap();
@@ -407,14 +632,6 @@ mod tests {
             !failed_dir.exists(),
             "expired terminal tmp dir must be removed"
         );
-        let got = db::episodes::get(&pool, &failed.uuid)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(got.active_take_id, None);
-        assert_eq!(got.take_ids_json, None);
-        assert_eq!(got.chunk_done, 0);
-        assert_eq!(got.chunk_count, None);
     }
 
     #[tokio::test]
@@ -510,11 +727,11 @@ mod tests {
         sqlx::query(
             "INSERT INTO episodes (
                 uuid, show_id, video_id, source_url, source_title, language,
-                target_minutes, stage, status, created_at, updated_at
+                stage, status, created_at, updated_at
              ) VALUES ('u1', 1, 'v1', 'https://example.com/watch', 'Episode 1',
-                       'en', 10, 'queued', 'done', 0, 0),
+                       'en', 'queued', 'done', 0, 0),
                       ('u2', 1, 'v2', 'https://example.com/watch', 'Episode 2',
-                       'en', 10, 'queued', 'done', 0, 0)",
+                       'en', 'queued', 'done', 0, 0)",
         )
         .execute(&pool)
         .await
