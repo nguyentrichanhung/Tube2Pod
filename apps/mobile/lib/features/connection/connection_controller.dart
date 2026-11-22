@@ -160,7 +160,24 @@ class ConnectionController extends ChangeNotifier {
       credential = data['credential'] as String;
     }
     final candidates = <Uri>[];
-    final client = MDnsClient();
+    final client = Platform.isAndroid
+        ? MDnsClient(
+            rawDatagramSocketFactory:
+                (
+                  host,
+                  port, {
+                  reuseAddress = true,
+                  reusePort = false,
+                  ttl = 1,
+                }) => RawDatagramSocket.bind(
+                  host,
+                  port,
+                  reuseAddress: reuseAddress,
+                  reusePort: false,
+                  ttl: ttl,
+                ),
+          )
+        : MDnsClient();
     try {
       if (discover != null) {
         candidates.addAll(await discover!());
