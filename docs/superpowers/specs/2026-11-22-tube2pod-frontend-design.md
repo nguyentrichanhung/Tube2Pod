@@ -1,15 +1,15 @@
 # Tube2Pod · Thiết kế frontend máy chủ và app điện thoại
 
-**22/11/2026 · Bản thiết kế chờ duyệt**
+**22/11/2026 · Bản thiết kế v2 chờ duyệt**
 
 Tube2Pod có hai giao diện dùng chung dữ liệu trên máy ở nhà. Website phục vụ việc lấy toàn bộ audio từ YouTube, quản lý thư viện và cấp quyền điện thoại. App phục vụ việc nghe, theo dõi show, chỉnh thông tin và phát hành các tập đã được tạo. [Kiến trúc đã duyệt](2026-11-22-local-first-mobile-design.md)
 
 ## Hướng thiết kế
 
-- **Website như bàn làm podcast.** Điều hướng trái cho màn hình rộng. Mỗi trang có tiêu đề và thao tác chính gần nội dung, với hàng đợi hoặc thông tin hỗ trợ đặt cạnh khi đủ chỗ. Tại màn Kết nối, mã QR là tiêu điểm và hai vùng bên cạnh cho biết ai có quyền và truy cập ngoài nhà đang bật hay tắt.
-- **App như một thư viện nghe.** Ảnh bìa và tên tập dẫn mắt. Thanh dưới gồm **Nghe**, **Show** và **Quản trị**. Nút **Kết nối** ở đầu màn hình hiển thị đường kết nối khi app đã ghép. Điều khiển phát thu gọn nằm trên thanh điều hướng sau khi chọn tập, mở lại trình phát từ tên tập.
-- **Cùng một ngôn ngữ thị giác.** Nền ngà nhẹ, bề mặt sáng, chữ than, đường kẻ mảnh và xanh lá đậm cho thao tác chính. Màu trạng thái đi cùng nhãn. Tiêu đề dùng serif có dấu tiếng Việt, nội dung và điều khiển dùng sans-serif của nền tảng. Giữ biểu tượng sóng ba vạch Tube2Pod. Ảnh bìa dùng ảnh do người dùng cung cấp hoặc bìa mặc định của show. [Ảnh mẫu Alpine Mist](https://unsplash.com/photos/a-mountain-covered-in-trees-and-fog-uCcCAf6hGQU)
-- **Nhịp bố cục.** Khoảng cách theo nhịp 4, 8, 12, 16, 24 và 32. Cột chính thu về một cột trên màn hẹp, điều hướng website cuộn ngang nếu thiếu chỗ. App dùng vùng chạm tối thiểu 44 pt trên iOS và 48 dp trên Android, tôn trọng vùng an toàn và cỡ chữ hệ thống.
+- **Website máy chủ.** Điều hướng ngang cạnh nhận diện Tube2Pod. Nội dung căn giữa trên màn rộng. Khu ghép điện thoại chiếm toàn chiều rộng, hướng dẫn và nút tạo mã ở trái, QR ở phải. Danh sách thiết bị và truy cập ngoài nhà nằm ở hàng dưới.
+- **App điện thoại.** Các mục **Nghe**, **Show** và **Quản trị** nằm ngay dưới tên app. Nút **Kết nối** hiển thị đường kết nối khi app đã ghép. Màn Nghe đặt bìa vuông bên cạnh tên tập, thời lượng và nút phát, với danh sách tập ngay dưới. Khi có tập được chọn, trình phát thu gọn nằm riêng ở đáy màn và mở lại được từ tên tập.
+- **Màu và kiểu chữ.** Nền than `#13141B`, bề mặt `#1C1E28`, vùng ghép cặp và tập nổi bật màu chàm `#292842`, nút chính và mục đang chọn màu hổ phách `#FFC077`. Dùng sans-serif có dấu tiếng Việt và biểu tượng sóng ba vạch Tube2Pod. Trạng thái luôn đi cùng nhãn. Ảnh bìa dùng ảnh do người dùng cung cấp hoặc bìa mặc định của show. [Ảnh mẫu Alpine Mist](https://unsplash.com/photos/a-mountain-covered-in-trees-and-fog-uCcCAf6hGQU)
+- **Nhịp bố cục.** Khoảng cách theo nhịp 4, 8, 12, 16, 24 và 32. Trên màn hẹp, các vùng web thu về một cột và sáu mục điều hướng chia thành hai hàng. App dùng vùng chạm tối thiểu 44 pt trên iOS và 48 dp trên Android, tôn trọng vùng an toàn và cỡ chữ hệ thống.
 - **Phản hồi tại chỗ.** Viền focus rõ, lỗi trường đặt dưới trường, cập nhật hàng đợi có thông báo hỗ trợ trình đọc màn hình. Khi đang tải hoặc lưu, giữ nội dung đã có và hiển thị tiến trình ở vùng thao tác. Hỗ trợ giảm chuyển động. Các hành động xóa, thu hồi và đổi liên kết giữ thông tin xác nhận ở ngay nơi người dùng thao tác.
 
 ## Website máy chủ
@@ -17,13 +17,13 @@ Tube2Pod có hai giao diện dùng chung dữ liệu trên máy ở nhà. Websit
 | Trang | Bố cục và thao tác |
 | --- | --- |
 | **Kết nối** | Khu ghép cặp chứa lời dẫn mở app, QR dùng một lần, thời gian còn lại và nút tạo mã mới. Danh sách thiết bị cho biết quyền từng máy và cho thu hồi từng thiết bị. **Truy cập ngoài nhà** hiển thị bật, đang kết nối, khả dụng hoặc lỗi, cùng địa chỉ HTTPS khi đã cấp. |
-| **Tạo tập** | Dán link YouTube và chọn show trước khi xem trước. Xem trước hiển thị tên video, kênh, thời lượng, bản mặc định ở đầu hoặc bản **Đề xuất** khi nguồn thiếu cờ. Hiện ngôn ngữ YouTube của bản mặc định, dùng ngôn ngữ mặc định của show khi thiếu nhãn. Bản đi kèm bắt đầu ở **Chưa rõ ngôn ngữ** và cho chỉnh. Tạo tập đưa lựa chọn vào hàng đợi. Hàng đợi đặt bên cạnh, tập gần đây và đường dẫn Thư viện đặt dưới. |
+| **Tạo tập** | Dán link YouTube và chọn show trước khi xem trước. Vùng xem trước toàn chiều rộng đặt thông tin video cạnh các bản audio. Bản mặc định đứng đầu hoặc dùng **Đề xuất** khi nguồn thiếu cờ. Hiện ngôn ngữ YouTube của bản mặc định, dùng ngôn ngữ mặc định của show khi thiếu nhãn. Bản đi kèm bắt đầu ở **Chưa rõ ngôn ngữ** và cho chỉnh. Tạo tập đưa lựa chọn vào hàng đợi. Hàng dưới gồm hàng đợi và tập gần đây, có đường dẫn Thư viện. |
 | **Thư viện** | Tìm theo video hoặc kênh, lọc theo show và trạng thái. Mỗi hàng có tên, show, thời lượng nếu có và trạng thái. Giữ phân trang, chọn nhiều và xác nhận xóa theo luồng hiện tại. |
 | **Chi tiết tập** | Tiêu đề nguồn, show, ngôn ngữ và trạng thái nằm ở đầu. MP3 và mô tả nguồn nằm ở vùng nội dung, cùng bản tóm tắt của tập cũ nếu đã có. Thao tác phát hành, hủy, thử lại hoặc xóa phụ thuộc trạng thái hiện có. |
-| **Show** | Ảnh bìa và tên show, ngôn ngữ mặc định, số tập và trạng thái RSS. Form tạo show có tên, mô tả, danh mục và ngôn ngữ. |
+| **Show** | Lưới bìa hiển thị tên show, ngôn ngữ mặc định, số tập và trạng thái RSS. Form tạo show đặt cạnh lưới khi đủ chỗ, gồm tên, mô tả, danh mục và ngôn ngữ. |
 | **Chi tiết show** | Ba mục **Tập**, **Thông tin**, **Feed RSS**. Tập dẫn tới chi tiết và Thư viện đã lọc. Thông tin giữ biểu mẫu sửa, ảnh bìa và xác nhận xóa theo tên show. Feed hiển thị điều kiện còn thiếu, bật hoặc tắt RSS, sao chép hoặc mở URL, phát hành tập sẵn sàng, đổi link theo xác nhận hiện có và đường dẫn Apple Podcasts Connect. |
 | **Hoạt động** | Hàng đợi và lỗi gần đây, mỗi hàng dẫn tới tập để xem chi tiết và thử lại. |
-| **Cài đặt** | Chủ sở hữu, mặc định phát hành và giới hạn nguồn. Các trang hiển thị địa chỉ podcast khi cần chia sẻ. |
+| **Cài đặt** | Ba hàng chủ sở hữu, mặc định phát hành và giới hạn nguồn. Trên màn rộng, tên nhóm ở trái, trường cấu hình ở phải. |
 
 Website vẫn dùng các trang và form của Axum/Askama. Đề xuất đặt **Kết nối** trong điều hướng chính và dẫn chủ máy mới tới đó từ bước mở website sau cài đặt. Đích điều hướng thường ngày và đường dẫn đã lưu vẫn hoạt động theo router hiện tại.
 
@@ -33,8 +33,8 @@ Website vẫn dùng các trang và form của Axum/Askama. Đề xuất đặt *
 | --- | --- |
 | **Kết nối** | Lần đầu dẫn vào ghép máy chủ tại nhà. Hướng dẫn mở QR trên website, xin quyền máy ảnh và mạng nội bộ tại bước cần dùng. Hiển thị **Trong mạng nhà**, **Từ xa** hoặc **Mất kết nối** theo đường tới máy chủ. Tùy tình huống, app cho quét lại, yêu cầu mã mới, mở quyền hệ điều hành hoặc thử kết nối lại. |
 | **Nghe** | Tập đã phát hành và danh sách các tập khác khả dụng từ máy chủ. Mở chi tiết tập hoặc phát từ hàng. Trình phát có tên tập, ảnh bìa, vị trí phát, thời lượng, phát hoặc tạm dừng và mô tả nếu có. |
-| **Show** | Danh sách các show người nghe có thể theo dõi. Chi tiết show hiển thị thông tin, trạng thái theo dõi và danh sách tập đã phát hành. |
-| **Quản trị** | Thiết bị chưa ghép thấy lời hướng dẫn và nút mở Kết nối. Sau ghép cặp, danh sách show cho biết số tập sẵn sàng. Chi tiết show có các tập sẵn sàng để phát hành, sửa nội dung và ảnh bìa, chỉnh ngôn ngữ, bật hoặc tắt RSS và sao chép URL khả dụng. |
+| **Show** | Lưới bìa hai cột cho các show người nghe có thể theo dõi. Chi tiết show hiển thị thông tin, trạng thái theo dõi và danh sách tập đã phát hành. |
+| **Quản trị** | Thiết bị chưa ghép thấy lời hướng dẫn và nút mở Kết nối. Sau ghép cặp, danh sách show cho biết số tập sẵn sàng. Chi tiết đặt bìa, tên show và nút sửa ở đầu, tiếp theo là các tập sẵn sàng để phát hành và khu bật, tắt hoặc chia sẻ RSS. |
 | **Tạo hoặc sửa show** | Biểu mẫu một cột cho tên, mô tả, ngôn ngữ mặc định, danh mục, tác giả và ảnh bìa. Lỗi lưu giữ form tại chỗ. Khi lưu thành công, dữ liệu hiển thị theo phản hồi máy chủ. |
 
 **Đã phát hành** thuộc về tập. **Bật RSS** thuộc về show. **Truy cập ngoài nhà** thuộc về kết nối máy chủ. Chẳng hạn, một tập đã phát hành vẫn có thể nghe từ danh sách của máy đã ghép cặp trong LAN khi tạm tắt relay. Khả năng sao chép feed chia sẻ phụ thuộc URL HTTPS công khai đang dùng và feed đã bật. App đọc lại trạng thái tập sau khi mất kết nối giữa chừng lúc phát hành.
