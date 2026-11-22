@@ -1,0 +1,78 @@
+use crate::{
+    db::{self, devices},
+    device::{identity::Identity, lan},
+    error::AppResult,
+    state::AppState,
+    web::csrf::{self, CsrfToken},
+};
+use axum::{
+    extract::{Path, State},
+    http::HeaderMap,
+    Extension, Form, Json,
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize)]
+pub struct PairEnvelopeV1 {
+    version: u8,
+    server_id: String,
+    lan_uri: String,
+    server_key: String,
+    ticket: String,
+    expires_at: i64,
+}
+#[derive(Deserialize)]
+pub struct CsrfForm {
+    _csrf: String,
+}
+#[derive(Deserialize)]
+pub struct RenameForm {
+    _csrf: String,
+    label: String,
+}
+pub async fn ticket(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Extension(bind): Extension<std::net::SocketAddr>,
+    Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
+    Form(form): Form<CsrfForm>,
+) -> AppResult<Json<PairEnvelopeV1>> {
+    csrf::verify(&token, &headers, &form._csrf)?;
+    let ip = if bind.ip().is_unspecified() {
+        lan::address().map_err(crate::error::AppError::Internal)?
+    } else {
+        bind.ip()
+    };
+    let (ticket, expires_at) = devices::issue(&state.pool, db::now_ts()).await?;
+    Ok(Json(PairEnvelopeV1 {
+        version: 1,
+        server_id: identity.server_id,
+        lan_uri: format!("https://{}", std::net::SocketAddr::new(ip, bind.port())),
+        server_key: identity.server_key,
+        ticket,
+        expires_at,
+    }))
+}
+pub async fn rename(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
+    Form(form): Form<RenameForm>,
+) -> AppResult<Json<serde_json::Value>> {
+    csrf::verify(&token, &headers, &form._csrf)?;
+    devices::rename(&state.pool, &id, &form.label).await?;
+    Ok(Json(serde_json::json!({"ok":true})))
+}
+pub async fn revoke(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
+    Form(form): Form<CsrfForm>,
+) -> AppResult<Json<serde_json::Value>> {
+    csrf::verify(&token, &headers, &form._csrf)?;
+    devices::revoke(&state.pool, &id).await?;
+    Ok(Json(serde_json::json!({"ok":true})))
+}

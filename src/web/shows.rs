@@ -1,7 +1,7 @@
-use crate::db::{episodes, settings, shows};
+use crate::db::{episodes, shows};
 use crate::error::{AppError, AppResult};
 use crate::models::{Episode, Show};
-use crate::services::cover;
+use crate::services::shows as show_service;
 use crate::state::AppState;
 use crate::web::csrf::{self, CsrfToken};
 use crate::web::library::{LibraryRow, Pagination};
@@ -191,45 +191,15 @@ pub async fn create(
     Form(form): Form<CreateShowForm>,
 ) -> AppResult<Response> {
     csrf::verify(&token, &headers, &form._csrf)?;
-    validate_language(&form.language)?;
-    if form.title.trim().is_empty() {
-        return Err(AppError::BadRequest("Tên show là bắt buộc.".into()));
-    }
-    let owner_name = settings::get_or(&state.pool, "owner_name", "").await?;
-    let owner_email = settings::get_or(&state.pool, "owner_email", "").await?;
-    let auto_publish =
-        settings::get_or(&state.pool, "auto_publish_default", "true").await? == "true";
-    let explicit = settings::get_or(&state.pool, "default_explicit", "false").await? == "true";
-    let show = shows::create(
-        &state.pool,
+    let show = show_service::create(
+        &state,
         shows::NewShow {
             title: form.title,
             description: form.description,
             category: form.category,
-            owner_name,
-            owner_email,
-            explicit,
             language: form.language,
-            auto_publish,
             ..shows::NewShow::default()
         },
-    )
-    .await?;
-    let cover_bytes = cover::render_cover(&show.title)?;
-    let path = state
-        .cfg
-        .data_dir
-        .join("shows")
-        .join(show.id.to_string())
-        .join("cover.jpg");
-    tokio::fs::create_dir_all(path.parent().unwrap()).await?;
-    tokio::fs::write(&path, cover_bytes).await?;
-    shows::set_cover(
-        &state.pool,
-        show.id,
-        &path.display().to_string(),
-        false,
-        false,
     )
     .await?;
     Ok(redirect_response(
@@ -301,53 +271,22 @@ pub async fn update(
     Form(form): Form<ShowEditForm>,
 ) -> AppResult<Response> {
     csrf::verify(&token, &headers, &form._csrf)?;
-    validate_language(&form.language)?;
-    if form.title.trim().is_empty() {
-        return Err(AppError::BadRequest("Tên show là bắt buộc.".into()));
-    }
-    let current = shows::get(&state.pool, id)
-        .await?
-        .ok_or(AppError::NotFound)?;
-    let title_changed = current.title != form.title.trim();
-    let mut updated = shows::update(
-        &state.pool,
+    show_service::update(
+        &state,
         id,
         shows::ShowPatch {
             title: Some(form.title),
             author: Some(form.author),
             description: Some(form.description),
             category: Some(form.category),
-            owner_name: None,
-            owner_email: None,
             explicit: Some(form.explicit.is_some()),
             language: Some(form.language),
             website_url: Some(form.website_url),
             auto_publish: Some(form.auto_publish.is_some()),
+            ..shows::ShowPatch::default()
         },
     )
     .await?;
-    if title_changed && !updated.cover_custom {
-        let bytes = cover::render_cover(&updated.title)?;
-        let path = state
-            .cfg
-            .data_dir
-            .join("shows")
-            .join(updated.id.to_string())
-            .join("cover.jpg");
-        tokio::fs::create_dir_all(path.parent().unwrap()).await?;
-        tokio::fs::write(&path, bytes).await?;
-        updated = shows::set_cover(
-            &state.pool,
-            updated.id,
-            &path.display().to_string(),
-            false,
-            true,
-        )
-        .await?;
-    }
-    if updated.feed_enabled && !updated.feed_complete() {
-        shows::set_feed_enabled(&state.pool, updated.id, false).await?;
-    }
     Ok(redirect_response(
         &headers,
         &format!("/shows/{id}?tab=info"),
@@ -383,9 +322,6 @@ pub async fn upload_cover(
     Path(id): Path<i64>,
     mut multipart: Multipart,
 ) -> AppResult<Response> {
-    let show = shows::get(&state.pool, id)
-        .await?
-        .ok_or(AppError::NotFound)?;
     let mut bytes = None;
     let mut form_token = String::new();
     while let Some(field) = multipart
@@ -414,23 +350,7 @@ pub async fn upload_cover(
     }
     csrf::verify(&token, &headers, &form_token)?;
     let bytes = bytes.ok_or_else(|| AppError::BadRequest("Thiếu file ảnh bìa.".into()))?;
-    let normalized = cover::normalize_upload(&bytes)?;
-    let path = state
-        .cfg
-        .data_dir
-        .join("shows")
-        .join(show.id.to_string())
-        .join("cover.jpg");
-    tokio::fs::create_dir_all(path.parent().unwrap()).await?;
-    tokio::fs::write(&path, normalized).await?;
-    shows::set_cover(
-        &state.pool,
-        show.id,
-        &path.display().to_string(),
-        true,
-        true,
-    )
-    .await?;
+    show_service::upload_cover(&state, id, &bytes).await?;
     Ok(redirect_response(
         &headers,
         &format!("/shows/{id}?tab=info"),
@@ -588,14 +508,6 @@ pub(crate) fn redirect_response(headers: &HeaderMap, location: &str) -> Response
         response
     } else {
         Redirect::to(location).into_response()
-    }
-}
-
-fn validate_language(language: &str) -> AppResult<()> {
-    if matches!(language, "vi" | "en" | "ko") {
-        Ok(())
-    } else {
-        Err(AppError::BadRequest("Chỉ hỗ trợ vi, en, ko.".into()))
     }
 }
 

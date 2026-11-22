@@ -1,3 +1,4 @@
+pub mod connection;
 pub mod csrf;
 pub mod episodes;
 pub mod errors;
@@ -85,6 +86,25 @@ pub fn admin_router(state: AppState) -> Router {
 
 pub fn owner_router(state: AppState, origin: url::Url) -> Router {
     admin_router(state).layer(middleware::from_fn_with_state(origin, owner_origin))
+}
+
+pub fn owner_connection_router(
+    state: AppState,
+    identity: crate::device::identity::Identity,
+    bind: std::net::SocketAddr,
+    origin: url::Url,
+) -> Router {
+    let routes = Router::new()
+        .route("/connection/pair-ticket", post(connection::ticket))
+        .route("/connection/devices/{id}/rename", post(connection::rename))
+        .route("/connection/devices/{id}/revoke", post(connection::revoke))
+        .layer(middleware::from_fn(csrf::csrf_middleware))
+        .layer(axum::Extension(identity))
+        .layer(axum::Extension(bind))
+        .with_state(state.clone());
+    admin_router(state)
+        .merge(routes)
+        .layer(middleware::from_fn_with_state(origin, owner_origin))
 }
 
 async fn owner_origin(
