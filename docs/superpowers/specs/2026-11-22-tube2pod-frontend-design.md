@@ -1,6 +1,6 @@
 # Tube2Pod · Thiết kế frontend máy chủ và app điện thoại
 
-**22/11/2026 · Bản thiết kế v2 chờ duyệt**
+**22/11/2026 · Bản thiết kế v3 chờ duyệt**
 
 Tube2Pod có hai giao diện dùng chung dữ liệu trên máy ở nhà. Website phục vụ việc lấy toàn bộ audio từ YouTube, quản lý thư viện và cấp quyền điện thoại. App phục vụ việc nghe, theo dõi show, chỉnh thông tin và phát hành các tập đã được tạo. [Kiến trúc đã duyệt](2026-11-22-local-first-mobile-design.md)
 
@@ -8,7 +8,8 @@ Tube2Pod có hai giao diện dùng chung dữ liệu trên máy ở nhà. Websit
 
 - **Website máy chủ.** Điều hướng ngang cạnh nhận diện Tube2Pod. Nội dung căn giữa trên màn rộng. Khu ghép điện thoại chiếm toàn chiều rộng, hướng dẫn và nút tạo mã ở trái, QR ở phải. Danh sách thiết bị và truy cập ngoài nhà nằm ở hàng dưới.
 - **App điện thoại.** Các mục **Nghe**, **Show** và **Quản trị** nằm ngay dưới tên app. Nút **Kết nối** hiển thị đường kết nối khi app đã ghép. Màn Nghe đặt bìa vuông bên cạnh tên tập, thời lượng và nút phát, với danh sách tập ngay dưới. Khi có tập được chọn, trình phát thu gọn nằm riêng ở đáy màn và mở lại được từ tên tập.
-- **Màu và kiểu chữ.** Nền than `#13141B`, bề mặt `#1C1E28`, vùng ghép cặp và tập nổi bật màu chàm `#292842`, nút chính và mục đang chọn màu hổ phách `#FFC077`. Dùng sans-serif có dấu tiếng Việt và biểu tượng sóng ba vạch Tube2Pod. Trạng thái luôn đi cùng nhãn. Ảnh bìa dùng ảnh do người dùng cung cấp hoặc bìa mặc định của show. [Ảnh mẫu Alpine Mist](https://unsplash.com/photos/a-mountain-covered-in-trees-and-fog-uCcCAf6hGQU)
+- **Màu và kiểu chữ.** Chế độ Tối dùng nền than `#13141B`, bề mặt `#1C1E28` và vùng nổi bật màu chàm `#292842`. Chế độ Sáng dùng nền trắng pha chàm `#F4F4FA`, bề mặt trắng và vùng nổi bật `#EEEBFA`. Nút chính dùng hổ phách `#FFC077` với chữ tối trong cả hai chế độ. Liên kết, viền focus và nhãn trạng thái có màu riêng cho từng nền. Dùng sans-serif có dấu tiếng Việt và biểu tượng sóng ba vạch Tube2Pod. Ảnh bìa dùng ảnh do người dùng cung cấp hoặc bìa mặc định của show. [Ảnh mẫu Alpine Mist](https://unsplash.com/photos/a-mountain-covered-in-trees-and-fog-uCcCAf6hGQU)
+- **Chọn giao diện.** Nút **Giao diện** ở đầu website và biểu tượng nửa sáng nửa tối cạnh nút **Kết nối** trong app mở ba lựa chọn **Sáng**, **Tối** và **Theo hệ thống**. Lần đầu dùng **Theo hệ thống** và cập nhật màu ngay khi cài đặt thiết bị thay đổi. Website ghi nhớ lựa chọn trong trình duyệt. App ghi nhớ lựa chọn trên thiết bị. Đổi màu giữ nguyên trang đang mở và các lựa chọn hiện có.
 - **Nhịp bố cục.** Khoảng cách theo nhịp 4, 8, 12, 16, 24 và 32. Trên màn hẹp, các vùng web thu về một cột và sáu mục điều hướng chia thành hai hàng. App dùng vùng chạm tối thiểu 44 pt trên iOS và 48 dp trên Android, tôn trọng vùng an toàn và cỡ chữ hệ thống.
 - **Phản hồi tại chỗ.** Viền focus rõ, lỗi trường đặt dưới trường, cập nhật hàng đợi có thông báo hỗ trợ trình đọc màn hình. Khi đang tải hoặc lưu, giữ nội dung đã có và hiển thị tiến trình ở vùng thao tác. Hỗ trợ giảm chuyển động. Các hành động xóa, thu hồi và đổi liên kết giữ thông tin xác nhận ở ngay nơi người dùng thao tác.
 
@@ -43,15 +44,16 @@ Website vẫn dùng các trang và form của Axum/Askama. Đề xuất đặt *
 
 | Vùng | Thành phần và trách nhiệm |
 | --- | --- |
-| **Khung web** | `templates/base.html` chứa nhận diện, điều hướng, vùng nội dung và liên kết bỏ qua điều hướng. CSS hiện có giữ kiểu dùng chung cho biểu mẫu, trạng thái, hàng nội dung, nút và panel. Các mẫu chia sẻ dùng cho những thành phần có cùng hành vi. |
+| **Khung web** | `templates/base.html` chứa nhận diện, điều hướng, bộ chọn giao diện, vùng nội dung và liên kết bỏ qua điều hướng. Hai bộ biến màu CSS dùng chung cho biểu mẫu, trạng thái, hàng nội dung, nút và panel. **Theo hệ thống** đọc tùy chọn màu của trình duyệt. |
 | **Trang web** | Giữ `studio.html`, `library.html`, `episode.html`, `shows.html`, `show_detail.html`, `observability.html`, `settings.html`. Trang Kết nối gom ghép cặp, thiết bị và relay. Mỗi trang là đích điều hướng độc lập và dùng tiêu đề riêng. |
 | **Cập nhật web** | Các vùng xem trước nguồn, hàng đợi, dòng thư viện và tiến trình tập tiếp tục là fragment HTMX. Form gửi qua các handler hiện có cho hành động hiện có. Phản hồi lỗi xuất hiện ở vùng của yêu cầu. Lần tải mới và trang sau bộ lọc vẫn hiển thị đủ bằng Askama. |
-| **Khung Flutter** | `lib/app/` chứa khung điều hướng, theme và điểm vào ứng dụng. `lib/features/connection/`, `listen/`, `shows/` và `admin/` chứa màn hình và trạng thái hiển thị của từng luồng. `lib/shared/ui/` chứa các thành phần thật sự dùng chung, như hàng tập, bìa, trạng thái và khung biểu mẫu. |
+| **Khung Flutter** | `lib/app/` chứa điều hướng, hai bảng màu, lựa chọn theme và điểm vào ứng dụng. App áp dụng chế độ của iOS hoặc Android khi chọn **Theo hệ thống**, gồm cả màu thanh trạng thái. `lib/features/connection/`, `listen/`, `shows/` và `admin/` chứa màn hình và trạng thái hiển thị của từng luồng. `lib/shared/ui/` chứa các thành phần thật sự dùng chung, như hàng tập, bìa, trạng thái và khung biểu mẫu. |
 | **Dữ liệu app** | Luồng nghe dùng RSS/enclosure hoặc danh sách đã phát hành của máy đã ghép cặp. Luồng quản trị dùng các khả năng của API đã duyệt cho show, bìa, feed và phát hành. Màn hình tiêu thụ trạng thái kết nối, quyền và kết quả thao tác từ lớp dữ liệu. Phần tích hợp nền tảng xử lý camera, khám phá LAN, xác minh định danh đã ghép cặp và phát media. |
 | **Nguồn trạng thái** | SQLite và phản hồi từ máy ở nhà quyết định show, tập, quyền thiết bị và phát hành. App giữ trạng thái điều hướng và trình phát. Đường công khai và đường quản trị dùng ngữ cảnh kết nối tương ứng theo kiến trúc đã duyệt. |
 
 ## Trạng thái cần thể hiện khi duyệt
 
+- **Giao diện:** chọn Sáng và Tối thủ công, đổi màu thiết bị khi đang chọn Theo hệ thống, và mở lại để kiểm tra lựa chọn đã lưu. Kiểm tra trường biểu mẫu, ảnh QR, trạng thái và nút phát trên cả hai nền.
 - **Ghép cặp:** chưa tạo mã, mã còn hạn, đã dùng, hết hạn, quyền hệ điều hành bị từ chối, xác minh máy chủ thất bại và thiết bị bị thu hồi. Thu hồi một thiết bị hiển thị đúng trên hàng đó và trong app tương ứng.
 - **Mạng:** cùng Wi-Fi, chuyển sang đường từ xa, mất đường tới máy, và kết nối lại. Lỗi quản trị hiển thị trong khu Quản trị. Feed công khai vẫn có thể nghe qua đường dành cho người nghe khi đường đó còn hoạt động.
 - **Nguồn và tập:** chưa có show để tạo tập, URL không hợp lệ, xem trước hoặc tải nguồn thất bại, chờ xử lý, đang xử lý, sẵn sàng, đã phát hành và đã hủy. Lỗi trả lại tác vụ có hành động tương ứng ở web.
