@@ -1,3 +1,6 @@
-import 'package:flutter/widgets.dart';
+// ignore_for_file: deprecated_member_use
+import 'package:flutter/material.dart';
 
-void main() => runApp(const SizedBox.shrink());
+import 'app/app.dart';
+
+void main() => runApp(const Tube2PodApp());

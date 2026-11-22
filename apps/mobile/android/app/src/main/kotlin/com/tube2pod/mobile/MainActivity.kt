@@ -2,6 +2,8 @@ package com.tube2pod.mobile
 
 import android.media.MediaDataSource
 import android.media.MediaPlayer
+import android.content.Context
+import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
@@ -19,11 +21,30 @@ import javax.net.ssl.X509TrustManager
 class MainActivity : FlutterActivity() {
     private var player: MediaPlayer? = null
     private val main = Handler(Looper.getMainLooper())
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
+        MethodChannel(engine.dartExecutor.binaryMessenger, "tube2pod/discovery").setMethodCallHandler { call, result ->
+            if (call.method == "start") {
+                multicastLock?.release()
+                val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                multicastLock = wifi.createMulticastLock("tube2pod-discovery").also { it.acquire() }
+                result.success(null)
+            } else if (call.method == "stop") {
+                multicastLock?.release()
+                multicastLock = null
+                result.success(null)
+            } else result.notImplemented()
+        }
         MethodChannel(engine.dartExecutor.binaryMessenger, "tube2pod/home_transport").setMethodCallHandler { call, result ->
-            if (call.method == "seek") {
+            if (call.method == "play") {
+                player?.start()
+                result.success(null)
+            } else if (call.method == "pause") {
+                player?.pause()
+                result.success(null)
+            } else if (call.method == "seek") {
                 player?.seekTo((call.arguments as Number).toInt())
                 result.success(null)
             } else if (call.method == "position") {
@@ -49,6 +70,7 @@ class MainActivity : FlutterActivity() {
                             mapOf("status" to status, "body" to bytes)
                         } else {
                             val media = MediaPlayer()
+                            try {
                             if (pin == null) {
                                 require(URL(uri).protocol == "https")
                                 media.setDataSource(uri)
@@ -58,6 +80,7 @@ class MainActivity : FlutterActivity() {
                             media.prepare()
                             media.start()
                             main.post { player?.release(); player = media }
+                            } catch (e: Exception) { media.release(); throw e }
                             null
                         }
                         main.post { result.success(value) }

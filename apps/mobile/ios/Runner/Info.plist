@@ -24,6 +24,12 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Chọn ảnh bìa cho show.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Quét mã ghép với máy chủ Tube2Pod.</string>
+	<key>NSBonjourServices</key>
+	<array><string>_tube2pod._tcp</string></array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your Tube2Pod server on your local network.</string>
 	<key>LSRequiresIPhoneOS</key>

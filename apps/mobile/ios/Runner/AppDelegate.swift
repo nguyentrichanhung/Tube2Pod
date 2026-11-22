@@ -2,6 +2,7 @@ import Flutter
 import UIKit
 import Security
 import AVFoundation
+import Darwin
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -17,9 +18,17 @@ import AVFoundation
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    let discovery = FlutterMethodChannel(name: "tube2pod/discovery", binaryMessenger: engineBridge.applicationRegistrar.messenger())
+    discovery.setMethodCallHandler { call, result in
+      guard call.method == "discover", let serverId = call.arguments as? String else { result(FlutterMethodNotImplemented); return }
+      guard activeDiscovery == nil else { result([]); return }
+      activeDiscovery = BonjourDiscovery(serverId: serverId, result: result)
+    }
     let channel = FlutterMethodChannel(name: "tube2pod/home_transport", binaryMessenger: engineBridge.applicationRegistrar.messenger())
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self = self else { return }
+      if call.method == "play" { self.player?.play(); result(nil); return }
+      if call.method == "pause" { self.player?.pause(); result(nil); return }
       if call.method == "close" {
         self.player?.pause()
         self.player = nil
@@ -241,3 +250,42 @@ private final class PinnedMediaLoader: NSObject, AVAssetResourceLoaderDelegate {
 
   deinit { session.invalidateAndCancel() }
 }
+
+private final class BonjourDiscovery: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
+  private let browser = NetServiceBrowser()
+  private var services: [NetService] = []
+  private var addresses: [String] = []
+  private let serverId: String
+  private let result: FlutterResult
+  init(serverId: String, result: @escaping FlutterResult) {
+    self.serverId = serverId
+    self.result = result
+    super.init()
+    browser.delegate = self
+    browser.searchForServices(ofType: "_tube2pod._tcp.", inDomain: "local.")
+    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [self] in
+      browser.stop()
+      services.forEach { $0.stop() }
+      result(addresses)
+      activeDiscovery = nil
+    }
+  }
+  func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+    guard service.name == serverId else { return }
+    services.append(service)
+    service.delegate = self
+    service.resolve(withTimeout: 2)
+  }
+  func netServiceDidResolveAddress(_ sender: NetService) {
+    for data in sender.addresses ?? [] {
+      data.withUnsafeBytes { bytes in
+        guard let addr = bytes.baseAddress?.assumingMemoryBound(to: sockaddr.self), addr.pointee.sa_family == sa_family_t(AF_INET) else { return }
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        if getnameinfo(addr, socklen_t(data.count), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
+          addresses.append("https://\(String(cString: host)):\(sender.port)")
+        }
+      }
+    }
+  }
+}
+private var activeDiscovery: BonjourDiscovery?
