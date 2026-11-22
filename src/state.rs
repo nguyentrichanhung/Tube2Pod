@@ -9,3 +9,9 @@ pub struct AppState {
     pub cfg: Arc<Config>,
     pub notify: Arc<Notify>,
 }
+
+impl AppState {
+    pub fn effective_public_base_url(&self) -> crate::error::AppResult<Option<url::Url>> {
+        Ok(self.cfg.public_base_url.clone())
+    }
+}

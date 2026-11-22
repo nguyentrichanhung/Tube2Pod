@@ -83,6 +83,31 @@ pub fn admin_router(state: AppState) -> Router {
     pages.merge(assets).with_state(state)
 }
 
+pub fn owner_router(state: AppState, origin: url::Url) -> Router {
+    admin_router(state).layer(middleware::from_fn_with_state(origin, owner_origin))
+}
+
+async fn owner_origin(
+    axum::extract::State(origin): axum::extract::State<url::Url>,
+    mut request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let expected_host = format!("localhost:{}", origin.port_or_known_default().unwrap_or(80));
+    if request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        != Some(expected_host.as_str())
+        || request.headers().get(header::ORIGIN).is_some_and(|value| {
+            value.to_str().ok() != Some(origin.origin().ascii_serialization().as_str())
+        })
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    request.extensions_mut().insert(origin);
+    next.run(request).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +154,55 @@ mod tests {
             .next()
             .unwrap()
             .to_string()
+    }
+
+    #[tokio::test]
+    async fn owner_origin_uses_exact_localhost_port() {
+        let state = test_state().await;
+        let router = owner_router(
+            state.clone(),
+            url::Url::parse("http://localhost:8402").unwrap(),
+        );
+        for (host, origin, expected) in [
+            (
+                "localhost:8402",
+                "http://localhost:8402",
+                StatusCode::SEE_OTHER,
+            ),
+            (
+                "localhost:8403",
+                "http://localhost:8402",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "localhost:8402",
+                "http://localhost:8403",
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let response = router.clone().oneshot(Request::builder().method("POST").uri("/settings")
+                .header(header::HOST, host).header(header::ORIGIN, origin)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, format!("t2p_csrf={VALID}"))
+                .body(Body::from(format!("_csrf={VALID}&owner_name=Owner&owner_email=owner@example.com&max_source_minutes=120&min_source_seconds=30"))).unwrap()).await.unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        let legacy = admin_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/settings")
+                    .header(header::HOST, "localhost:8402")
+                    .header(header::ORIGIN, "http://localhost:8402")
+                    .header(header::COOKIE, format!("t2p_csrf={VALID}"))
+                    .header("x-csrf-token", VALID)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("_csrf={VALID}&owner_name=Owner&owner_email=owner@example.com&max_source_minutes=120&min_source_seconds=30")))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(legacy.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

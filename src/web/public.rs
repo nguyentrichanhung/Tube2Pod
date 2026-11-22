@@ -40,6 +40,10 @@ pub async fn feed_xml(
         return Err(AppError::NotFound);
     }
 
+    let origin = state
+        .effective_public_base_url()?
+        .ok_or(AppError::NotFound)?;
+    let base = origin.as_str().trim_end_matches('/');
     let rows = episodes::list_feed(&state.pool, show.id).await?;
     let mut feed_episodes = Vec::with_capacity(rows.len());
     for episode in rows {
@@ -49,14 +53,14 @@ pub async fn feed_xml(
         if !tokio::fs::try_exists(audio_path).await.unwrap_or(false) {
             continue;
         }
-        feed_episodes.push(to_feed_episode(&show, &episode, &state.cfg.public_base_url));
+        feed_episodes.push(to_feed_episode(&show, &episode, base));
     }
 
     let last_build = feed_episodes
         .iter()
         .map(|episode| episode.updated_at)
         .fold(show.updated_at, i64::max);
-    let etag = feed::etag(&show, &feed_episodes, last_build);
+    let etag = feed::etag(&show, &feed_episodes, last_build, base);
     if if_none_match(&headers, &etag) {
         let mut response = StatusCode::NOT_MODIFIED.into_response();
         response
@@ -69,12 +73,7 @@ pub async fn feed_xml(
         return Ok(response);
     }
 
-    let xml = feed::render(
-        &show,
-        &feed_episodes,
-        &state.cfg.public_base_url,
-        last_build,
-    )?;
+    let xml = feed::render(&show, &feed_episodes, base, last_build)?;
     Ok((
         [
             (header::CONTENT_TYPE, "application/rss+xml; charset=utf-8"),
@@ -95,13 +94,20 @@ pub async fn audio(
     let show = shows::get_by_feed_token(&state.pool, &token)
         .await?
         .ok_or(AppError::NotFound)?;
-    if !show.feed_enabled {
+    if !show.feed_enabled || !show.feed_complete() {
         return Err(AppError::NotFound);
     }
     let episode = episodes::get(&state.pool, &uuid)
         .await?
         .ok_or(AppError::NotFound)?;
-    if episode.show_id != show.id {
+    if episode.show_id != show.id || episode.published_at.is_none() || episode.audio_path.is_none()
+    {
+        return Err(AppError::NotFound);
+    }
+    if !tokio::fs::try_exists(episode.audio_path.as_ref().unwrap())
+        .await
+        .unwrap_or(false)
+    {
         return Err(AppError::NotFound);
     }
     if file != format!("{uuid}-{version}.mp3") {
@@ -455,6 +461,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn published_audio_only_on_public_listener() {
+        let fx = fixture().await;
+        let ready = add_episode(&fx.state, fx.show_id, "ready").await;
+        install_audio(&fx.state, &ready).await;
+        let path = format!("/audio/{}/{}-1.mp3", fx.token, ready.uuid);
+        assert_eq!(get(&fx.state, &path).await.status(), StatusCode::NOT_FOUND);
+        let current = fx
+            .state
+            .cfg
+            .data_dir
+            .join("audio")
+            .join(format!("{}-2.mp3", fx.uuid));
+        tokio::fs::write(&current, AUDIO).await.unwrap();
+        sqlx::query("UPDATE episodes SET audio_path=?1, audio_version=2 WHERE uuid=?2")
+            .bind(current.to_str().unwrap())
+            .bind(&fx.uuid)
+            .execute(&fx.state.pool)
+            .await
+            .unwrap();
+        let old = format!("/audio/{}/{}-1.mp3", fx.token, fx.uuid);
+        assert_eq!(
+            request(&fx.state, Request::builder().method("HEAD").uri(&old))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            request(
+                &fx.state,
+                Request::builder()
+                    .uri(&old)
+                    .header(header::RANGE, "bytes=0-2")
+            )
+            .await
+            .status(),
+            StatusCode::PARTIAL_CONTENT
+        );
+    }
+
+    #[tokio::test]
     async fn serves_feed_with_guid_audio_url_and_show_explicit() {
         let fx = fixture().await;
         let response = get(&fx.state, &format!("/feed/{}.xml", fx.token)).await;
@@ -600,20 +646,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn feed_drops_previously_published_legacy_episode_purged_on_upgrade() {
+    async fn upgrade_retains_existing_feed_items() {
         let fx = fixture().await;
-        sqlx::query("UPDATE episodes SET stage = 'queued', status = 'queued' WHERE uuid = ?1")
-            .bind(&fx.uuid)
-            .execute(&fx.state.pool)
-            .await
-            .unwrap();
         let before = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
         assert!(before.contains(&fx.uuid));
         crate::cleanup::remove_legacy_pending_episodes(&fx.state.pool, &fx.state.cfg.data_dir)
             .await
             .unwrap();
         let after = text(get(&fx.state, &format!("/feed/{}.xml", fx.token)).await).await;
-        assert!(!after.contains(&fx.uuid));
+        assert!(after.contains(&fx.uuid));
     }
 
     #[tokio::test]

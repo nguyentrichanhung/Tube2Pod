@@ -6,7 +6,8 @@ use url::Url;
 pub struct Config {
     pub bind_admin: String,
     pub bind_public: String,
-    pub public_base_url: String,
+    pub bind_owner: String,
+    pub public_base_url: Option<Url>,
     pub data_dir: PathBuf,
     pub ytdlp_path: String,
     pub ffmpeg_path: String,
@@ -22,21 +23,23 @@ impl Config {
         };
 
         let public_base_url = value("PUBLIC_BASE_URL", None)
-            .context("PUBLIC_BASE_URL is required")?
-            .trim_end_matches('/')
-            .to_string();
-        let parsed = Url::parse(&public_base_url)
-            .with_context(|| format!("invalid PUBLIC_BASE_URL: {public_base_url}"))?;
-        if parsed.scheme() != "https" {
-            bail!("PUBLIC_BASE_URL must use https");
-        }
-        if parsed.path() != "/" && !parsed.path().is_empty() {
-            bail!("PUBLIC_BASE_URL must not contain a path");
-        }
+            .map(|value| {
+                let parsed = Url::parse(&value)
+                    .with_context(|| format!("invalid PUBLIC_BASE_URL: {value}"))?;
+                if parsed.scheme() != "https" {
+                    bail!("PUBLIC_BASE_URL must use https");
+                }
+                if parsed.path() != "/" || parsed.query().is_some() || parsed.fragment().is_some() {
+                    bail!("PUBLIC_BASE_URL must not contain a path, query or fragment");
+                }
+                Ok(parsed)
+            })
+            .transpose()?;
 
         Ok(Self {
             bind_admin: value("BIND_ADMIN", Some("127.0.0.1:8400")).unwrap(),
             bind_public: value("BIND_PUBLIC", Some("127.0.0.1:8401")).unwrap(),
+            bind_owner: value("BIND_OWNER", Some("127.0.0.1:8402")).unwrap(),
             public_base_url,
             data_dir: PathBuf::from(value("DATA_DIR", Some("./data")).unwrap()),
             ytdlp_path: value("YTDLP_PATH", Some("yt-dlp")).unwrap(),
@@ -70,7 +73,10 @@ mod tests {
             ("DATA_DIR", "/tmp/tube2pod-test"),
         ]))
         .unwrap();
-        assert_eq!(cfg.public_base_url, "https://pod.example.ts.net:8443");
+        assert_eq!(
+            cfg.public_base_url.unwrap().as_str(),
+            "https://pod.example.ts.net:8443/"
+        );
 
         let err = Config::from_lookup(env(&[(
             "PUBLIC_BASE_URL",
@@ -78,6 +84,13 @@ mod tests {
         )]))
         .unwrap_err();
         assert!(err.to_string().contains("PUBLIC_BASE_URL"));
+    }
+
+    #[test]
+    fn boots_without_public_origin() {
+        let cfg = Config::from_lookup(env(&[])).unwrap();
+        assert!(cfg.public_base_url.is_none());
+        assert_eq!(cfg.bind_owner, "127.0.0.1:8402");
     }
 
     #[test]

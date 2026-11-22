@@ -28,6 +28,8 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = Arc::new(Config::from_lookup(|key| env::var(key).ok())?);
     let admin_addr = parse_loopback_bind("BIND_ADMIN", &cfg.bind_admin)?;
+    let owner_addr = parse_loopback_bind("BIND_OWNER", &cfg.bind_owner)?;
+    let owner_origin = url::Url::parse(&format!("http://localhost:{}", owner_addr.port()))?;
     let public_addr = parse_loopback_bind("BIND_PUBLIC", &cfg.bind_public)?;
     for dir in ["tmp", "audio", "transcripts", "shows"] {
         tokio::fs::create_dir_all(cfg.data_dir.join(dir)).await?;
@@ -59,12 +61,20 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("bind public listener")?;
 
-    tracing::info!(%admin_addr, %public_addr, "tube2pod listening");
+    let owner_listener = tokio::net::TcpListener::bind(owner_addr)
+        .await
+        .context("bind owner listener")?;
+    tracing::info!(%admin_addr, %public_addr, %owner_addr, "tube2pod listening");
     let admin = axum::serve(admin_listener, web::admin_router(state.clone()))
         .with_graceful_shutdown(shutdown_signal());
+    let owner = axum::serve(
+        owner_listener,
+        web::owner_router(state.clone(), owner_origin),
+    )
+    .with_graceful_shutdown(shutdown_signal());
     let public = axum::serve(public_listener, web::public::public_router(state))
         .with_graceful_shutdown(shutdown_signal());
-    tokio::try_join!(admin, public)?;
+    tokio::try_join!(admin, public, owner)?;
     Ok(())
 }
 

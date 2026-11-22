@@ -262,7 +262,16 @@ pub async fn detail(
         .collect();
     let episode_count = rows.len();
     let pagination = Pagination::single(episode_count as i64);
-    let feed_url = format!("{}/feed/{}.xml", state.cfg.public_base_url, show.feed_token);
+    let feed_url = state
+        .effective_public_base_url()?
+        .map(|url| {
+            format!(
+                "{}/feed/{}.xml",
+                url.as_str().trim_end_matches('/'),
+                show.feed_token
+            )
+        })
+        .unwrap_or_default();
     let cover_url = format!("/shows/{}/cover", show.id);
     let checklist = feed_checklist(&show);
     let can_enable = checklist.iter().all(|item| item.ok);

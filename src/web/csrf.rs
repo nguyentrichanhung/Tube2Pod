@@ -11,12 +11,15 @@ use url::Url;
 pub const CSRF_COOKIE: &str = "t2p_csrf";
 
 #[derive(Clone, Debug)]
-pub struct CsrfToken(pub String);
+pub struct CsrfToken(pub String, pub Option<Url>);
 
 pub async fn csrf_middleware(mut request: Request, next: Next) -> Response {
     let existing = cookie_value(request.headers(), CSRF_COOKIE);
     let token = existing.clone().unwrap_or_else(new_token);
-    request.extensions_mut().insert(CsrfToken(token.clone()));
+    let owner_origin = request.extensions().get::<Url>().cloned();
+    request
+        .extensions_mut()
+        .insert(CsrfToken(token.clone(), owner_origin));
     let mut response = next.run(request).await;
     if existing.is_none() {
         let value = format!("{CSRF_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Strict");
@@ -68,10 +71,12 @@ pub fn verify(token: &CsrfToken, headers: &HeaderMap, form_token: &str) -> AppRe
         return Err(AppError::Forbidden);
     }
     if let Some(origin) = headers.get(header::ORIGIN) {
-        let matches = origin
-            .to_str()
-            .ok()
-            .is_some_and(|origin| origin_matches_host(origin, headers));
+        let matches = origin.to_str().ok().is_some_and(|origin| {
+            token.1.as_ref().map_or_else(
+                || origin_matches_host(origin, headers),
+                |expected| origin == expected.origin().ascii_serialization(),
+            )
+        });
         if !matches {
             return Err(AppError::Forbidden);
         }
@@ -120,7 +125,7 @@ mod tests {
     const VALID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     fn token() -> CsrfToken {
-        CsrfToken(VALID.into())
+        CsrfToken(VALID.into(), None)
     }
 
     fn headers_with(origin: Option<&str>, host: Option<&str>) -> HeaderMap {
@@ -160,8 +165,13 @@ mod tests {
 
     #[test]
     fn rejects_empty_token_or_empty_provided_token() {
-        assert!(verify(&CsrfToken(String::new()), &HeaderMap::new(), "").is_err());
-        assert!(verify(&CsrfToken(String::new()), &headers_with(None, None), "").is_err());
+        assert!(verify(&CsrfToken(String::new(), None), &HeaderMap::new(), "").is_err());
+        assert!(verify(
+            &CsrfToken(String::new(), None),
+            &headers_with(None, None),
+            ""
+        )
+        .is_err());
         assert!(verify(&token(), &HeaderMap::new(), "").is_err());
     }
 

@@ -167,14 +167,18 @@ pub fn rfc2822(ts: i64) -> String {
         .to_rfc2822()
 }
 
-pub fn etag(show: &Show, episodes: &[FeedEpisode], last_build: i64) -> String {
+pub fn etag(show: &Show, episodes: &[FeedEpisode], last_build: i64, origin: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    origin.hash(&mut hasher);
     let latest = episodes.iter().map(|ep| ep.updated_at).max().unwrap_or(0);
     format!(
-        "\"{:x}-{:x}-{:x}-{:x}\"",
+        "\"{:x}-{:x}-{:x}-{:x}-{:x}\"",
         last_build,
         episodes.len(),
         latest,
-        show.cover_version
+        show.cover_version,
+        hasher.finish()
     )
 }
 
@@ -256,10 +260,19 @@ mod tests {
 
     #[test]
     fn etag_changes_when_episode_changes() {
-        let a = etag(&show(), &[episode()], 1_700_000_100);
+        let a = etag(&show(), &[episode()], 1_700_000_100, "https://pod.example");
         let mut changed = episode();
         changed.updated_at += 1;
-        let b = etag(&show(), &[changed], 1_700_000_100);
+        let b = etag(&show(), &[changed], 1_700_000_100, "https://pod.example");
         assert_ne!(a, b);
+        assert_ne!(
+            a,
+            etag(
+                &show(),
+                &[episode()],
+                1_700_000_100,
+                "https://other.example"
+            )
+        );
     }
 }
