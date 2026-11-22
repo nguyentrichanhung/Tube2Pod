@@ -97,13 +97,16 @@ async fn show_json(state: &AppState, show: Show) -> AppResult<Value> {
             .bind(show.id)
             .fetch_one(&state.pool)
             .await?;
-    let public = state.cfg.public_base_url.as_ref().map(|base| {
-        format!(
-            "{}/feed/{}.xml",
-            base.origin().ascii_serialization(),
-            show.feed_token
-        )
-    });
+    let public = state
+        .effective_public_base_url()?
+        .filter(|_| show.feed_enabled && show.feed_complete())
+        .map(|base| {
+            format!(
+                "{}/feed/{}.xml",
+                base.origin().ascii_serialization(),
+                show.feed_token
+            )
+        });
     Ok(
         json!({"id":show.id,"title":show.title,"description":show.description,"author":show.author,"category":show.category,"language":show.language,"feed_enabled":show.feed_enabled,"public_feed_url":public,"cover_path":show.cover_path.as_ref().map(|_| format!("/v1/shows/{}/cover",show.id)),"ready_count":count}),
     )
@@ -317,6 +320,43 @@ mod tests {
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(body.to_owned()))
             .unwrap()
+    }
+    #[tokio::test]
+    async fn share_url_requires_enabled_complete_feed() {
+        let (dir, mut state, _) = fixture().await;
+        state.app.cfg = Arc::new(
+            crate::config::Config::from_lookup(|key| match key {
+                "DATA_DIR" => Some(dir.path().display().to_string()),
+                "PUBLIC_BASE_URL" => Some("https://feeds.example".into()),
+                _ => None,
+            })
+            .unwrap(),
+        );
+        let mut show = shows::create(
+            &state.app.pool,
+            shows::NewShow {
+                title: "Show".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(show_json(&state.app, show.clone()).await.unwrap()["public_feed_url"].is_null());
+        show.feed_enabled = true;
+        assert!(show_json(&state.app, show.clone()).await.unwrap()["public_feed_url"].is_null());
+        show.description = "Description".into();
+        show.category = "Technology".into();
+        show.owner_name = "Owner".into();
+        show.owner_email = "owner@example.com".into();
+        show.cover_path = Some("cover.jpg".into());
+        assert!(
+            show_json(&state.app, show.clone()).await.unwrap()["public_feed_url"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://feeds.example/feed/")
+        );
+        show.feed_enabled = false;
+        assert!(show_json(&state.app, show).await.unwrap()["public_feed_url"].is_null());
     }
     #[tokio::test]
     async fn pair_route_is_lan_only() {

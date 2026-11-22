@@ -131,18 +131,20 @@ class ConnectionController extends ChangeNotifier {
       'server_id': serverId,
       'server_key': serverKey,
       'lan_uri': lanUri.toString(),
+      'admin_uri': adminUri,
       'credential': credential,
     }),
   );
 
-  Future<void> _check() async {
+  Future<void> _check({bool remote = false}) async {
     final data = await request('/v1/connection') as Map<String, dynamic>;
     if (data['server_id'] != serverId) {
       throw const FormatException('Danh tính máy chủ không khớp');
     }
     adminUri = data['admin_uri'] as String?;
     publicOrigin = data['public_origin'] as String?;
-    status = ConnectionStatus.lan;
+    await _save();
+    status = remote ? ConnectionStatus.remote : ConnectionStatus.lan;
     notifyListeners();
   }
 
@@ -154,6 +156,7 @@ class ConnectionController extends ChangeNotifier {
       serverId = data['server_id'] as String;
       serverKey = data['server_key'] as String;
       lanUri = Uri.parse(data['lan_uri'] as String);
+      adminUri = data['admin_uri'] as String?;
       credential = data['credential'] as String;
     }
     final candidates = <Uri>[];
@@ -220,12 +223,35 @@ class ConnectionController extends ChangeNotifier {
           notifyListeners();
           rethrow;
         }
+        if (e.code != 'transportError') rethrow;
       } on FormatException {
         status = ConnectionStatus.disconnected;
         notifyListeners();
         rethrow;
       } catch (_) {
         if (status == ConnectionStatus.revoked) return;
+        rethrow;
+      }
+    }
+    final remote = Uri.tryParse(adminUri ?? '');
+    if (remote != null && remote.scheme == 'https' && remote.host.isNotEmpty) {
+      currentUri = remote;
+      try {
+        await _check(remote: true);
+        return;
+      } on PlatformException catch (e) {
+        if (e.code != 'transportError') {
+          status = ConnectionStatus.disconnected;
+          notifyListeners();
+          rethrow;
+        }
+      } on FormatException {
+        status = ConnectionStatus.disconnected;
+        notifyListeners();
+        rethrow;
+      } catch (_) {
+        if (status == ConnectionStatus.revoked) return;
+        rethrow;
       }
     }
     status = ConnectionStatus.disconnected;

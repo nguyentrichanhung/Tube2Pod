@@ -37,6 +37,9 @@ class MemoryStorage extends FlutterSecureStorage {
 class FakeTransport extends HomeTransport {
   String returnedId = 'home';
   bool mismatch = false;
+  String? adminUri;
+  bool lanUnavailable = false;
+  bool remoteMismatch = false;
   final paths = <String>[];
   @override
   Future<HomeResponse> request(
@@ -44,15 +47,60 @@ class FakeTransport extends HomeTransport {
     HomeRequest request,
   ) async {
     paths.add(endpoint.uri.toString());
+    if (remoteMismatch && endpoint.uri.host == 'remote.example') {
+      throw PlatformException(code: 'identityMismatch');
+    }
+    if (lanUnavailable && endpoint.uri.host != 'remote.example') {
+      throw PlatformException(code: 'transportError');
+    }
     if (mismatch) throw PlatformException(code: 'identityMismatch');
     final body = endpoint.uri.path == '/v1/pair'
         ? {'server_id': returnedId, 'credential': 'secret'}
-        : {'server_id': returnedId, 'admin_uri': null, 'public_origin': null};
+        : {
+            'server_id': returnedId,
+            'admin_uri': adminUri,
+            'public_origin': null,
+          };
     return HomeResponse(200, Uint8List.fromList(utf8.encode(jsonEncode(body))));
   }
 }
 
 void main() {
+  test(
+    'saves a verified remote address and uses it only when LAN is unavailable',
+    () async {
+      final transport = FakeTransport()..adminUri = 'https://remote.example';
+      final storage = MemoryStorage();
+      final first = ConnectionController(
+        transport: transport,
+        storage: storage,
+      );
+      await first.pair(
+        PairEnvelopeV1(
+          'home',
+          Uri.parse('https://192.168.1.5:1234'),
+          'AQ',
+          'ticket',
+        ),
+      );
+      expect(storage.saved, contains('remote.example'));
+      transport.lanUnavailable = true;
+      final restored = ConnectionController(
+        transport: transport,
+        storage: storage,
+        discover: () async => [],
+      );
+      await restored.reconnect();
+      expect(restored.status, ConnectionStatus.remote);
+      expect(restored.currentUri!.host, 'remote.example');
+      transport.remoteMismatch = true;
+      await expectLater(
+        restored.reconnect(),
+        throwsA(isA<PlatformException>()),
+      );
+      expect(restored.status, ConnectionStatus.disconnected);
+    },
+  );
   test('rejects expired or invalid pairing envelopes', () {
     expect(
       () => PairEnvelopeV1.parse(

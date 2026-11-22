@@ -116,7 +116,8 @@ class _HomeState extends State<Home> {
   }
 
   Future<void> refresh() async {
-    if (connection.status != ConnectionStatus.lan) {
+    if (connection.status != ConnectionStatus.lan &&
+        connection.status != ConnectionStatus.remote) {
       await loadPublic();
       return;
     }
