@@ -2,9 +2,17 @@ import 'package:xml/xml.dart';
 
 List<Map<String, dynamic>> parsePublicFeed(String source, dynamic show) {
   final xml = XmlDocument.parse(source);
-  final image = xml
-      .findAllElements('channel')
-      .first
+  final channel = xml.findAllElements('channel').firstOrNull;
+  final title = channel?.findElements('title').firstOrNull?.innerText.trim();
+  if (channel == null || title == null || title.isEmpty) {
+    throw const FormatException('Feed RSS không hợp lệ');
+  }
+  if (show['title'] == null || show['title'] == '') {
+    show['title'] = title;
+    show['description'] =
+        channel.findElements('description').firstOrNull?.innerText ?? '';
+  }
+  final image = channel
       .findElements('image')
       .firstOrNull
       ?.findElements('url')

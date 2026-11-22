@@ -75,6 +75,24 @@ class _HomeState extends State<Home> {
   int tab = 0;
   List<dynamic> shows = [];
   List<Map<String, dynamic>> episodes = [];
+  List<Map<String, dynamic>> subscriptions = [];
+  List<Map<String, dynamic>> subscriptionEpisodes = [];
+  int subscriptionVersion = 0;
+  List<Map<String, dynamic>> get visibleSubscriptions => subscriptions
+      .where(
+        (subscription) => !shows.any(
+          (show) => show['public_feed_url'] == subscription['public_feed_url'],
+        ),
+      )
+      .toList();
+  List<Map<String, dynamic>> get visibleSubscriptionEpisodes =>
+      subscriptionEpisodes
+          .where(
+            (episode) => visibleSubscriptions.any(
+              (show) => show['id'] == episode['show_id'],
+            ),
+          )
+          .toList();
   Map<String, dynamic>? selected;
   bool playing = false;
   double position = 0, duration = 0;
@@ -83,6 +101,7 @@ class _HomeState extends State<Home> {
   void initState() {
     super.initState();
     connection.addListener(changed);
+    loadSubscriptions();
     connection.reconnect().then((_) => refresh()).catchError((Object e) {
       message(e);
       loadPublic();
@@ -183,6 +202,77 @@ class _HomeState extends State<Home> {
     }
   }
 
+  Future<void> loadSubscriptions() async {
+    final version = subscriptionVersion;
+    final prefs = await SharedPreferences.getInstance();
+    final urls = prefs.getStringList('subscribed_feed_urls') ?? [];
+    final found = <Map<String, dynamic>>[];
+    final all = <Map<String, dynamic>>[];
+    for (final url in urls) {
+      final show = <String, dynamic>{
+        'id': url,
+        'title': '',
+        'feed_enabled': true,
+        'public_feed_url': url,
+      };
+      try {
+        all.addAll(await readFeed(url, show));
+      } catch (_) {
+        show['title'] = 'Không tải được feed';
+      }
+      found.add(show);
+    }
+    if (mounted) {
+      setState(() {
+        if (version == subscriptionVersion) {
+          subscriptions = found;
+          subscriptionEpisodes = all;
+        } else {
+          final current = prefs.getStringList('subscribed_feed_urls') ?? [];
+          for (final show in found) {
+            if (current.contains(show['id']) &&
+                !subscriptions.any((s) => s['id'] == show['id'])) {
+              subscriptions.add(show);
+              subscriptionEpisodes.addAll(
+                all.where((e) => e['show_id'] == show['id']),
+              );
+            }
+          }
+        }
+      });
+    }
+  }
+
+  Future<void> subscribe(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty) {
+      throw const FormatException('Nhập link RSS HTTPS hợp lệ');
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final urls = prefs.getStringList('subscribed_feed_urls') ?? [];
+    if (urls.contains(url)) {
+      throw const FormatException('Show đã được thêm');
+    }
+    final show = <String, dynamic>{
+      'id': url,
+      'title': '',
+      'feed_enabled': true,
+      'public_feed_url': url,
+    };
+    final items = await readFeed(url, show);
+    await prefs.setStringList('subscribed_feed_urls', [...urls, url]);
+    subscriptionVersion++;
+    if (mounted) {
+      setState(() {
+        subscriptions.add(show);
+        subscriptionEpisodes.addAll(items);
+      });
+    }
+  }
+
   void message(Object e) {
     if (mounted) {
       ScaffoldMessenger.of(context)
@@ -240,15 +330,24 @@ class _HomeState extends State<Home> {
     if (uri.scheme != 'https') throw const FormatException('Feed cần HTTPS');
     final client = HttpClient();
     try {
-      final request = await client.getUrl(uri);
-      request.followRedirects = false;
-      final response = await request.close();
-      if (response.statusCode != 200) {
-        throw StateError('HTTP ${response.statusCode}');
-      }
-      return parsePublicFeed(await utf8.decoder.bind(response).join(), show);
+      return await (() async {
+        final request = await client.getUrl(uri);
+        request.followRedirects = false;
+        final response = await request.close();
+        if (response.statusCode != 200) {
+          throw StateError('HTTP ${response.statusCode}');
+        }
+        try {
+          return parsePublicFeed(
+            await utf8.decoder.bind(response).join(),
+            show,
+          );
+        } on FormatException {
+          throw const FormatException('Feed RSS không hợp lệ');
+        }
+      })().timeout(const Duration(seconds: 10));
     } finally {
-      client.close();
+      client.close(force: true);
     }
   }
 
@@ -323,17 +422,32 @@ class _HomeState extends State<Home> {
                     'Nghe podcast',
                     style: Theme.of(context).textTheme.headlineMedium,
                   ),
-                  if (episodes.isEmpty)
+                  if (episodes.isEmpty && visibleSubscriptionEpisodes.isEmpty)
                     const Text('Chưa có tập được phát hành'),
                   ...episodes.map(episodeRow),
+                  ...visibleSubscriptionEpisodes.map(episodeRow),
                 ],
                 if (tab == 1) ...[
                   Text(
                     'Show',
                     style: Theme.of(context).textTheme.headlineMedium,
                   ),
-                  const Text('Theo dõi các show từ máy chủ'),
-                  ShowsGrid(shows: shows, cover: cover, onOpen: showEpisodes),
+                  const Text('Theo dõi các show'),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton(
+                      onPressed: () => showDialog<void>(
+                        context: context,
+                        builder: (_) => AddRssDialog(subscribe: subscribe),
+                      ),
+                      child: const Text('Dán link RSS'),
+                    ),
+                  ),
+                  ShowsGrid(
+                    shows: [...shows, ...visibleSubscriptions],
+                    cover: cover,
+                    onOpen: showEpisodes,
+                  ),
                 ],
                 if (tab == 2) ...[
                   Text(
@@ -462,9 +576,10 @@ class _HomeState extends State<Home> {
               : const SizedBox(width: 64, height: 64, child: Icon(Icons.album)),
         );
   Widget selectedCover() {
-    final show = shows
-        .where((s) => s['id'] == selected?['show_id'])
-        .firstOrNull;
+    final show = [
+      ...shows,
+      ...subscriptions,
+    ].where((s) => s['id'] == selected?['show_id']).firstOrNull;
     return show == null ? const Icon(Icons.album) : cover(show);
   }
 
@@ -484,7 +599,10 @@ class _HomeState extends State<Home> {
   }
 
   Future<void> showEpisodes(dynamic show) async {
-    var items = episodes.where((e) => e['show_id'] == show['id']).toList();
+    var items = [
+      ...episodes,
+      ...subscriptionEpisodes,
+    ].where((e) => e['show_id'] == show['id']).toList();
     if (show['feed_enabled'] == true && show['public_feed_url'] != null) {
       try {
         items = await readFeed(show['public_feed_url'] as String, show);
@@ -492,7 +610,12 @@ class _HomeState extends State<Home> {
     }
     final prefs = await SharedPreferences.getInstance();
     final key = '${connection.serverId}:${show['id']}';
-    var following = (prefs.getStringList('following') ?? []).contains(key);
+    final subscriptionUrl = show['id'] == show['public_feed_url']
+        ? show['public_feed_url'] as String
+        : null;
+    var following =
+        subscriptionUrl != null ||
+        (prefs.getStringList('following') ?? []).contains(key);
     if (!mounted) return;
     Navigator.push(
       context,
@@ -505,14 +628,41 @@ class _HomeState extends State<Home> {
                 Text(show['description']?.toString() ?? ''),
                 TextButton(
                   onPressed: () async {
-                    final followed = prefs.getStringList('following') ?? [];
-                    if (following) {
-                      followed.remove(key);
+                    if (subscriptionUrl != null) {
+                      if (following) {
+                        final urls =
+                            prefs.getStringList('subscribed_feed_urls') ?? [];
+                        urls.remove(subscriptionUrl);
+                        await prefs.setStringList('subscribed_feed_urls', urls);
+                        subscriptionVersion++;
+                        if (mounted) {
+                          setState(() {
+                            subscriptions.removeWhere(
+                              (s) => s['id'] == subscriptionUrl,
+                            );
+                            subscriptionEpisodes.removeWhere(
+                              (e) => e['show_id'] == subscriptionUrl,
+                            );
+                          });
+                        }
+                      } else {
+                        try {
+                          await subscribe(subscriptionUrl);
+                        } catch (e) {
+                          message(e);
+                          return;
+                        }
+                      }
                     } else {
-                      followed.add(key);
+                      final followed = prefs.getStringList('following') ?? [];
+                      if (following) {
+                        followed.remove(key);
+                      } else {
+                        followed.add(key);
+                      }
+                      await prefs.setStringList('following', followed);
                     }
-                    await prefs.setStringList('following', followed);
-                    update(() => following = !following);
+                    if (context.mounted) update(() => following = !following);
                   },
                   child: Text(following ? 'Bỏ theo dõi' : 'Theo dõi'),
                 ),
