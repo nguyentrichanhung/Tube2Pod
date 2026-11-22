@@ -97,6 +97,7 @@ pub fn owner_connection_router(
     let routes = Router::new()
         .route("/connection", get(connection::index))
         .route("/connection/pair-ticket", post(connection::ticket))
+        .route("/connection/remote", post(connection::remote))
         .route(
             "/connection/pair-ticket/status",
             post(connection::ticket_status),
@@ -156,6 +157,7 @@ mod tests {
             pool: crate::db::test_pool().await,
             cfg: Arc::new(cfg),
             notify: Arc::new(Notify::new()),
+            relay: Default::default(),
         }
     }
 

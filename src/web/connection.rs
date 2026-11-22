@@ -26,6 +26,8 @@ struct Device {
 struct ConnectionTemplate {
     csrf: String,
     devices: Vec<Device>,
+    remote_enabled: bool,
+    remote_available: bool,
 }
 
 pub async fn index(
@@ -40,9 +42,27 @@ pub async fn index(
         ConnectionTemplate {
             csrf: token.0,
             devices,
+            remote_enabled: state.relay.enabled(),
+            remote_available: state.relay.available(),
         }
         .render()?,
     ))
+}
+
+#[derive(Deserialize)]
+pub struct RemoteForm {
+    _csrf: String,
+    enabled: bool,
+}
+pub async fn remote(
+    State(state): State<AppState>,
+    Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
+    Form(form): Form<RemoteForm>,
+) -> AppResult<axum::response::Redirect> {
+    csrf::verify(&token, &headers, &form._csrf)?;
+    state.relay.set_enabled(form.enabled).await?;
+    Ok(axum::response::Redirect::to("/connection"))
 }
 
 #[derive(Serialize)]

@@ -14,7 +14,15 @@
     </div>
     {% else %}<p class="empty-state">Chưa có thiết bị nào được ghép.</p>{% endfor %}
   </section>
-  <section class="card stack"><h2>Truy cập ngoài nhà</h2><p>Chưa khả dụng</p></section>
+  <section class="card stack"><h2>Truy cập ngoài nhà</h2>
+    {% if remote_available %}<p>{% if remote_enabled %}Đang bật{% else %}Đang tắt{% endif %}</p>
+    <form method="post" action="/connection/remote">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <input type="hidden" name="enabled" value="{% if remote_enabled %}false{% else %}true{% endif %}">
+      <button type="submit">{% if remote_enabled %}Tắt truy cập ngoài nhà{% else %}Bật truy cập ngoài nhà{% endif %}</button>
+    </form>
+    {% else %}<p>Truy cập ngoài nhà chưa khả dụng. Bạn vẫn có thể kết nối trong mạng nhà.</p>{% endif %}
+  </section>
 </div>
 <script src="/assets/qrcode.js"></script><script src="/assets/connection.js" defer></script>
 {% endblock %}

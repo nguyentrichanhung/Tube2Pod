@@ -366,6 +366,7 @@ mod tests {
             pool,
             cfg: Arc::new(cfg),
             notify: Arc::new(Notify::new()),
+            relay: Default::default(),
         };
         install_audio(&state, &episode).await;
         episodes::fixture_finish(

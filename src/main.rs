@@ -9,6 +9,7 @@ mod health;
 mod lock;
 mod mobile_api;
 mod models;
+mod relay;
 mod services;
 mod state;
 mod web;
@@ -66,10 +67,27 @@ async fn main() -> anyhow::Result<()> {
     let tls =
         axum_server::tls_rustls::RustlsConfig::from_pem_file(&identity.cert, &identity.key).await?;
 
+    let remote_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    remote_listener.set_nonblocking(true)?;
+    let remote_addr = remote_listener.local_addr()?;
+    let relay_endpoint = env::var("TUBE2POD_RELAY_ENDPOINT")
+        .ok()
+        .map(|s| url::Url::parse(&s))
+        .transpose()?;
+    let relay = Arc::new(
+        relay::client::Runtime::load(
+            relay_endpoint,
+            cfg.data_dir.join("relay.json"),
+            public_addr,
+            remote_addr,
+        )
+        .await?,
+    );
     let state = AppState {
         pool,
         cfg: cfg.clone(),
         notify,
+        relay,
     };
     let admin_listener = tokio::net::TcpListener::bind(admin_addr)
         .await
@@ -94,8 +112,19 @@ async fn main() -> anyhow::Result<()> {
     let mobile_state = mobile_api::MobileState {
         app: state.clone(),
         server_id: Arc::new(identity.server_id),
-        admin_uri: None,
     };
+    let remote_handle = axum_server::Handle::new();
+    let remote_shutdown = remote_handle.clone();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        remote_shutdown.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+    });
+    let remote = axum_server::from_tcp_rustls(remote_listener, tls.clone())?
+        .handle(remote_handle)
+        .serve(
+            mobile_api::router(mobile_state.clone(), mobile_api::RouteKind::Relay)
+                .into_make_service(),
+        );
     let lan_handle = axum_server::Handle::new();
     let shutdown_handle = lan_handle.clone();
     tokio::spawn(async move {
@@ -105,7 +134,7 @@ async fn main() -> anyhow::Result<()> {
     let lan = axum_server::bind_rustls(lan_addr, tls)
         .handle(lan_handle)
         .serve(mobile_api::router(mobile_state, mobile_api::RouteKind::Lan).into_make_service());
-    tokio::try_join!(admin, public, owner, lan)?;
+    tokio::try_join!(admin, public, owner, lan, remote)?;
     Ok(())
 }
 

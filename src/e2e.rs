@@ -87,6 +87,7 @@ printf '%s\n' "$out"
         pool: pool.clone(),
         cfg: cfg.clone(),
         notify: Arc::new(Notify::new()),
+        relay: Default::default(),
     };
     let csrf = "a".repeat(64);
     let body = url::form_urlencoded::Serializer::new(String::new())

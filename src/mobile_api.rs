@@ -22,7 +22,6 @@ use std::sync::Arc;
 pub struct MobileState {
     pub app: AppState,
     pub server_id: Arc<String>,
-    pub admin_uri: Option<String>,
 }
 #[derive(Clone, Copy)]
 pub enum RouteKind {
@@ -88,7 +87,7 @@ async fn pair(State(state): State<MobileState>, Json(req): Json<Pair>) -> AppRes
 }
 async fn connection(State(state): State<MobileState>) -> Json<Value> {
     Json(
-        json!({"server_id":state.server_id.as_str(), "admin_uri":state.admin_uri, "public_origin":state.app.cfg.public_base_url.as_ref().map(|u| u.origin().ascii_serialization())}),
+        json!({"server_id":state.server_id.as_str(), "admin_uri":state.app.relay.enabled().then(|| state.app.relay.registration()).flatten().map(|r| r.admin_uri), "public_origin":state.app.effective_public_base_url().ok().flatten().map(|u| u.origin().ascii_serialization())}),
     )
 }
 async fn show_json(state: &AppState, show: Show) -> AppResult<Value> {
@@ -297,6 +296,7 @@ mod tests {
             pool: crate::db::test_pool().await,
             cfg: Arc::new(cfg),
             notify: Arc::new(tokio::sync::Notify::new()),
+            relay: Default::default(),
         };
         let (ticket, _) = devices::issue(&app.pool, 0).await.unwrap();
         let grant = devices::redeem(&app.pool, &ticket, "phone", 1)
@@ -307,7 +307,6 @@ mod tests {
             MobileState {
                 app,
                 server_id: Arc::new("server".into()),
-                admin_uri: None,
             },
             grant.credential,
         )
