@@ -43,9 +43,19 @@ void main() {
     expect((await player.position())!['position'] as int, greaterThanOrEqualTo(duration ~/ 2));
     await player.close();
   }, skip: enclosure.isEmpty);
+  testWidgets('rejects incorrect media ranges and truncated bodies', (tester) async {
+    for (final path in ['/audio-bad-range', '/audio-short']) {
+      final player = HomePlayer();
+      await expectLater(
+        player.open(HomeMediaSource.paired(endpoint(port, path), headers: const {'Authorization': 'fixture-media-secret'})),
+        throwsA(isA<PlatformException>()),
+      );
+      await player.close();
+    }
+  });
   testWidgets('paired MP3 plays and seeks through verified range requests', (tester) async {
     final player = HomePlayer();
-    await player.open(HomeMediaSource.paired(endpoint(port, '/audio')));
+    await player.open(HomeMediaSource.paired(endpoint(port, '/audio'), headers: {'Authorization': 'fixture-media-secret'}));
     final initial = (await player.position())!;
     expect(initial['playing'], true);
     final duration = initial['duration'] as int;
@@ -55,5 +65,9 @@ void main() {
     final after = (await player.position())!;
     expect(after['position'] as int, greaterThanOrEqualTo(duration ~/ 2));
     await player.close();
+    final received = await transport.request(endpoint(port, '/media-requests'), const HomeRequest());
+    final requests = jsonDecode(utf8.decode(received.body)) as List;
+    expect(requests.any((entry) => entry[0] == 'HEAD' && entry[1] == 'fixture-media-secret'), isTrue);
+    expect(requests.any((entry) => entry[0] == 'GET' && entry[1] == 'fixture-media-secret'), isTrue);
   });
 }

@@ -4,21 +4,25 @@ import 'package:mobile/platform/home_transport.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  test('request passes endpoint identity and credential to native transport', () async {
+  test('API and paired player normalize QR key and pass credentials', () async {
     const channel = MethodChannel('tube2pod/home_transport');
+    final methods = <String>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
-      expect(call.method, 'request');
+      methods.add(call.method);
       final args = call.arguments as Map;
-      expect(args['serverKey'], 'spki');
-      expect(args['serverId'], 'home');
+      expect(args['serverKey'], '+/8=');
       expect(args['headers'], {'Authorization': 'credential'});
-      return {'status': 200, 'body': Uint8List.fromList([1])};
+      if (call.method == 'request') {
+        expect(args['serverId'], 'home');
+        return {'status': 200, 'body': Uint8List.fromList([1])};
+      }
+      return null;
     });
-    final response = await HomeTransport().request(
-      HomeEndpoint(uri: Uri.parse('https://home/'), serverId: 'home', serverKey: 'spki'),
-      const HomeRequest(headers: {'Authorization': 'credential'}),
-    );
+    final endpoint = HomeEndpoint(uri: Uri.parse('https://home/'), serverId: 'home', serverKey: '-_8');
+    final response = await HomeTransport().request(endpoint, const HomeRequest(headers: {'Authorization': 'credential'}));
+    await HomePlayer().open(HomeMediaSource.paired(endpoint, headers: const {'Authorization': 'credential'}));
     expect(response.status, 200);
     expect(response.body, [1]);
+    expect(methods, ['request', 'open']);
   });
 }

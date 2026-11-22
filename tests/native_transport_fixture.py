@@ -13,9 +13,15 @@ import threading
 
 AUDIO = (pathlib.Path(__file__).parent / 'fixtures/audio_sine.mp3').read_bytes()
 received = []
+media_requests = []
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_HEAD(self):
+        if self.path.startswith('/audio'):
+            media_requests.append(['HEAD', self.headers.get('Authorization')])
+            if self.headers.get('Authorization') != 'fixture-media-secret':
+                self.send_error(401)
+                return
         self.send_response(200)
         self.send_header('Content-Length', str(len(AUDIO)))
         self.send_header('Accept-Ranges', 'bytes')
@@ -25,12 +31,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == '/received':
             data = json.dumps(received).encode()
             self.send_response(200)
-        elif self.path == '/audio':
+        elif self.path == '/media-requests':
+            data = json.dumps(media_requests).encode()
+            self.send_response(200)
+        elif self.path.startswith('/audio'):
+            media_requests.append(['GET', self.headers.get('Authorization')])
+            if self.headers.get('Authorization') != 'fixture-media-secret':
+                self.send_error(401)
+                return
             first, last = self.headers['Range'].removeprefix('bytes=').split('-')
-            first, last = int(first), int(last)
+            first, last = int(first), min(int(last), len(AUDIO) - 1)
             data = AUDIO[first:last + 1]
             self.send_response(206)
-            self.send_header('Content-Range', f'bytes {first}-{last}/{len(AUDIO)}')
+            if self.path == '/audio-short':
+                data = data[:-1]
+            reported_first = first + 1 if self.path == '/audio-bad-range' else first
+            self.send_header('Content-Range', f'bytes {reported_first}-{last}/{len(AUDIO)}')
         else:
             data = b'fixture api'
             self.send_response(200)
@@ -125,7 +141,7 @@ def main():
         threading.Thread(target=relay, args=(home, phone), daemon=True).start()
         for _ in range(4):
             threading.Thread(target=home_connector, args=(home.getsockname()[1], server.server_port), daemon=True).start()
-        print(json.dumps({'port': server.server_port, 'relay': phone.getsockname()[1], 'pin': base64.b64encode(spki).decode()}), flush=True)
+        print(json.dumps({'port': server.server_port, 'relay': phone.getsockname()[1], 'pin': base64.urlsafe_b64encode(spki).decode().rstrip('=')}), flush=True)
         threading.Event().wait()
 
 if __name__ == '__main__':

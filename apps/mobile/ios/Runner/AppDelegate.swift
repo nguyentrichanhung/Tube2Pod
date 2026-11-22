@@ -48,7 +48,7 @@ import AVFoundation
           var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
           components.scheme = "tube2pod"
           asset = AVURLAsset(url: components.url!)
-          let loader = PinnedMediaLoader(url: url, pin: pin)
+          let loader = PinnedMediaLoader(url: url, pin: pin, headers: args["headers"] as? [String: String] ?? [:])
           asset.resourceLoader.setDelegate(loader, queue: .main)
           self.loader = loader
         } else if args["serverKey"] is NSNull || args["serverKey"] == nil {
@@ -167,11 +167,13 @@ private func certificateSPKI(_ certificate: Data) -> Data? {
 private final class PinnedMediaLoader: NSObject, AVAssetResourceLoaderDelegate {
   private let url: URL
   private let verifier: PinnedSession
+  private let headers: [String: String]
   private lazy var session = URLSession(configuration: .ephemeral, delegate: verifier, delegateQueue: nil)
   private var tasks: [AVAssetResourceLoadingRequest: URLSessionDataTask] = [:]
 
-  init(url: URL, pin: Data) {
+  init(url: URL, pin: Data, headers: [String: String]) {
     self.url = url
+    self.headers = headers
     self.verifier = PinnedSession(pin: pin)
   }
 
@@ -179,6 +181,7 @@ private final class PinnedMediaLoader: NSObject, AVAssetResourceLoaderDelegate {
     guard let dataRequest = loadingRequest.dataRequest else {
       var request = URLRequest(url: url)
       request.httpMethod = "HEAD"
+      headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
       let task = session.dataTask(with: request) { [weak self] _, response, error in
         DispatchQueue.main.async {
           self?.tasks.removeValue(forKey: loadingRequest)
@@ -200,14 +203,23 @@ private final class PinnedMediaLoader: NSObject, AVAssetResourceLoaderDelegate {
     let start = max(dataRequest.requestedOffset, dataRequest.currentOffset)
     let length = Int64(dataRequest.requestedLength) - (start - dataRequest.requestedOffset)
     guard length > 0 else { loadingRequest.finishLoading(); return true }
+    let (end, overflow) = start.addingReportingOverflow(length - 1)
+    guard start >= 0, !overflow else {
+      loadingRequest.finishLoading(with: NSError(domain: "HomeTransport", code: 1))
+      return true
+    }
     var request = URLRequest(url: url)
-    request.setValue("bytes=\(start)-\(start + length - 1)", forHTTPHeaderField: "Range")
+    headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+    request.setValue("bytes=\(start)-\(end)", forHTTPHeaderField: "Range")
     let task = session.dataTask(with: request) { [weak self] data, response, error in
       DispatchQueue.main.async {
         self?.tasks.removeValue(forKey: loadingRequest)
         guard let http = response as? HTTPURLResponse, http.statusCode == 206,
               let range = http.value(forHTTPHeaderField: "Content-Range"),
-              let total = Int64(range.split(separator: "/").last ?? ""), let data = data, error == nil else {
+              let total = Int64(range.split(separator: "/").last ?? ""), total > start,
+              let data = data, error == nil,
+              range == "bytes \(start)-\(min(end, total - 1))/\(total)",
+              Int64(data.count) == min(end, total - 1) - start + 1 else {
           loadingRequest.finishLoading(with: error ?? NSError(domain: "HomeTransport", code: 1))
           return
         }

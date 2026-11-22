@@ -7,6 +7,7 @@ import subprocess
 fixture = subprocess.Popen(['python3', 'tests/native_transport_fixture.py'], stdout=subprocess.PIPE, text=True)
 try:
     info = json.loads(fixture.stdout.readline())
+    assert not any(char in info['pin'] for char in '+/=')
     def get(port, expected, path='/', credential='fixture-secret'):
         # The test client performs the same exact-key check before sending HTTP.
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -15,7 +16,7 @@ try:
         with context.wrap_socket(socket.create_connection(('127.0.0.1', port)), server_hostname='fixture') as sock:
             cert = sock.getpeercert(binary_form=True)
             pem = subprocess.check_output(['openssl', 'x509', '-inform', 'DER', '-pubkey', '-noout'], input=cert)
-            key = base64.b64encode(subprocess.check_output(['openssl', 'pkey', '-pubin', '-outform', 'DER'], input=pem)).decode()
+            key = base64.urlsafe_b64encode(subprocess.check_output(['openssl', 'pkey', '-pubin', '-outform', 'DER'], input=pem)).decode().rstrip('=')
             if key != expected:
                 return None
             sock.sendall(f'GET {path} HTTP/1.0\r\nAuthorization: {credential}\r\n\r\n'.encode())

@@ -53,7 +53,7 @@ class MainActivity : FlutterActivity() {
                                 require(URL(uri).protocol == "https")
                                 media.setDataSource(uri)
                             } else {
-                                media.setDataSource(RangeSource(uri, pin))
+                                media.setDataSource(RangeSource(uri, pin, args["headers"] as Map<*, *>))
                             }
                             media.prepare()
                             media.start()
@@ -93,19 +93,33 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private inner class RangeSource(private val uri: String, private val pin: String) : MediaDataSource() {
-        private val length: Long = connect(uri, pin, "HEAD", emptyMap<String, String>()).let {
+    private inner class RangeSource(private val uri: String, private val pin: String, private val headers: Map<*, *>) : MediaDataSource() {
+        private val length: Long = connect(uri, pin, "HEAD", headers).let {
             try { check(it.responseCode == 200); it.contentLengthLong.also { size -> check(size >= 0) } } finally { it.disconnect() }
         }
         override fun getSize() = length
         override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
             if (size == 0) return 0
             if (position >= length) return -1
-            val end = minOf(length - 1, position + size - 1)
-            val connection = connect(uri, pin, "GET", mapOf("Range" to "bytes=$position-$end"))
+            require(position >= 0 && size > 0)
+            val end = position + minOf(size.toLong(), length - position) - 1
+            val connection = connect(uri, pin, "GET", headers + mapOf("Range" to "bytes=$position-$end"))
             try {
                 check(connection.responseCode == 206)
-                return connection.inputStream.use { it.read(buffer, offset, size) }
+                check(connection.getHeaderField("Content-Range") == "bytes $position-$end/$length")
+                val expected = (end - position + 1).toInt()
+                val bytes = ByteArray(expected)
+                connection.inputStream.use { stream ->
+                    var count = 0
+                    while (count < expected) {
+                        val read = stream.read(bytes, count, expected - count)
+                        check(read > 0)
+                        count += read
+                    }
+                    check(stream.read() == -1)
+                }
+                bytes.copyInto(buffer, offset)
+                return expected
             } finally { connection.disconnect() }
         }
         override fun close() {}
