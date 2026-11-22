@@ -9,7 +9,10 @@
     if (!response.ok) throw new Error('Không thể thực hiện. Hãy thử lại.');
     return response.json();
   }
-  document.querySelector('#generate').addEventListener('click', async () => {
+  const generate = document.querySelector('#generate');
+  generate.addEventListener('click', async () => {
+    if (generate.disabled) return;
+    generate.disabled = true;
     try {
       const envelope = await post('/connection/pair-ticket');
       const qr = qrcode(0, 'M');
@@ -33,6 +36,7 @@
       };
       clearInterval(timer); update(); timer = setInterval(update, 1000);
     } catch (error) { status.textContent = error.message; }
+    finally { generate.disabled = false; }
   });
   document.querySelectorAll('.device-row').forEach(row => {
     row.querySelector('.rename')?.addEventListener('submit', async event => {
