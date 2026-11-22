@@ -6,7 +6,6 @@
   </div>
 </header>
 
-<div class="grid two">
 <section class="card">
   <h2>Video và show</h2>
   <form data-audio-selection method="post" action="/episodes" class="stack" hx-boost="false" hx-sync="closest form:replace">
@@ -39,13 +38,13 @@
   </form>
 </section>
 
+<div class="grid two">
 <section class="card stack">
   <h2>Hàng đợi</h2>
   <div hx-get="/api/queue" hx-trigger="load, every 2s" hx-swap="innerHTML">
     <div class="empty-state">Đang tải…</div>
   </div>
 </section>
-</div>
 
 <section class="card stack">
   <div class="row between"><h2>Tập gần đây</h2><a href="/library">Mở thư viện</a></div>
@@ -64,5 +63,6 @@
   </ul>
   {% endif %}
 </section>
+</div>
 {% include "partials/audio_selection_script.html" %}
 {% endblock %}

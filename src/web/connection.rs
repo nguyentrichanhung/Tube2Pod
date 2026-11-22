@@ -5,12 +5,45 @@ use crate::{
     state::AppState,
     web::csrf::{self, CsrfToken},
 };
+use askama::Template;
+use axum::response::Html;
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
     Extension, Form, Json,
 };
 use serde::{Deserialize, Serialize};
+
+#[derive(sqlx::FromRow)]
+struct Device {
+    id: String,
+    label: String,
+    revoked: bool,
+}
+
+#[derive(Template)]
+#[template(path = "connection.html")]
+struct ConnectionTemplate {
+    csrf: String,
+    devices: Vec<Device>,
+}
+
+pub async fn index(
+    State(state): State<AppState>,
+    Extension(token): Extension<CsrfToken>,
+) -> AppResult<Html<String>> {
+    let devices =
+        sqlx::query_as::<_, Device>("SELECT id, label, revoked FROM devices ORDER BY rowid DESC")
+            .fetch_all(&state.pool)
+            .await?;
+    Ok(Html(
+        ConnectionTemplate {
+            csrf: token.0,
+            devices,
+        }
+        .render()?,
+    ))
+}
 
 #[derive(Serialize)]
 pub struct PairEnvelopeV1 {

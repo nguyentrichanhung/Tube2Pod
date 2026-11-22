@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Kết nối{% endblock %}
+{% block content %}
+<header class="page-header"><div><h1>Kết nối</h1><p class="muted">Ghép điện thoại với máy chủ tại nhà</p></div></header>
+<section class="card pairing">
+  <div class="stack"><h2>Ghép điện thoại</h2><p>Mở app Tube2Pod trên điện thoại và quét mã QR dùng một lần.</p><div><button type="button" id="generate">Tạo mã QR</button></div><p id="pair-status" role="status">Chưa tạo mã</p></div>
+  <div class="qr-stage"><div id="qr">Mã QR sẽ xuất hiện ở đây</div></div>
+</section>
+<div class="grid two">
+  <section class="card stack"><h2>Thiết bị</h2>
+    {% for device in devices %}
+    <div class="device-row" data-id="{{ device.id }}"><strong>{{ device.label }}</strong> <span class="badge">{% if device.revoked %}Đã thu hồi{% else %}Quản trị{% endif %}</span>
+      {% if !device.revoked %}<form class="rename row"><label>Tên thiết bị <input name="label" value="{{ device.label }}" required></label><button type="submit" class="secondary">Đổi tên</button></form><button type="button" class="revoke secondary">Thu hồi</button>{% endif %}
+    </div>
+    {% else %}<p class="empty-state">Chưa có thiết bị nào được ghép.</p>{% endfor %}
+  </section>
+  <section class="card stack"><h2>Truy cập ngoài nhà</h2><p>Chưa khả dụng</p><span class="badge">Đang tắt</span></section>
+</div>
+<script src="/assets/qrcode.js"></script><script src="/assets/connection.js" defer></script>
+{% endblock %}

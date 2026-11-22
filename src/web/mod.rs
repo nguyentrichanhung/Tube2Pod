@@ -95,6 +95,7 @@ pub fn owner_connection_router(
     origin: url::Url,
 ) -> Router {
     let routes = Router::new()
+        .route("/connection", get(connection::index))
         .route("/connection/pair-ticket", post(connection::ticket))
         .route("/connection/devices/{id}/rename", post(connection::rename))
         .route("/connection/devices/{id}/revoke", post(connection::revoke))
@@ -174,6 +175,57 @@ mod tests {
             .next()
             .unwrap()
             .to_string()
+    }
+
+    #[tokio::test]
+    async fn owner_connection_page_lists_devices_without_credentials() {
+        let state = test_state().await;
+        let (ticket, _) = crate::db::devices::issue(&state.pool, 10).await.unwrap();
+        let grant = crate::db::devices::redeem(&state.pool, &ticket, "Điện thoại", 11)
+            .await
+            .unwrap();
+        let identity = crate::device::identity::Identity {
+            server_id: "server".into(),
+            server_key: "key".into(),
+            cert: Default::default(),
+            key: Default::default(),
+        };
+        let router = owner_connection_router(
+            state.clone(),
+            identity,
+            "127.0.0.1:8403".parse().unwrap(),
+            url::Url::parse("http://localhost:8402").unwrap(),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/connection")
+                    .header(header::HOST, "localhost:8402")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Điện thoại"));
+        assert!(!html.contains(&grant.credential));
+        assert_eq!(
+            admin_router(state)
+                .oneshot(
+                    Request::builder()
+                        .uri("/connection")
+                        .body(Body::empty())
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
     }
 
     #[tokio::test]
@@ -403,8 +455,8 @@ mod tests {
             .await
             .unwrap();
         let css = String::from_utf8(bytes.to_vec()).unwrap();
-        assert!(css.contains("--ink:#202522"));
-        assert!(css.contains("--paper:#fdfcf8"));
+        assert!(css.contains("--ink:#1d2030"));
+        assert!(css.contains("--paper:#fff"));
         assert!(css.contains(".app-shell"));
         assert!(css.contains(".cover-fallback"));
     }
