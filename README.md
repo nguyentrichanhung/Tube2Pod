@@ -32,59 +32,63 @@ published audio being reread. Other episodes retain their audio, transcripts,
 summaries, and URLs. Restarting an interrupted upgrade can resume cleanup.
 Do not upgrade a running service until ready to apply this change.
 
-### Production install
+### Install on Linux x86-64
+
+Build the server on Linux x86-64 with `cargo build --release --locked`, or use
+an equivalent release binary. Install `yt-dlp`, `ffmpeg` and `ffprobe`
+system-wide. On Debian/Ubuntu, for example:
 
 ```bash
-cargo build --release
-
-sudo useradd --system --home /var/lib/tube2pod --shell /usr/sbin/nologin tube2pod
-sudo install -d -o tube2pod -g tube2pod -m 0750 /var/lib/tube2pod
-sudo install -d -m 0755 /opt/tube2pod /etc/tube2pod
-
-sudo install -m 0755 target/release/tube2pod /opt/tube2pod/tube2pod
-sudo install -m 0644 deploy/tube2pod.service /etc/systemd/system/tube2pod.service
-sudo install -m 0600 deploy/tube2pod.env.example /etc/tube2pod/tube2pod.env
-sudo editor /etc/tube2pod/tube2pod.env
-```
-
-The unit sets `ProtectHome=true`, so tools installed under `/home` (including
-pip user installs and virtualenvs) are invisible to the service. Install
-`yt-dlp`, `ffmpeg`, and `ffprobe` system-wide instead.
-
-Install the distro package and expose it at the configured path, or install
-the official standalone `yt-dlp` binary directly:
-
-```bash
-# Option A: distro package (Debian/Ubuntu installs /usr/bin/yt-dlp).
 sudo apt install yt-dlp ffmpeg
-sudo ln -sf /usr/bin/yt-dlp /usr/local/bin/yt-dlp
-
-# Option B: official standalone yt-dlp binary.
-sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
-  -o /usr/local/bin/yt-dlp
-sudo chmod 0755 /usr/local/bin/yt-dlp
+# The example environment expects yt-dlp at /usr/local/bin/yt-dlp.
+sudo ln -s /usr/bin/yt-dlp /usr/local/bin/yt-dlp
+sudo deploy/install-linux-x86_64.sh target/release/tube2pod
 ```
 
-Verify every tool as the service user with an empty environment, using the
-absolute paths configured in `/etc/tube2pod/tube2pod.env`:
+Run the installer from a checkout or release directory containing the `deploy`
+files. It creates the service account and starts the existing systemd unit. It
+checks the configured tools as the service user before installing the binary.
+Tools under `/home` are inaccessible to the unit because `ProtectHome=true`.
+If tools are elsewhere, edit their absolute paths in
+`/etc/tube2pod/tube2pod.env` and rerun the installer.
+
+On an existing installation, back up `/var/lib/tube2pod` and the environment
+file first, and test the upgrade on a copy as described above. The installer
+keeps the existing environment and data directory; it replaces the binary and
+unit and restarts the service. In particular it retains an existing
+`PUBLIC_BASE_URL`, feed tokens and server identity. The old-pipeline cleanup
+described above still applies when the upgraded server starts.
+
+On the server itself, open `http://localhost:8402/connection`, choose **Tạo mã ghép cặp**,
+and scan the one-use QR in the Tube2Pod app on the same Wi-Fi. The QR pins the
+server identity for the local connection. Create a new QR for each device.
+The LAN listener defaults to port 8403; allow local access to it if the host
+firewall blocks it. The app can listen locally without a public domain. To
+revoke a device, use the device list on the same owner page.
+
+`PUBLIC_BASE_URL` is optional for local use. Keep an existing HTTPS origin when
+upgrading; public RSS still requires a working public HTTPS origin or an
+available Tube2Pod relay. The owner page can enable remote access when a relay
+endpoint is configured; see [relay deployment](deploy/relay.md). Changing an
+existing public feed URL is the owner's decision. If the old endpoint remains
+under your control, arrange a 301 redirect and verify it before switching.
 
 ```bash
-sudo -u tube2pod env -i /usr/local/bin/yt-dlp --version
-sudo -u tube2pod env -i /usr/bin/ffmpeg -version
-sudo -u tube2pod env -i /usr/bin/ffprobe -version
-```
-
-If the tools live elsewhere, update `YTDLP_PATH`, `FFMPEG_PATH`, and
-`FFPROBE_PATH` to their absolute paths after installation.
-
-Start:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now tube2pod
 sudo systemctl status tube2pod
 curl -fsS http://127.0.0.1:8400/healthz
 ```
+
+### Demo and review preparation
+
+Use only media you have permission to distribute. On an isolated demo server,
+create a show, submit an authorized YouTube URL on the website, select its
+audio and wait for the full MP3 to become ready. Enable RSS and publish the
+episode, then verify the feed and audio from the intended network. On the
+server's owner page generate a fresh QR for each reviewer device. In the app,
+listen to the published episode, edit the show and publish another ready
+episode. Keep the demo server and its access available for the review period;
+a used or expired QR needs a new one. If the reviewer cannot reach the demo
+server over LAN, agree on another review approach before submitting.
 
 ### Tailscale Serve and Funnel
 

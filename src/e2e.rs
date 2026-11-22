@@ -73,7 +73,7 @@ printf '%s\n' "$out"
             category: "Technology".into(),
             owner_name: "Owner".into(),
             owner_email: "owner@example.com".into(),
-            auto_publish: true,
+            auto_publish: false,
             ..NewShow::default()
         },
     )
@@ -116,6 +116,31 @@ printf '%s\n' "$out"
         .run_episode(&episode.uuid)
         .await
         .unwrap();
+    let episode = db::episodes::get(&pool, &episode.uuid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(episode.status, "ready");
+    let (ticket, _) = db::devices::issue(&pool, db::now_ts()).await.unwrap();
+    let grant = db::devices::redeem(&pool, &ticket, "phone", db::now_ts())
+        .await
+        .unwrap();
+    let mobile = crate::mobile_api::MobileState {
+        app: state.clone(),
+        server_id: Arc::new("server".into()),
+    };
+    let response = crate::mobile_api::router(mobile, crate::mobile_api::RouteKind::Lan)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/episodes/{}/publish", episode.uuid))
+                .header("authorization", format!("Bearer {}", grant.credential))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
     let episode = db::episodes::get(&pool, &episode.uuid)
         .await
         .unwrap()
