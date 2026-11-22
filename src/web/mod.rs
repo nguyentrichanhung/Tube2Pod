@@ -1,3 +1,4 @@
+pub mod connection;
 pub mod csrf;
 pub mod episodes;
 pub mod errors;
@@ -83,6 +84,56 @@ pub fn admin_router(state: AppState) -> Router {
     pages.merge(assets).with_state(state)
 }
 
+pub fn owner_router(state: AppState, origin: url::Url) -> Router {
+    admin_router(state).layer(middleware::from_fn_with_state(origin, owner_origin))
+}
+
+pub fn owner_connection_router(
+    state: AppState,
+    identity: crate::device::identity::Identity,
+    bind: std::net::SocketAddr,
+    origin: url::Url,
+) -> Router {
+    let routes = Router::new()
+        .route("/connection", get(connection::index))
+        .route("/connection/pair-ticket", post(connection::ticket))
+        .route("/connection/remote", post(connection::remote))
+        .route(
+            "/connection/pair-ticket/status",
+            post(connection::ticket_status),
+        )
+        .route("/connection/devices/{id}/rename", post(connection::rename))
+        .route("/connection/devices/{id}/revoke", post(connection::revoke))
+        .layer(middleware::from_fn(csrf::csrf_middleware))
+        .layer(axum::Extension(identity))
+        .layer(axum::Extension(bind))
+        .with_state(state.clone());
+    admin_router(state)
+        .merge(routes)
+        .layer(middleware::from_fn_with_state(origin, owner_origin))
+}
+
+async fn owner_origin(
+    axum::extract::State(origin): axum::extract::State<url::Url>,
+    mut request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let expected_host = format!("localhost:{}", origin.port_or_known_default().unwrap_or(80));
+    if request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        != Some(expected_host.as_str())
+        || request.headers().get(header::ORIGIN).is_some_and(|value| {
+            value.to_str().ok() != Some(origin.origin().ascii_serialization().as_str())
+        })
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    request.extensions_mut().insert(origin);
+    next.run(request).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +157,7 @@ mod tests {
             pool: crate::db::test_pool().await,
             cfg: Arc::new(cfg),
             notify: Arc::new(Notify::new()),
+            relay: Default::default(),
         }
     }
 
@@ -129,6 +181,160 @@ mod tests {
             .next()
             .unwrap()
             .to_string()
+    }
+
+    #[tokio::test]
+    async fn owner_connection_page_lists_devices_without_credentials() {
+        let state = test_state().await;
+        let (ticket, _) = crate::db::devices::issue(&state.pool, 10).await.unwrap();
+        let grant = crate::db::devices::redeem(&state.pool, &ticket, "Điện thoại", 11)
+            .await
+            .unwrap();
+        let identity = crate::device::identity::Identity {
+            server_id: "server".into(),
+            server_key: "key".into(),
+            cert: Default::default(),
+            key: Default::default(),
+        };
+        let router = owner_connection_router(
+            state.clone(),
+            identity,
+            "127.0.0.1:8403".parse().unwrap(),
+            url::Url::parse("http://localhost:8402").unwrap(),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/connection")
+                    .header(header::HOST, "localhost:8402")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Điện thoại"));
+        assert!(!html.contains(&grant.credential));
+        assert_eq!(
+            admin_router(state)
+                .oneshot(
+                    Request::builder()
+                        .uri("/connection")
+                        .body(Body::empty())
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn owner_ticket_status_tracks_redemption_and_requires_csrf() {
+        let state = test_state().await;
+        let now = crate::db::now_ts();
+        let (ticket, _) = crate::db::devices::issue(&state.pool, now).await.unwrap();
+        let identity = crate::device::identity::Identity {
+            server_id: "server".into(),
+            server_key: "key".into(),
+            cert: Default::default(),
+            key: Default::default(),
+        };
+        let router = owner_connection_router(
+            state.clone(),
+            identity,
+            "127.0.0.1:8403".parse().unwrap(),
+            url::Url::parse("http://localhost:8402").unwrap(),
+        );
+        for (token, expected, expected_status) in [
+            ("bad", StatusCode::FORBIDDEN, ""),
+            (VALID, StatusCode::OK, "pending"),
+            (VALID, StatusCode::OK, "used"),
+        ] {
+            if expected_status == "used" {
+                crate::db::devices::redeem(&state.pool, &ticket, "phone", now)
+                    .await
+                    .unwrap();
+            }
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/connection/pair-ticket/status")
+                        .header(header::HOST, "localhost:8402")
+                        .header(header::COOKIE, format!("t2p_csrf={VALID}"))
+                        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                        .body(Body::from(format!("_csrf={token}&ticket={ticket}")))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::OK {
+                let body = axum::body::to_bytes(response.into_body(), 1024)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&body).unwrap()["status"],
+                    expected_status
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn owner_origin_uses_exact_localhost_port() {
+        let state = test_state().await;
+        let router = owner_router(
+            state.clone(),
+            url::Url::parse("http://localhost:8402").unwrap(),
+        );
+        for (host, origin, expected) in [
+            (
+                "localhost:8402",
+                "http://localhost:8402",
+                StatusCode::SEE_OTHER,
+            ),
+            (
+                "localhost:8403",
+                "http://localhost:8402",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "localhost:8402",
+                "http://localhost:8403",
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let response = router.clone().oneshot(Request::builder().method("POST").uri("/settings")
+                .header(header::HOST, host).header(header::ORIGIN, origin)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::COOKIE, format!("t2p_csrf={VALID}"))
+                .body(Body::from(format!("_csrf={VALID}&owner_name=Owner&owner_email=owner@example.com&max_source_minutes=120&min_source_seconds=30"))).unwrap()).await.unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        let legacy = admin_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/settings")
+                    .header(header::HOST, "localhost:8402")
+                    .header(header::ORIGIN, "http://localhost:8402")
+                    .header(header::COOKIE, format!("t2p_csrf={VALID}"))
+                    .header("x-csrf-token", VALID)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("_csrf={VALID}&owner_name=Owner&owner_email=owner@example.com&max_source_minutes=120&min_source_seconds=30")))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(legacy.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -309,8 +515,8 @@ mod tests {
             .await
             .unwrap();
         let css = String::from_utf8(bytes.to_vec()).unwrap();
-        assert!(css.contains("--ink:#202522"));
-        assert!(css.contains("--paper:#fdfcf8"));
+        assert!(css.contains("--ink:#1d2030"));
+        assert!(css.contains("--paper:#fff"));
         assert!(css.contains(".app-shell"));
         assert!(css.contains(".cover-fallback"));
     }

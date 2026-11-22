@@ -1,0 +1,37 @@
+# Operator replaces DOMAIN and certificate paths and provisions DNS for relay.DOMAIN,
+# *.feed.DOMAIN and *.admin.DOMAIN. The home server uses https://relay.DOMAIN.
+events {}
+stream {
+    map $ssl_preread_server_name $relay_upstream {
+        relay.DOMAIN 127.0.0.1:8510;
+        ~^[^.]+\.feed\.DOMAIN$ 127.0.0.1:8511;
+        ~^[^.]+\.admin\.DOMAIN$ 127.0.0.1:8502;
+        default 127.0.0.1:9;
+    }
+    server {
+        listen 443;
+        ssl_preread on;
+        proxy_pass $relay_upstream;
+    }
+    server {
+        listen 127.0.0.1:8510 ssl;
+        ssl_certificate /etc/tube2pod/relay-fullchain.pem;
+        ssl_certificate_key /etc/tube2pod/relay-key.pem;
+        proxy_pass 127.0.0.1:8500;
+    }
+}
+http {
+    server {
+        listen 127.0.0.1:8511 ssl;
+        server_name *.feed.DOMAIN;
+        ssl_certificate /etc/tube2pod/relay-fullchain.pem;
+        ssl_certificate_key /etc/tube2pod/relay-key.pem;
+        location / {
+            proxy_pass http://127.0.0.1:8501;
+            proxy_set_header Host $host;
+            proxy_http_version 1.1;
+            proxy_buffering off;
+            proxy_request_buffering off;
+        }
+    }
+}

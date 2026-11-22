@@ -15,6 +15,15 @@
 
 
 <div class="grid two">
+  <section class="card stack"><div class="row between"><h2>Hàng đợi</h2><a href="/library">Thư viện</a></div><div hx-get="/api/queue" hx-trigger="load, every 2s" hx-swap="innerHTML" aria-live="polite"><div class="empty-state">Đang tải…</div></div></section>
+  <section class="card stack">
+    <h2>Lỗi gần nhất</h2>
+    {% if metrics.recent_failures.is_empty() %}<div class="empty-state">Chưa có lỗi trong khoảng thời gian đã chọn.</div>{% else %}
+    {% for row in metrics.recent_failures %}<div class="queue-item"><a href="/episodes/{{ row.episode_uuid }}">{{ row.source_title }}</a><div class="muted">{{ row.label }} · {{ row.stage }} · {{ row.age }}</div></div>{% endfor %}{% endif %}
+  </section>
+</div>
+
+<details class="card"><summary>Thống kê hoạt động</summary><div class="grid two">
   <section class="card stack metrics-list">
     <h2>Hàng đợi</h2>
     <div class="row between"><a href="/library?status=queued">Đang chờ</a><strong>{{ metrics.queued }}</strong></div>
@@ -34,28 +43,7 @@
   </section>
 </div>
 
-<section class="card stack">
-  <h2>Lỗi gần nhất</h2>
-  {% if metrics.recent_failures.is_empty() %}
-  <div class="empty-state">Chưa có lỗi trong khoảng thời gian đã chọn.</div>
-  {% else %}
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Tập</th><th>Lỗi</th><th>Công đoạn</th><th>Thời gian</th></tr></thead>
-      <tbody>
-      {% for row in metrics.recent_failures %}
-        <tr>
-          <td><a href="/episodes/{{ row.episode_uuid }}">{{ row.source_title }}</a></td>
-          <td>{{ row.label }}</td>
-          <td>{{ row.stage }}</td>
-          <td>{{ row.age }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% endif %}
-</section>
+</details>
 
 <details class="card stack">
   <summary>Chi tiết xử lý</summary>

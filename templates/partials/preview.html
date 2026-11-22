@@ -1,9 +1,9 @@
-<div class="stack">
-  <h3>{{ title }}</h3>
+<div class="preview-layout">
+  <div class="stack"><h3>{{ title }}</h3>
   {% if !channel.is_empty() %}<p class="muted">{{ channel }}</p>{% endif %}
   <p class="muted">Thời lượng: {{ duration }}</p>
   {% if has_thumbnail %}<a href="{{ thumbnail }}" target="_blank" rel="noopener noreferrer">Ảnh thu nhỏ</a>{% endif %}
-  <input type="hidden" name="preview_video" value="{{ video_id }}">
+  </div><div class="stack"><input type="hidden" name="preview_video" value="{{ video_id }}">
   <fieldset class="stack">
     <legend>Bản audio</legend>
     {% for track in tracks %}
@@ -23,4 +23,5 @@
     </select>
   </label>
   {% endif %}
+  </div>
 </div>

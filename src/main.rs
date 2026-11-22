@@ -1,12 +1,15 @@
 mod cleanup;
 mod config;
 mod db;
+mod device;
 #[cfg(test)]
 mod e2e;
 mod error;
 mod health;
 mod lock;
+mod mobile_api;
 mod models;
+mod relay;
 mod services;
 mod state;
 mod web;
@@ -28,6 +31,8 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = Arc::new(Config::from_lookup(|key| env::var(key).ok())?);
     let admin_addr = parse_loopback_bind("BIND_ADMIN", &cfg.bind_admin)?;
+    let owner_addr = parse_loopback_bind("BIND_OWNER", &cfg.bind_owner)?;
+    let owner_origin = url::Url::parse(&format!("http://localhost:{}", owner_addr.port()))?;
     let public_addr = parse_loopback_bind("BIND_PUBLIC", &cfg.bind_public)?;
     for dir in ["tmp", "audio", "transcripts", "shows"] {
         tokio::fs::create_dir_all(cfg.data_dir.join(dir)).await?;
@@ -47,10 +52,42 @@ async fn main() -> anyhow::Result<()> {
     worker::spawn(pool.clone(), cfg.clone(), notify.clone());
     cleanup::spawn(pool.clone(), cfg.clone());
 
+    let identity = device::identity::Identity::load(&cfg.data_dir).await?;
+    let lan_addr: SocketAddr = env::var("BIND_LAN")
+        .unwrap_or_else(|_| "0.0.0.0:8403".into())
+        .parse()
+        .context("invalid BIND_LAN")?;
+    let _mdns = match device::lan::advertise(&identity.server_id, lan_addr.port()) {
+        Ok(daemon) => Some(daemon),
+        Err(error) => {
+            tracing::warn!(%error, "LAN discovery unavailable");
+            None
+        }
+    };
+    let tls =
+        axum_server::tls_rustls::RustlsConfig::from_pem_file(&identity.cert, &identity.key).await?;
+
+    let remote_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    remote_listener.set_nonblocking(true)?;
+    let remote_addr = remote_listener.local_addr()?;
+    let relay_endpoint = env::var("TUBE2POD_RELAY_ENDPOINT")
+        .ok()
+        .map(|s| url::Url::parse(&s))
+        .transpose()?;
+    let relay = Arc::new(
+        relay::client::Runtime::load(
+            relay_endpoint,
+            cfg.data_dir.join("relay.json"),
+            public_addr,
+            remote_addr,
+        )
+        .await?,
+    );
     let state = AppState {
         pool,
         cfg: cfg.clone(),
         notify,
+        relay,
     };
     let admin_listener = tokio::net::TcpListener::bind(admin_addr)
         .await
@@ -59,12 +96,45 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("bind public listener")?;
 
-    tracing::info!(%admin_addr, %public_addr, "tube2pod listening");
+    let owner_listener = tokio::net::TcpListener::bind(owner_addr)
+        .await
+        .context("bind owner listener")?;
+    tracing::info!(%admin_addr, %public_addr, %owner_addr, "tube2pod listening");
     let admin = axum::serve(admin_listener, web::admin_router(state.clone()))
         .with_graceful_shutdown(shutdown_signal());
-    let public = axum::serve(public_listener, web::public::public_router(state))
+    let owner = axum::serve(
+        owner_listener,
+        web::owner_connection_router(state.clone(), identity.clone(), lan_addr, owner_origin),
+    )
+    .with_graceful_shutdown(shutdown_signal());
+    let public = axum::serve(public_listener, web::public::public_router(state.clone()))
         .with_graceful_shutdown(shutdown_signal());
-    tokio::try_join!(admin, public)?;
+    let mobile_state = mobile_api::MobileState {
+        app: state.clone(),
+        server_id: Arc::new(identity.server_id),
+    };
+    let remote_handle = axum_server::Handle::new();
+    let remote_shutdown = remote_handle.clone();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        remote_shutdown.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+    });
+    let remote = axum_server::from_tcp_rustls(remote_listener, tls.clone())?
+        .handle(remote_handle)
+        .serve(
+            mobile_api::router(mobile_state.clone(), mobile_api::RouteKind::Relay)
+                .into_make_service(),
+        );
+    let lan_handle = axum_server::Handle::new();
+    let shutdown_handle = lan_handle.clone();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+    });
+    let lan = axum_server::bind_rustls(lan_addr, tls)
+        .handle(lan_handle)
+        .serve(mobile_api::router(mobile_state, mobile_api::RouteKind::Lan).into_make_service());
+    tokio::try_join!(admin, public, owner, lan, remote)?;
     Ok(())
 }
 

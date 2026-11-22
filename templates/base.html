@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf }}">
   <title>{% block title %}Tạo tập{% endblock %} · Tube2Pod</title>
+  <script src="/assets/theme.js"></script>
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body class="app-shell" hx-headers='{"X-CSRF-Token":"{{ csrf }}"}'>
@@ -18,8 +19,10 @@
       <a href="/library">Thư viện</a>
       <a href="/shows">Show</a>
       <a href="/observability">Hoạt động</a>
+      <a href="/connection" id="connection-nav" hidden>Kết nối</a>
       <a href="/settings">Cài đặt</a>
     </nav>
+    <details class="theme-picker"><summary>◐ Giao diện</summary><fieldset aria-label="Giao diện"><label><input type="radio" name="theme" value="light"> Sáng</label><label><input type="radio" name="theme" value="dark"> Tối</label><label><input type="radio" name="theme" value="system"> Theo hệ thống</label></fieldset></details>
   </header>
   <main class="page" id="main" tabindex="-1">
     {% block content %}{% endblock %}
@@ -29,6 +32,7 @@
   </footer>
   <script src="/assets/htmx.min.js" defer></script>
   <script>
+    fetch("/connection").then((response) => { if (response.ok) document.getElementById("connection-nav").hidden = false; }).catch(() => {});
     const activePath = location.pathname.startsWith("/episodes/") ? "/library" : location.pathname;
     document.querySelectorAll(".topbar nav a").forEach((link) => {
       const path = link.getAttribute("href");

@@ -3,10 +3,10 @@
 {% block content %}
 <header class="page-header"><h1>Cài đặt</h1></header>
 
-<form method="post" action="/settings" class="card settings-form">
+<form method="post" action="/settings" class="stack settings-form">
   <input type="hidden" name="_csrf" value="{{ csrf }}">
 
-  <section class="settings-section">
+  <section class="card settings-section">
     <div class="stack">
       <h2>Chủ sở hữu</h2>
       <p class="muted">Áp dụng cho mọi show và feed.</p>
@@ -17,7 +17,7 @@
     </div>
   </section>
 
-  <section class="settings-section">
+  <section class="card settings-section">
     <h2>Mặc định phát hành</h2>
     <div class="stack">
       <label class="row"><input type="checkbox" name="auto_publish_default" value="on" {% if settings.auto_publish_default %}checked{% endif %}> Tự phát hành khi feed bật</label>
@@ -26,7 +26,7 @@
     </div>
   </section>
 
-  <section class="settings-section">
+  <section class="card settings-section">
     <h2>Giới hạn nguồn</h2>
     <div class="stack">
       <label>Thời lượng tối thiểu (giây)<input type="number" name="min_source_seconds" min="10" max="600" value="{{ settings.min_source_seconds }}" required></label>

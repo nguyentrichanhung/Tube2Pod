@@ -2,11 +2,12 @@
 {% block title %}{{ show.title }}{% endblock %}
 {% block content %}
 <header class="page-header">
+  <div class="show-heading"><img class="show-heading-cover" src="{{ cover_url }}" alt="">
   <div>
     <p class="context"><a href="/shows">Show</a></p>
     <h1>{{ show.title }}</h1>
     <div class="muted">{{ show.language }} · {{ show.category }} · {{ episode_count }} tập</div>
-  </div>
+  </div></div>
   <a class="btn" href="/?show={{ show.id }}">Tạo tập</a>
 </header>
 <nav class="tabs" aria-label="Quản lý show">
@@ -73,11 +74,11 @@
       <h2>Liên kết RSS</h2>
       {% if show.feed_enabled %}<span class="badge badge-ok">Đang bật</span>{% else %}<span class="badge">Đang tắt</span>{% endif %}
     </div>
-    <label>Địa chỉ feed<input id="feed-link" readonly value="{{ feed_url }}"></label>
+    {% if feed_url.is_empty() %}<p>Feed chưa có địa chỉ chia sẻ.</p>{% else %}<label>Địa chỉ feed<input id="feed-link" readonly value="{{ feed_url }}"></label>{% endif %}
     <div class="row">
-      <button class="btn{% if !show.feed_enabled %} btn-secondary{% endif %}" type="button" id="copy-feed-link">Sao chép liên kết</button>
+      {% if !feed_url.is_empty() %}<button class="btn{% if !show.feed_enabled %} btn-secondary{% endif %}" type="button" id="copy-feed-link">Sao chép liên kết</button>{% endif %}
       {% if show.feed_enabled %}
-      {% if can_enable %}<a class="btn btn-secondary" href="{{ feed_url }}">Mở feed</a>{% endif %}
+      {% if can_enable && !feed_url.is_empty() %}<a class="btn btn-secondary" href="{{ feed_url }}">Mở feed</a>{% endif %}
       <form method="post" action="/shows/{{ show.id }}/feed/toggle">
         <input type="hidden" name="_csrf" value="{{ csrf }}">
         <button class="btn btn-secondary" type="submit">Tắt feed</button>
@@ -122,7 +123,7 @@
 <script>
   const copyFeedLink = document.getElementById("copy-feed-link");
   const feedLink = document.getElementById("feed-link");
-  copyFeedLink.addEventListener("click", async () => {
+  copyFeedLink?.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(feedLink.value);
       copyFeedLink.textContent = "Đã sao chép";
