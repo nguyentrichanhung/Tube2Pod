@@ -1,6 +1,6 @@
 # Tube2Pod · Thiết kế frontend máy chủ và app điện thoại
 
-**22/11/2026 · Bản thiết kế v3 chờ duyệt**
+**22/11/2026 · Bản thiết kế v3 đã duyệt**
 
 Tube2Pod có hai giao diện dùng chung dữ liệu trên máy ở nhà. Website phục vụ việc lấy toàn bộ audio từ YouTube, quản lý thư viện và cấp quyền điện thoại. App phục vụ việc nghe, theo dõi show, chỉnh thông tin và phát hành các tập đã được tạo. [Kiến trúc đã duyệt](2026-11-22-local-first-mobile-design.md)
 
@@ -26,7 +26,7 @@ Tube2Pod có hai giao diện dùng chung dữ liệu trên máy ở nhà. Websit
 | **Hoạt động** | Hàng đợi và lỗi gần đây, mỗi hàng dẫn tới tập để xem chi tiết và thử lại. |
 | **Cài đặt** | Ba hàng chủ sở hữu, mặc định phát hành và giới hạn nguồn. Trên màn rộng, tên nhóm ở trái, trường cấu hình ở phải. |
 
-Website vẫn dùng các trang và form của Axum/Askama. Đề xuất đặt **Kết nối** trong điều hướng chính và dẫn chủ máy mới tới đó từ bước mở website sau cài đặt. Đích điều hướng thường ngày và đường dẫn đã lưu vẫn hoạt động theo router hiện tại.
+Website vẫn dùng các trang và form của Axum/Askama. **Kết nối** nằm trong điều hướng chính và là đích mở website sau cài đặt. Đích điều hướng thường ngày và đường dẫn đã lưu vẫn hoạt động theo router hiện tại.
 
 ## App Android và iOS
 

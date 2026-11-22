@@ -66,4 +66,4 @@ Cơ sở thiết kế là bản đang chạy từ `bccac7f`. Axum đã tách lis
 
 ## Thiết kế frontend
 
-Chủ máy quản lý ghép cặp và khôi phục quyền ngay trên website tại máy. App điện thoại được ghép cặp dùng quyền đã cấp khi quản trị từ xa. Bản thiết kế màn hình và cấu trúc frontend đang chờ duyệt. [Thiết kế frontend](2026-11-22-tube2pod-frontend-design.md)
+Chủ máy quản lý ghép cặp và khôi phục quyền ngay trên website tại máy. App điện thoại được ghép cặp dùng quyền đã cấp khi quản trị từ xa. Thiết kế frontend v3 đã được duyệt, gồm các chế độ Sáng, Tối và Theo hệ thống. [Thiết kế frontend](2026-11-22-tube2pod-frontend-design.md) · [Kế hoạch triển khai](../plans/2026-11-22-tube2pod-home-mobile.md)
