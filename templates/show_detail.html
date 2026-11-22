@@ -2,11 +2,12 @@
 {% block title %}{{ show.title }}{% endblock %}
 {% block content %}
 <header class="page-header">
+  <div class="show-heading"><img class="show-heading-cover" src="{{ cover_url }}" alt="">
   <div>
     <p class="context"><a href="/shows">Show</a></p>
     <h1>{{ show.title }}</h1>
     <div class="muted">{{ show.language }} · {{ show.category }} · {{ episode_count }} tập</div>
-  </div>
+  </div></div>
   <a class="btn" href="/?show={{ show.id }}">Tạo tập</a>
 </header>
 <nav class="tabs" aria-label="Quản lý show">

@@ -3,14 +3,14 @@
 <header class="page-header">
   <div>
     <h1>Tạo tập từ YouTube</h1>
+    <p class="muted">Máy chủ chuyển toàn bộ bản audio bạn chọn sang MP3.</p>
   </div>
 </header>
 
 <section class="card">
-  <h2>Video và show</h2>
   <form data-audio-selection method="post" action="/episodes" class="stack" hx-boost="false" hx-sync="closest form:replace">
     <input type="hidden" name="_csrf" value="{{ csrf }}">
-    <label>Link YouTube
+    <div class="source-fields"><h2>Nguồn video</h2><div class="source-inputs"><label>Link YouTube
       <input name="url" type="url" value="{{ url }}" required placeholder="https://www.youtube.com/watch?v=..."
              hx-post="/api/preview" hx-target="#preview" hx-trigger="input changed delay:600ms"
              hx-include="closest form">
@@ -25,7 +25,7 @@
           {% endfor %}
         </select>
       </label>
-    </div>
+    </div></div></div>
 
     {% if !error.is_empty() %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
     <div id="preview" class="source-preview" aria-live="polite">{% if preview.is_empty() %}Thông tin video sẽ hiện sau khi dán link.{% else %}{{ preview|safe }}{% endif %}</div>

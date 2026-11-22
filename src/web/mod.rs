@@ -97,6 +97,10 @@ pub fn owner_connection_router(
     let routes = Router::new()
         .route("/connection", get(connection::index))
         .route("/connection/pair-ticket", post(connection::ticket))
+        .route(
+            "/connection/pair-ticket/status",
+            post(connection::ticket_status),
+        )
         .route("/connection/devices/{id}/rename", post(connection::rename))
         .route("/connection/devices/{id}/revoke", post(connection::revoke))
         .layer(middleware::from_fn(csrf::csrf_middleware))
@@ -226,6 +230,60 @@ mod tests {
                 .status(),
             StatusCode::NOT_FOUND
         );
+    }
+
+    #[tokio::test]
+    async fn owner_ticket_status_tracks_redemption_and_requires_csrf() {
+        let state = test_state().await;
+        let now = crate::db::now_ts();
+        let (ticket, _) = crate::db::devices::issue(&state.pool, now).await.unwrap();
+        let identity = crate::device::identity::Identity {
+            server_id: "server".into(),
+            server_key: "key".into(),
+            cert: Default::default(),
+            key: Default::default(),
+        };
+        let router = owner_connection_router(
+            state.clone(),
+            identity,
+            "127.0.0.1:8403".parse().unwrap(),
+            url::Url::parse("http://localhost:8402").unwrap(),
+        );
+        for (token, expected, expected_status) in [
+            ("bad", StatusCode::FORBIDDEN, ""),
+            (VALID, StatusCode::OK, "pending"),
+            (VALID, StatusCode::OK, "used"),
+        ] {
+            if expected_status == "used" {
+                crate::db::devices::redeem(&state.pool, &ticket, "phone", now)
+                    .await
+                    .unwrap();
+            }
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/connection/pair-ticket/status")
+                        .header(header::HOST, "localhost:8402")
+                        .header(header::COOKIE, format!("t2p_csrf={VALID}"))
+                        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                        .body(Body::from(format!("_csrf={token}&ticket={ticket}")))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::OK {
+                let body = axum::body::to_bytes(response.into_body(), 1024)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&body).unwrap()["status"],
+                    expected_status
+                );
+            }
+        }
     }
 
     #[tokio::test]

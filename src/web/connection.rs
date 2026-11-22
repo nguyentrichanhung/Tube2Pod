@@ -59,6 +59,11 @@ pub struct CsrfForm {
     _csrf: String,
 }
 #[derive(Deserialize)]
+pub struct TicketStatusForm {
+    _csrf: String,
+    ticket: String,
+}
+#[derive(Deserialize)]
 pub struct RenameForm {
     _csrf: String,
     label: String,
@@ -87,6 +92,26 @@ pub async fn ticket(
         expires_at,
     }))
 }
+pub async fn ticket_status(
+    State(state): State<AppState>,
+    Extension(token): Extension<CsrfToken>,
+    headers: HeaderMap,
+    Form(form): Form<TicketStatusForm>,
+) -> AppResult<Json<serde_json::Value>> {
+    csrf::verify(&token, &headers, &form._csrf)?;
+    let row: Option<(String, i64)> =
+        sqlx::query_as("SELECT state, expires_at FROM pair_tickets WHERE ticket = ?")
+            .bind(form.ticket)
+            .fetch_optional(&state.pool)
+            .await?;
+    let status = match row {
+        Some((state, _)) if state == "used" => "used",
+        Some((state, expires)) if state == "pending" && expires > db::now_ts() => "pending",
+        _ => "expired",
+    };
+    Ok(Json(serde_json::json!({"status": status})))
+}
+
 pub async fn rename(
     State(state): State<AppState>,
     Path(id): Path<String>,

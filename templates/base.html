@@ -15,11 +15,11 @@
       <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>Tube2Pod
     </a>
     <nav aria-label="Điều hướng chính">
-      <a href="/connection">Kết nối</a>
       <a href="/">Tạo tập</a>
       <a href="/library">Thư viện</a>
       <a href="/shows">Show</a>
       <a href="/observability">Hoạt động</a>
+      <a href="/connection" id="connection-nav" hidden>Kết nối</a>
       <a href="/settings">Cài đặt</a>
     </nav>
     <details class="theme-picker"><summary>◐ Giao diện</summary><fieldset aria-label="Giao diện"><label><input type="radio" name="theme" value="light"> Sáng</label><label><input type="radio" name="theme" value="dark"> Tối</label><label><input type="radio" name="theme" value="system"> Theo hệ thống</label></fieldset></details>
@@ -32,6 +32,7 @@
   </footer>
   <script src="/assets/htmx.min.js" defer></script>
   <script>
+    fetch("/connection").then((response) => { if (response.ok) document.getElementById("connection-nav").hidden = false; }).catch(() => {});
     const activePath = location.pathname.startsWith("/episodes/") ? "/library" : location.pathname;
     document.querySelectorAll(".topbar nav a").forEach((link) => {
       const path = link.getAttribute("href");
