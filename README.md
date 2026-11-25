@@ -82,11 +82,9 @@ Dùng `yt-dlp_linux` cho Linux x64, `yt-dlp_macos` cho macOS, `yt-dlp.exe` cho W
 <a id="installation"></a>
 ## Cài đặt
 
-1. Trong [Releases](https://github.com/nguyentrichanhung/Tube2Pod/releases), chọn gói ZIP đúng máy: **Windows x64**, **Ubuntu 24.04 x64**, **Mac Apple Silicon** hoặc **Mac Intel**. Trên Mac, xem loại chip trong menu Apple → **Giới thiệu về máy Mac này**.
+1. Trong [Releases](https://github.com/nguyentrichanhung/Tube2Pod/releases/tag/v0.1.0), chọn gói ZIP đúng máy: **Windows x64**, **Ubuntu 24.04 x64**, **Mac Apple Silicon** hoặc **Mac Intel**. Trên Mac, xem loại chip trong menu Apple → **Giới thiệu về máy Mac này**.
 2. Giải nén gói. Bên trong có **bộ cài** và video tiếng Việt **Huong-dan-Tube2Pod.mp4** quay trên Ubuntu. Mở bộ cài rồi mở **Tube2Pod** từ danh sách ứng dụng.
 3. Kết nối Internet và bấm **Cài đặt** để tải các công cụ lần đầu. Khi màn hình báo sẵn sàng, bấm **Mở Tube2Pod**.
-
-Bản 0.1.0 hiện ở dạng nháp, chỉ người có quyền xem bản nháp mới tải được gói kèm video. Người dùng đã đăng nhập GitHub cũng có thể tải bộ cài từ [Actions](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342).
 
 Các gói Windows và macOS chưa có chữ ký nhà phát hành. [Hướng dẫn cài thủ công và cấu hình gói portable](docs/guide.md#installation)
 

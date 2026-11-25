@@ -82,11 +82,9 @@ Use `yt-dlp_linux` for Linux x64, `yt-dlp_macos` for macOS and `yt-dlp.exe` for 
 <a id="installation"></a>
 ## Installation
 
-1. Open [Releases](https://github.com/nguyentrichanhung/Tube2Pod/releases) and choose the ZIP for **Windows x64**, **Ubuntu 24.04 x64**, **Mac Apple Silicon** or **Mac Intel**. On a Mac, check the chip in the Apple menu under **About This Mac**.
+1. Open [Releases](https://github.com/nguyentrichanhung/Tube2Pod/releases/tag/v0.1.0) and choose the ZIP for **Windows x64**, **Ubuntu 24.04 x64**, **Mac Apple Silicon** or **Mac Intel**. On a Mac, check the chip in the Apple menu under **About This Mac**.
 2. Extract the ZIP. It contains the **installer** and **Huong-dan-Tube2Pod.mp4**, a Vietnamese tutorial recorded on Ubuntu. Run the installer, then open **Tube2Pod** from your applications.
 3. Connect to the Internet and select **Cài đặt** (Install) to download the tools on first use. When ready, select **Mở Tube2Pod** (Open Tube2Pod).
-
-Version 0.1.0 is a draft. The ZIPs with the video are available to users with draft access. Signed-in GitHub users can also download the installers from [Actions](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342).
 
 The Windows and macOS installers are unsigned. [Manual installation and portable package configuration](docs/guide.en.md#installation)
 
