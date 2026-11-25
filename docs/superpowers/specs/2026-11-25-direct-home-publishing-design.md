@@ -1,6 +1,6 @@
 # Tube2Pod — publish trực tiếp từ nhà, bộ cài đa nền tảng
 
-Ngày: 25/11/2026. Trạng thái: phương án và layout đã duyệt; tài liệu tổng thể chờ duyệt.
+Ngày: 25/11/2026. Trạng thái: người dùng đã duyệt toàn bộ thiết kế, gồm cách đóng gói và chạy server.
 
 Builder check độc lập đã hoàn tất: không còn câu hỏi quan trọng cản trở lập kế hoạch. Đây là review thiết kế, không phải bằng chứng phần mềm đã chạy trên các OS hay qua NAT.
 
@@ -32,7 +32,7 @@ Yêu cầu mới thay thế lựa chọn relay làm đường truy cập ngoài 
 
 ### Mục tiêu
 
-1. Có gói chạy server cho Windows x64, Linux x64, macOS Apple Silicon và macOS Intel. Đây là ma trận kiến trúc do người thiết kế đề xuất, chờ duyệt cùng tài liệu; phiên bản OS thực tế đã kiểm chứng phải ghi trong hướng dẫn phát hành.
+1. Có gói chạy server cho Windows x64, Linux x64, macOS Apple Silicon và macOS Intel. Đây là ma trận kiến trúc đã được duyệt cùng tài liệu; phiên bản OS thực tế đã kiểm chứng phải ghi trong hướng dẫn phát hành.
 2. Người dùng quản trị tại `http://localhost:8402`, tạo tập theo pipeline hiện có và chia sẻ feed HTTPS trên tên miền riêng.
 3. Đường Internet chỉ phục vụ public router: feed, MP3, ảnh bìa và health endpoint hiện có. Không route tới trang quản trị, owner hoặc API mobile.
 4. Giao diện thực dùng layout đã duyệt nhưng giữ đầy đủ hành vi hiện có.
@@ -72,7 +72,7 @@ Luồng: ứng dụng podcast của người nghe → tên miền HTTPS → rout
 
 Tài liệu tham khảo kỹ thuật: [Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https), [reverse proxy](https://caddyserver.com/docs/quick-starts/reverse-proxy).
 
-## 6. Bộ cài và vòng đời server — đề xuất cần duyệt
+## 6. Bộ cài và vòng đời server — đã duyệt
 
 Để giữ phạm vi nhỏ, “bộ cài” ở lượt này là **gói giải nén chứa binary Tube2Pod, cấu hình mẫu, script chạy và hướng dẫn**, không phải MSI/DMG có wizard.
 
@@ -142,10 +142,10 @@ Bản mẫu chỉ có bốn đích để duyệt, không phải yêu cầu bỏ 
 6. Chỉ kết luận publish trực tiếp tại nhà đã đạt sau khi thử từ mạng ngoài nhà: DNS/HTTPS hợp lệ, feed tải được, app podcast đọc enclosure và phát/seek MP3. Kiểm tra từ localhost hoặc Wi-Fi cùng nhà không đủ. Nếu chưa có tên miền/router hoặc thiết bị ngoài mạng để chạy, báo chính xác phần còn thiếu thay vì tuyên bố hoàn tất.
 7. Review độc lập phần packaging/network/UI trước bàn giao theo hướng dẫn dự án; không thêm vòng kiểm định ngoài scope.
 
-## 11. Phần giao người triển khai và điểm cần duyệt
+## 11. Phần giao người triển khai và phạm vi đã duyệt
 
 Người triển khai tự chọn tên script, tổ chức CSS, cách tái dùng template, runner build, test helper và chi tiết quoting/path theo cấu trúc repo. Không tự thay các quyết định sản phẩm trên.
 
-Ngoài phương án và layout đã được duyệt, các đề xuất cần duyệt trong tài liệu này là: ma trận bốn target; gói giải nén, công cụ ngoài cài sẵn; foreground launchers và Caddy chạy riêng; không thêm tự chạy nền Windows/macOS; direct HTTPS qua Caddy; giữ hành vi nghiệp vụ và tính năng LAN hiện có.
+Người dùng đã duyệt cả: ma trận bốn target; gói giải nén, công cụ ngoài cài sẵn; foreground launchers và Caddy chạy riêng; không thêm tự chạy nền Windows/macOS; direct HTTPS qua Caddy; giữ hành vi nghiệp vụ và tính năng LAN hiện có.
 
-Sau khi tài liệu được duyệt, bước tiếp theo là `superpowers:writing-plans`, rồi triển khai theo kế hoạch. Việc duyệt layout riêng chưa được xem là duyệt toàn bộ cách đóng gói/vận hành.
+Bước tiếp theo là `superpowers:writing-plans`, rồi triển khai theo kế hoạch. Không hỏi lại các quyết định thiết kế đã duyệt trên.
