@@ -10,13 +10,17 @@ fn config(dir: &Path, extra: &str) -> std::path::PathBuf {
     path
 }
 
-fn run(args: &[&std::ffi::OsStr]) -> std::process::Output {
+fn command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_tube2pod"));
-    command.env_clear().args(args).output().unwrap()
+    command.env_clear();
+    // Windows needs SystemRoot to initialize its network providers.
+    #[cfg(windows)]
+    command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
+    command
 }
 
 fn fails(args: &[&std::ffi::OsStr], expected: &str) {
-    let output = run(args);
+    let output = command().args(args).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains(expected), "expected {expected}: {stderr}");
@@ -74,8 +78,7 @@ fn environment_precedence_and_empty_data_override() {
     let dir = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let path = config(dir.path(), "");
-    let output = Command::new(env!("CARGO_BIN_EXE_tube2pod"))
-        .env_clear()
+    let output = command()
         .env("DATA_DIR", "")
         .env("BIND_ADMIN", listener.local_addr().unwrap().to_string())
         .arg("--config")
@@ -83,7 +86,8 @@ fn environment_precedence_and_empty_data_override() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("bind admin listener"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("bind admin listener"), "{stderr}");
     assert!(dir.path().join("data space/tube2pod.db").exists());
 }
 
