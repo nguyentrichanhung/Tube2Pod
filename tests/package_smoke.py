@@ -128,7 +128,7 @@ try:
                    'category': 'Technology', 'language': 'en'})
     if args.url:
         preview = post('/api/preview', {'url': args.url, 'show_id': '1'})
-        (root / 'preview.html').write_text(preview)
+        (root / 'preview.html').write_text(preview, encoding='utf-8')
         track = re.search(r'name="source_audio_track"[^>]*value="([^"]+)"', preview)
         assert track, 'No real audio track in preview; inspect preview.html/server.log'
         video = urllib.parse.parse_qs(urllib.parse.urlparse(args.url).query)['v'][0]
