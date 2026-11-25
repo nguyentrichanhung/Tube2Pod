@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shlex
 import signal
+import sqlite3
 import socket
 import subprocess
 import struct
@@ -16,8 +17,9 @@ package = Path(sys.argv[1]).resolve()
 root = Path(tempfile.mkdtemp(prefix='native installer smoke '))
 data = root / 'persistent data'
 env = os.environ.copy()
-for key in ('YTDLP_PATH', 'FFMPEG_PATH', 'FFPROBE_PATH'):
-    env.pop(key, None)
+for key in list(env):
+    if key in ('YTDLP_PATH', 'FFMPEG_PATH', 'FFPROBE_PATH') or key.startswith(('RELAY_', 'TUBE2POD_RELAY_')):
+        env.pop(key)
 env['DATA_DIR'] = str(data)
 for key in ('ADMIN', 'PUBLIC', 'OWNER', 'LAN'):
     with socket.socket() as sock:
@@ -49,6 +51,10 @@ def check_architecture(binary):
         assert header[:4] == b'\xcf\xfa\xed\xfe'
         cpu = struct.unpack_from('<I', header, 4)[0]
         assert cpu == (0x0100000c if 'aarch64' in package.name else 0x01000007)
+        libraries = subprocess.check_output(['otool', '-L', str(binary)], text=True).splitlines()[1:]
+        for line in libraries:
+            library = line.strip().split(' (compatibility version', 1)[0]
+            assert library.startswith(('/usr/lib/', '/System/Library/')), 'Non-system macOS dependency: ' + library
     else:
         assert header[:4] == b'\x7fELF'
         assert struct.unpack_from('<H', header, 18)[0] == 62
@@ -112,7 +118,9 @@ def mac_open():
     command = ['open', '-a', str(app)]
     for key in ('DATA_DIR', 'PUBLIC_BASE_URL', 'BIND_ADMIN', 'BIND_PUBLIC', 'BIND_OWNER', 'BIND_LAN'):
         command += ['--env', key + '=' + env[key]]
-    subprocess.run(command, check=True)
+    for key in ('YTDLP_PATH', 'FFMPEG_PATH', 'FFPROBE_PATH'):
+        command += ['--env', key + '=']
+    subprocess.run(command, check=True, env=env)
 
 def launch():
     global process, owned_pid
@@ -142,25 +150,58 @@ try:
     expect(info, 'prepare')
     request(info, '/action', 'install')
     expect(info, 'ready', 900)
+    suffix = '.exe' if windows else ''
+    for name in ('yt-dlp', 'ffmpeg', 'ffprobe'):
+        tool = data / 'tools' / (name + suffix)
+        assert tool.is_file(), 'Setup did not install ' + name + ' in isolated data'
+        subprocess.run([str(tool), '--version' if name == 'yt-dlp' else '-version'], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     request(info, '/action', 'start')
     expect(info, 'running')
     if mac:
         mac_open()
         assert state(info) == 'running'
-    marker = data / 'installer-smoke-marker'
-    marker.write_text('preserved')
+    # Seed a deterministic published episode; no network source is used for this fixture.
+    audio = data / 'audio' / '00000000-0000-4000-8000-000000000001-1.mp3'
+    audio.write_bytes((Path(__file__).parent / 'fixtures/audio_sine.mp3').read_bytes())
+    cover = data / 'shows' / 'fixture-cover.jpg'
+    cover.write_bytes(b'fixture cover')
+    token = 'installer-smoke-feed-token'
+    with sqlite3.connect(data / 'tube2pod.db') as db:
+        db.execute("INSERT INTO shows (id,title,description,category,owner_name,owner_email,cover_path,feed_token,feed_enabled,created_at,updated_at) VALUES (1,'Installer fixture','Fixture show','Technology','Fixture','fixture@example.com',?,?,1,1,1)", (str(cover), token))
+        db.execute("INSERT INTO episodes (uuid,show_id,video_id,source_url,source_title,language,stage,status,audio_path,audio_bytes,audio_duration_s,published_at,created_at,updated_at) VALUES ('00000000-0000-4000-8000-000000000001',1,'fixture','https://example.com/fixture','Fixture episode','en','complete','published',?,?,1,1,1,1)", (str(audio), audio.stat().st_size))
+    feed_path = '/feed/' + token + '.xml'
+    audio_path = '/audio/' + token + '/00000000-0000-4000-8000-000000000001-1.mp3'
+    public_origin = 'http://' + env['BIND_PUBLIC']
+    def public_get(path):
+        try:
+            with urllib.request.urlopen(public_origin + path, timeout=10) as response:
+                return response.read()
+        except OSError:
+            raise AssertionError('Failed to fetch fixture feed or audio') from None
+    before_feed = public_get(feed_path)
+    before_audio = public_get(audio_path)
+    assert b'Fixture episode' in before_feed
+    assert ('https://localhost:19844' + audio_path).encode() in before_feed
+    assert before_audio == audio.read_bytes()
+    identity = (data / 'identity/server-id').read_bytes()
+    identity_key = (data / 'identity/tls-key.pem').read_bytes()
     request(info, '/action', 'stop')
     expect(info, 'ready')
     shutdown()
     subprocess.run(uninstall, check=True)
-    assert marker.read_text() == 'preserved'
+    assert audio.read_bytes() == before_audio
     subprocess.run(install, check=True)
-    assert marker.read_text() == 'preserved'
+    assert audio.read_bytes() == before_audio
     launch()
     info = wait_for(lambda: session() if state(session()) == 'running' else None)
+    assert (data / 'identity/server-id').read_bytes() == identity
+    assert (data / 'identity/tls-key.pem').read_bytes() == identity_key
+    assert public_get(feed_path) == before_feed
+    assert public_get(audio_path) == before_audio
     request(info, '/action', 'stop')
     expect(info, 'ready')
-    print('Native install, tool setup, start, stop, uninstall and reinstall passed')
+    print('Native install, tool setup, start, stop, uninstall and reinstall passed; published fixture RSS and MP3 preserved (no real source)')
 finally:
     shutdown()
     subprocess.run(uninstall, check=False)

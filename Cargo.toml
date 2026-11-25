@@ -22,8 +22,6 @@ mime_guess = "2"
 quick-xml = "0.37"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 sha2 = "0.10"
-tar = "0.4"
-xz2 = "0.1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 rand = "0.8"
 rcgen = { version = "=0.13.2", features = ["pem"] }
@@ -42,6 +40,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tar = "0.4"
+xz2 = "0.1"
 
 [dev-dependencies]
 http-body-util = "0.1"

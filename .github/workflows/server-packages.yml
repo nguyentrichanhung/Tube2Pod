@@ -74,6 +74,14 @@ jobs:
           python tests/package_scripts.py
           python tests/native_package_scripts.py
           cargo build --release --locked --bin tube2pod
+      - name: Inspect Windows runtime dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dumpbin = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products * -find 'VC/Tools/MSVC/**/bin/Hostx64/x64/dumpbin.exe' | Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin was not found' }
+          & $dumpbin /dependents target/release/tube2pod.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency inspection failed' }
       - name: Package Unix
         if: runner.os != 'Windows'
         shell: bash

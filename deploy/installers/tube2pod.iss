@@ -1,4 +1,4 @@
-#ifndef Binary
+﻿#ifndef Binary
 #error Binary is required
 #endif
 #ifndef OutputDir
@@ -22,4 +22,4 @@ Source: "{#Binary}"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{group}\Tube2Pod"; Filename: "{app}\tube2pod.exe"; Parameters: "--desktop"; WorkingDir: "{app}"
 [Run]
-Filename: "{app}\tube2pod.exe"; Parameters: "--desktop"; Description: "Open Tube2Pod"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\tube2pod.exe"; Parameters: "--desktop"; Description: "Mở Tube2Pod để hoàn tất thiết lập"; Flags: postinstall nowait skipifsilent

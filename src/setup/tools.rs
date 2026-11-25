@@ -228,6 +228,7 @@ fn extract(source: &Path, destination: &Path, asset: &Asset) -> anyhow::Result<(
                 bail!("binary missing from archive");
             }
         }
+        #[cfg(target_os = "linux")]
         Format::TarXz => {
             let mut archive = tar::Archive::new(xz2::read::XzDecoder::new(file));
             let mut found = false;
@@ -247,6 +248,8 @@ fn extract(source: &Path, destination: &Path, asset: &Asset) -> anyhow::Result<(
                 bail!("binary missing from archive");
             }
         }
+        #[cfg(not(target_os = "linux"))]
+        Format::TarXz => bail!("tar.xz tools are only supported on Linux"),
     }
     output.flush()?;
     Ok(())
