@@ -212,20 +212,21 @@ async fn action(State(app): State<App>, h: HeaderMap) -> impl IntoResponse {
         return StatusCode::FORBIDDEN;
     }
     let mut i = app.inner.lock().await;
-    match i.status.as_str() {
-        "prepare" | "error" | "full" => {
+    let requested = h.get("x-desktop-action").and_then(|v| v.to_str().ok());
+    match (requested, i.status.as_str()) {
+        (Some("install"), "prepare" | "error" | "full") => {
             i.status = "loading".into();
             i.detail.clear();
             drop(i);
             tokio::spawn(install(app));
         }
-        "ready" => {
+        (Some("start"), "ready") => {
             i.status = "starting".into();
             i.detail.clear();
             drop(i);
             tokio::spawn(start(app));
         }
-        "running" => {
+        (Some("stop"), "running") => {
             if let Some(mut child) = i.child.take() {
                 #[cfg(unix)]
                 if let Some(pid) = child.id() {
@@ -246,7 +247,7 @@ async fn action(State(app): State<App>, h: HeaderMap) -> impl IntoResponse {
             i.owner = None;
             i.status = "ready".into();
         }
-        _ => (),
+        _ => return StatusCode::CONFLICT,
     }
     StatusCode::OK
 }

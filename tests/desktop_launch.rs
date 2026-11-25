@@ -88,6 +88,7 @@ async fn desktop_reuses_session_and_rejects_untrusted_control() {
     assert_eq!(
         client
             .post(&url)
+            .header("x-desktop-action", "stop")
             .header("origin", "https://evil.example")
             .header("x-desktop-token", token)
             .send()
@@ -99,6 +100,7 @@ async fn desktop_reuses_session_and_rejects_untrusted_control() {
     assert_eq!(
         client
             .post(&url)
+            .header("x-desktop-action", "stop")
             .header("origin", base)
             .send()
             .await
@@ -157,12 +159,58 @@ async fn desktop_reuses_session_and_rejects_untrusted_control() {
         .contains(&format!("http://localhost:{}", owner_addr.port())));
     client
         .post(&url)
+        .header("x-desktop-action", "stop")
         .header("origin", base)
         .header("x-desktop-token", token)
         .send()
         .await
         .unwrap();
     assert!(TcpListener::bind(owner_addr).is_ok());
+    for action in ["stop", "install"] {
+        let response = client
+            .post(&url)
+            .header("origin", base)
+            .header("x-desktop-token", token)
+            .header("x-desktop-action", action)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 409);
+        assert!(TcpListener::bind(owner_addr).is_ok());
+    }
+    let response = client
+        .post(&url)
+        .header("origin", base)
+        .header("x-desktop-token", token)
+        .header("x-desktop-action", "start")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    for _ in 0..100 {
+        last = client
+            .get(format!("{base}/status"))
+            .header("x-desktop-token", token)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        if last.contains("running") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(last.contains("running"), "{last}");
+    client
+        .post(&url)
+        .header("origin", base)
+        .header("x-desktop-token", token)
+        .header("x-desktop-action", "stop")
+        .send()
+        .await
+        .unwrap();
     assert!(launch().status().unwrap().success());
     for _ in 0..100 {
         last = client
@@ -182,6 +230,7 @@ async fn desktop_reuses_session_and_rejects_untrusted_control() {
     assert!(last.contains("running"), "{last}");
     client
         .post(&url)
+        .header("x-desktop-action", "stop")
         .header("origin", base)
         .header("x-desktop-token", token)
         .send()

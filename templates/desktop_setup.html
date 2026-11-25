@@ -96,6 +96,7 @@ async function update() {
     progress.hidden = status !== 'loading';
     act.hidden = !button;
     act.textContent = button;
+    act.dataset.action = ({ prepare: 'install', error: 'install', full: 'install', ready: 'start', running: 'stop' })[status] || '';
     tools.replaceChildren();
     const active = binaries.findIndex(name => activeTool.startsWith(name));
     names.forEach((name, i) => {
@@ -118,7 +119,7 @@ async function update() {
 }
 act.onclick = async () => {
   act.disabled = true;
-  try { await fetch('/action', { method: 'POST', headers }); }
+  try { await fetch('/action', { method: 'POST', headers: { ...headers, 'x-desktop-action': act.dataset.action } }); }
   finally { act.disabled = false; }
 };
 update();
