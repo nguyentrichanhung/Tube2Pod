@@ -31,7 +31,7 @@ YouTube → yt-dlp → ffmpeg → 家中电脑上的 MP3 + SQLite
 | --- | --- | --- |
 | Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | 干净 Ubuntu 容器：GDebi 安装、下载工具、真实来源/RSS、重装后离线打开 |
 | Windows x64 | `tube2pod-x86_64-pc-windows-msvc.exe` | 已准备 workflow；尚未在原生系统运行 |
-| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | 工具来源待定；干净机器暂不可用 |
+| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | 尚待原生系统验证 |
 | macOS Intel | `tube2pod-x86_64-apple-darwin.pkg` | 已准备 workflow；尚未在原生系统运行 |
 
 已检查本地 HTTPS、RSS/封面/MP3、HEAD/Range 和管理接口隔离。真实 DNS/NAT 及外网播客播放尚未验证。表中的文件名不代表已有公开发行包可供下载。
@@ -82,7 +82,7 @@ Linux x64 使用 `yt-dlp_linux`，macOS 使用 `yt-dlp_macos`，Windows 使用 `
 
 工作流成功后，从对应的 Actions 页面下载适合电脑的安装程序：Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`、Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`、macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg` 或 macOS Intel `tube2pod-x86_64-apple-darwin.pkg`。打开文件并完成安装，再从开始菜单、Ubuntu 应用列表或 macOS Applications 打开 **Tube2Pod**。在设置界面联网下载工具。卸载或重新安装会保留数据和配置。
 
-Ubuntu Desktop x64 已在干净容器中通过 GDebi 图形界面验证：安装、首次下载工具、处理真实来源和 RSS，以及卸载重装后离线打开。Windows x64 和 macOS Intel 尚待原生系统验证。macOS Apple Silicon 的工具来源尚待决定，当前无法在干净机器上完成设置。
+Ubuntu Desktop x64 已在干净容器中通过 GDebi 图形界面验证：安装、首次下载工具、处理真实来源和 RSS，以及卸载重装后离线打开。Windows x64、macOS Intel 和 macOS Apple Silicon 尚待原生系统验证。
 
 尚未验证 Windows 和 macOS 的签名提示。
 

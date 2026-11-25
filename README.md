@@ -31,7 +31,7 @@ Chủ máy  → http://localhost:8402 → web quản trị
 | --- | --- | --- |
 | Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | GDebi trên container Ubuntu sạch: cài, tải công cụ, nguồn thật/RSS, mở offline sau cài lại |
 | Windows x64 | `tube2pod-x86_64-pc-windows-msvc.exe` | Có workflow; chưa chạy native |
-| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | Nguồn công cụ đang chờ quyết định; chưa dùng được trên máy sạch |
+| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | Đang chờ kiểm thử native |
 | macOS Intel | `tube2pod-x86_64-apple-darwin.pkg` | Có workflow; chưa chạy native |
 
 Đã kiểm tra HTTPS local, RSS/ảnh/MP3, HEAD/Range và cách ly quản trị. Chưa kiểm chứng DNS/NAT/phát podcast từ mạng ngoài nhà. Tên gói trong bảng không đồng nghĩa đã có bản phát hành để tải.
@@ -82,7 +82,7 @@ Dùng `yt-dlp_linux` cho Linux x64, `yt-dlp_macos` cho macOS, `yt-dlp.exe` cho W
 
 Khi workflow thành công, tải bộ cài đúng máy từ trang Actions: Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`, Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`, macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg`, hoặc macOS Intel `tube2pod-x86_64-apple-darwin.pkg`. Mở tệp và làm theo trình cài, rồi mở **Tube2Pod** từ Start, danh sách ứng dụng Ubuntu hoặc Applications trên macOS. Kết nối Internet để hoàn tất tải công cụ trong màn hình thiết lập. Gỡ hay cài lại ứng dụng giữ dữ liệu và cấu hình.
 
-Ubuntu Desktop x64 đã được thử trong container sạch với GDebi: cài qua giao diện, tải công cụ lần đầu, xử lý nguồn thật và RSS, rồi mở lại không có mạng sau khi gỡ/cài lại. Windows x64 và macOS Intel đang chờ kiểm thử native. Nguồn công cụ cho macOS Apple Silicon đang chờ quyết định; thiết lập hiện chưa dùng được trên máy sạch.
+Ubuntu Desktop x64 đã được thử trong container sạch với GDebi: cài qua giao diện, tải công cụ lần đầu, xử lý nguồn thật và RSS, rồi mở lại không có mạng sau khi gỡ/cài lại. Windows x64, macOS Intel và macOS Apple Silicon đang chờ kiểm thử native.
 
 Lời nhắc chữ ký trên Windows và macOS chưa được kiểm chứng.
 

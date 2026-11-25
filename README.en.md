@@ -31,7 +31,7 @@ Owner    → http://localhost:8402 → management website
 | --- | --- | --- |
 | Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | Clean Ubuntu container: GDebi install, tool download, real source/RSS, offline reopen after reinstall |
 | Windows x64 | `tube2pod-x86_64-pc-windows-msvc.exe` | Workflow prepared; native run pending |
-| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | Tool source decision pending; unavailable on clean machines |
+| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | Native validation pending |
 | macOS Intel | `tube2pod-x86_64-apple-darwin.pkg` | Workflow prepared; native run pending |
 
 Local HTTPS, RSS/artwork/MP3, HEAD/Range and admin isolation have been checked. DNS/NAT and podcast playback from outside the home remain unverified. Package names do not imply that published downloads are available.
@@ -82,7 +82,7 @@ Use `yt-dlp_linux` for Linux x64, `yt-dlp_macos` for macOS and `yt-dlp.exe` for 
 
 After a successful workflow run, download the installer for your computer from its Actions page: Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`, Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`, macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg`, or macOS Intel `tube2pod-x86_64-apple-darwin.pkg`. Open it and follow the installer, then open **Tube2Pod** from Start, Ubuntu's applications list, or macOS Applications. Connect to the Internet to download the tools in setup. Uninstalling or reinstalling preserves data and configuration.
 
-Ubuntu Desktop x64 was tested in a clean container using the GDebi GUI: installation, first-use tool downloads, a real source and RSS, and offline reopening after uninstall/reinstall. Windows x64 and macOS Intel await native validation. The macOS Apple Silicon tool source decision is pending; setup is currently unavailable on clean machines.
+Ubuntu Desktop x64 was tested in a clean container using the GDebi GUI: installation, first-use tool downloads, a real source and RSS, and offline reopening after uninstall/reinstall. Windows x64, macOS Intel and macOS Apple Silicon await native validation.
 
 Windows and macOS signature prompts have not been verified.
 

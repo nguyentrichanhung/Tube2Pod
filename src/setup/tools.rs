@@ -26,7 +26,11 @@ fn asset(name: &'static str, url: &str, sha256: &str, format: Format) -> Asset {
 }
 
 fn assets() -> anyhow::Result<Vec<Asset>> {
-    let (yt_name, yt_hash) = match (std::env::consts::OS, std::env::consts::ARCH) {
+    assets_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+fn assets_for(os: &str, arch: &str) -> anyhow::Result<Vec<Asset>> {
+    let (yt_name, yt_hash) = match (os, arch) {
         ("linux", "x86_64") => (
             "yt-dlp_linux",
             "249ddb058234276bc449b9cd9492aad9f133bda5923c61a9e39983ae114ef17d",
@@ -35,13 +39,13 @@ fn assets() -> anyhow::Result<Vec<Asset>> {
             "yt-dlp.exe",
             "622ed48023cac1daa52a3bf3a6ac38f03514de214b5f0fa069389fd0f6d17e5c",
         ),
-        ("macos", "x86_64") => (
+        ("macos", "x86_64" | "aarch64") => (
             "yt-dlp_macos",
             "57654854886d0398a798895aadf5173e2749fbb5e249b9f3728022ab376e11fb",
         ),
         _ => bail!("no verified media tools for this operating system and architecture"),
     };
-    let suffix = if cfg!(windows) { ".exe" } else { "" };
+    let suffix = if os == "windows" { ".exe" } else { "" };
     let names = if suffix.is_empty() {
         ["yt-dlp", "ffmpeg", "ffprobe"]
     } else {
@@ -53,7 +57,27 @@ fn assets() -> anyhow::Result<Vec<Asset>> {
         yt_hash,
         Format::Raw,
     )];
-    if cfg!(target_os = "macos") {
+    if os == "macos" && arch == "aarch64" {
+        for (name, hash) in [
+            (
+                "ffmpeg",
+                "1f66e9a690a7f1c9e60b012379f8869c11818d1797f45b21dbb2f2564ba61ae1",
+            ),
+            (
+                "ffprobe",
+                "6ef2df5f575042923a28537ab37adf936f28bf3e7b85de23a1447ed447ec1dbd",
+            ),
+        ] {
+            result.push(asset(
+                name,
+                &format!(
+                    "https://ffmpeg.martin-riedl.de/download/macos/arm64/1795207104_9.1/{name}.zip"
+                ),
+                hash,
+                Format::Zip,
+            ));
+        }
+    } else if os == "macos" {
         for (name, hash) in [
             (
                 "ffmpeg",
@@ -72,7 +96,7 @@ fn assets() -> anyhow::Result<Vec<Asset>> {
             ));
         }
     } else {
-        let (file, hash, format) = if cfg!(windows) {
+        let (file, hash, format) = if os == "windows" {
             (
                 "ffmpeg-n9.0.2-39-g7adfbe40dc-win64-gpl-9.0.zip",
                 "693f3e224bc184b40524a62ca47526cfebaf2504414021b92fe75f677ad868b9",
@@ -278,6 +302,34 @@ mod tests {
     };
     #[cfg(unix)]
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn macos_arm_assets_use_approved_release() {
+        let assets = assets_for("macos", "aarch64").unwrap();
+        assert_eq!(
+            assets.iter().map(|a| a.name).collect::<Vec<_>>(),
+            ["yt-dlp", "ffmpeg", "ffprobe"]
+        );
+        assert!(assets[0].url.ends_with("/yt-dlp_macos"));
+        assert_eq!(
+            assets[1].sha256,
+            "1f66e9a690a7f1c9e60b012379f8869c11818d1797f45b21dbb2f2564ba61ae1"
+        );
+        assert_eq!(
+            assets[2].sha256,
+            "6ef2df5f575042923a28537ab37adf936f28bf3e7b85de23a1447ed447ec1dbd"
+        );
+        for item in &assets[1..] {
+            assert_eq!(
+                item.url,
+                format!(
+                    "https://ffmpeg.martin-riedl.de/download/macos/arm64/1795207104_9.1/{}.zip",
+                    item.name
+                )
+            );
+            assert!(matches!(item.format, Format::Zip));
+        }
+    }
 
     #[cfg(unix)]
     #[tokio::test]
