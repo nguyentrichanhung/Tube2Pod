@@ -32,7 +32,6 @@ mac = sys.platform == 'darwin'
 if windows:
     install = [str(package), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART']
     app = Path(os.environ['LOCALAPPDATA']) / 'Programs' / 'Tube2Pod'
-    uninstall = [str(app / 'unins000.exe'), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART']
 elif mac:
     install = ['sudo', 'installer', '-pkg', str(package), '-target', '/']
     app = Path('/Applications/Tube2Pod.app')
@@ -95,6 +94,29 @@ def wait_for(fn, seconds=300):
         time.sleep(.5)
     raise AssertionError('Timed out waiting for native launcher')
 
+def windows_registered():
+    import winreg
+    key = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{A56FC2D1-5EBB-48E1-A8B0-6DDB59F8B171}_is1'
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key):
+            return True
+    except FileNotFoundError:
+        return False
+
+def install_app():
+    subprocess.run(install, check=True)
+    if windows:
+        wait_for(lambda: (app / 'tube2pod.exe').is_file() and windows_registered())
+
+def uninstall_app():
+    if windows:
+        uninstallers = list(app.glob('unins[0-9][0-9][0-9].exe'))
+        assert len(uninstallers) == 1, 'Expected exactly one Inno uninstaller'
+        subprocess.run([str(uninstallers[0]), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'], check=True)
+        wait_for(lambda: not (app / 'tube2pod.exe').exists() and not uninstallers[0].exists() and not windows_registered())
+    else:
+        subprocess.run(uninstall, check=True)
+
 def session():
     return json.loads((data / 'desktop-session.json').read_text())
 
@@ -153,8 +175,10 @@ def shutdown():
         process.wait(timeout=20)
         process = None
 
+installed = False
 try:
-    subprocess.run(install, check=True)
+    install_app()
+    installed = True
     check_architecture((app / 'tube2pod.exe') if windows else (app / 'Contents/MacOS/tube2pod') if mac else Path('/usr/bin/tube2pod'))
     launch()
     info = wait_for(session)
@@ -200,9 +224,11 @@ try:
     request(info, '/action', 'stop')
     expect(info, 'ready')
     shutdown()
-    subprocess.run(uninstall, check=True)
+    uninstall_app()
+    installed = False
     assert audio.read_bytes() == before_audio
-    subprocess.run(install, check=True)
+    install_app()
+    installed = True
     assert audio.read_bytes() == before_audio
     launch()
     info = wait_for(lambda: session() if state(session()) == 'running' else None)
@@ -212,7 +238,18 @@ try:
     assert public_get(audio_path) == before_audio
     request(info, '/action', 'stop')
     expect(info, 'ready')
-    print('Native install, tool setup, start, stop, uninstall and reinstall passed; published fixture RSS and MP3 preserved (no real source)')
 finally:
-    shutdown()
-    subprocess.run(uninstall, check=False)
+    original_error = sys.exc_info()[0] is not None
+    cleanup_error = None
+    for operation in (shutdown, uninstall_app if installed else None):
+        if operation is None:
+            continue
+        try:
+            operation()
+        except Exception as error:
+            if cleanup_error is None:
+                cleanup_error = error
+            print('Cleanup failed:', error, file=sys.stderr)
+    if cleanup_error and not original_error:
+        raise cleanup_error
+print('Native install, tool setup, start, stop, uninstall and reinstall passed; published fixture RSS and MP3 preserved (no real source)')
