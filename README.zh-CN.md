@@ -4,7 +4,7 @@
 
 将 YouTube 视频的源音频转换为 RSS 播客，在自己的电脑上存储和提供服务。
 通过浏览器管理节目，听众使用播客应用订阅。
-从家中直接发布无需 Omnivoice、Tailscale 或中继服务器。
+从家中直接发布无需 Tailscale 或中继服务器。
 
 ![Tube2Pod 音频库中已发布的一期节目](docs/images/demo-library.webp)
 
@@ -17,7 +17,7 @@
 - 管理节目、单集、任务队列和封面；每个节目有独立的 RSS feed。
 - 试听、发布和筛选音频库；支持浅色、深色及跟随系统主题。
 - 通过一次性二维码在局域网内配对手机应用；管理入口保留在家中电脑上。
-- 通过 Caddy 和路由器 NAT 直接提供 HTTPS；媒体工具和 Caddy 需要单独安装。
+- 通过 Caddy 和路由器 NAT 直接提供 HTTPS；桌面安装程序会下载媒体工具，Caddy 需单独安装。
 
 ```text
 YouTube → yt-dlp → ffmpeg → 家中电脑上的 MP3 + SQLite
@@ -29,12 +29,12 @@ YouTube → yt-dlp → ffmpeg → 家中电脑上的 MP3 + SQLite
 
 | 平台 | 目标安装包 | 已验证情况 |
 | --- | --- | --- |
-| Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.tar.gz` | Ubuntu 22.04.5：构建、启动、真实来源、发布和重启 |
-| Windows x64 | `tube2pod-x86_64-pc-windows-msvc.zip` | 已准备 workflow；尚未在原生系统运行 |
-| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.tar.gz` | 已准备 workflow；尚未在原生系统运行 |
-| macOS Intel | `tube2pod-x86_64-apple-darwin.tar.gz` | 已准备 workflow；尚未在原生系统运行 |
+| Ubuntu Desktop 24.04 x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | 干净 Ubuntu 容器：GDebi 安装、下载工具、真实来源/RSS、重装后离线打开 |
+| Windows x64 | `tube2pod-x86_64-pc-windows-msvc.exe` | 原生 CI：下载工具及重装后 fixture RSS/MP3 测试通过 |
+| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | 原生 CI：下载工具及重装后 fixture RSS/MP3 测试通过 |
+| macOS Intel | `tube2pod-x86_64-apple-darwin.pkg` | 原生 CI：下载工具及重装后 fixture RSS/MP3 测试通过 |
 
-已检查本地 HTTPS、RSS/封面/MP3、HEAD/Range 和管理接口隔离。真实 DNS/NAT 及外网播客播放尚未验证。表中的文件名不代表已有公开发行包可供下载。
+已检查本地 HTTPS、RSS/封面/MP3、HEAD/Range 和管理接口隔离。真实 DNS/NAT 及外网播客播放尚未验证。
 
 <a id="demo"></a>
 ## Chrome 演示
@@ -63,6 +63,8 @@ YouTube → yt-dlp → ffmpeg → 家中电脑上的 MP3 + SQLite
 <a id="requirements"></a>
 ## 环境要求
 
+桌面安装程序会下载媒体工具；以下手动安装说明仅适用于便携包。
+
 | 组件 | 使用场景 | 安装来源 |
 | --- | --- | --- |
 | Tube2Pod 原生程序 | 必需 | 从源码构建或下载成功的 workflow 产物 |
@@ -76,7 +78,21 @@ Linux x64 使用 `yt-dlp_linux`，macOS 使用 `yt-dlp_macos`，Windows 使用 `
 <a id="installation"></a>
 ## 安装与启动
 
-### 1. 安装媒体工具
+### 安装桌面应用
+
+1. 登录 GitHub，打开[安装包下载页面](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342)，在 **Artifacts** 中选择与上表中电脑型号对应的包。Mac 用户可从苹果菜单打开“关于本机”，查看使用的是 Apple 芯片还是 Intel 处理器。0.1.0 目前为草稿版本。
+2. 解压下载的文件，打开安装程序并按提示操作。随后从 Windows 开始菜单、Ubuntu 应用列表或 macOS 的“应用程序”打开 **Tube2Pod**。
+3. 联网后点击 **Cài đặt**（安装）。Tube2Pod 会自动下载 yt-dlp、FFmpeg 和 ffprobe。准备就绪后点击 **Mở Tube2Pod**（打开 Tube2Pod）。卸载后重新安装会保留数据和配置。
+
+四个平台都通过了[安装包测试](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342)。每台机器均下载了所需工具，将音频样本转换为 MP3，卸载并重装后仍能读取 RSS 和 MP3。在本地 Ubuntu 上，0.1.0 版还成功将 YouTube 示例视频发布为 67 秒的播客节目。GitHub Actions 预览同一视频时，YouTube 要求 yt-dlp 登录以验证请求并非来自机器人。[诊断日志](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45616026027/job/139211516893)
+
+Windows 和 macOS 安装程序均未进行发行者签名。尚未测试用户在个人电脑上打开下载的安装程序时会看到哪些提示。
+
+### 便携包（手动设置）
+
+以下步骤仅适用于便携包；桌面安装程序会在设置过程中下载工具。
+
+#### 1. 安装媒体工具
 
 - **Ubuntu/Debian：**运行 `sudo apt install ffmpeg`；从上述官方来源下载独立版 yt-dlp，放入工具目录，并执行 `chmod +x /path/to/yt-dlp_linux`。
 - **macOS：**如果已使用 Homebrew，运行 `brew install ffmpeg` 安装 ffmpeg/ffprobe；下载 `yt-dlp_macos` 并赋予执行权限。
@@ -84,9 +100,9 @@ Linux x64 使用 `yt-dlp_linux`，macOS 使用 `yt-dlp_macos`，Windows 使用 `
 
 工具不在 PATH 时，在配置文件里填写绝对路径。运行 `yt-dlp --version`、`ffmpeg -version`、`ffprobe -version` 检查，或替换为实际安装的路径和文件名。
 
-### 2. 获取并解压安装包
+#### 2. 获取并解压安装包
 
-仓库的 [Native server packages workflow](.github/workflows/server-packages.yml) 成功运行后，可从该次 Actions 运行页面下载对应架构的产物。目前 Windows/macOS 的运行结果尚未确认。如果没有产物，请[从源码构建](#development)。将整个安装包解压到独立目录。
+登录 GitHub 后从 [Actions](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342)下载对应架构的便携包，或[从源码构建](#development)。将整个安装包解压到独立目录。
 
 在解压后的目录创建配置文件：
 
@@ -100,7 +116,7 @@ cp portable.env.example tube2pod.env
 Copy-Item portable.env.example tube2pod.env
 ```
 
-### 3. 配置工具与数据目录
+#### 3. 配置工具与数据目录
 
 以下为 Windows 示例；Unix 请改为相应的绝对路径：
 
@@ -116,7 +132,7 @@ DATA_DIR=C:\Tube2Pod data
 
 配置使用 UTF-8 的 `KEY=VALUE` 格式，支持 BOM/CRLF、空行、行首 `#` 注释及成对的外层引号。不展开 `$HOME`、`~`、shell 命令、转义或行尾注释。重复键或格式错误会导致启动失败。优先级为：**非空环境变量 → 配置文件 → 默认值**。启动脚本会切换到安装包目录，工具和数据请使用绝对路径。
 
-### 4. 启动服务并打开网站
+#### 4. 启动服务并打开网站
 
 ```sh
 # Linux / macOS，第一个终端
@@ -272,7 +288,7 @@ cargo test --locked --bin tube2pod real_media_conversion_with_spaces -- --ignore
 .\deploy\package.ps1 -Target x86_64-pc-windows-msvc -Binary target/release/tube2pod.exe -OutDir dist
 ```
 
-Workflow 配置了四个原生 runner、真实媒体测试和解压/启动/重启 smoke 测试。可选输入 `youtube_url` 用于有权使用的真实来源；留空则不测试真实 YouTube。Fixture 或交叉编译不能证明原生运行结果。最近一次 Linux 检查：267 个测试通过，默认测试集中 2 个被忽略；真实媒体测试单独运行并通过。
+工作流在四个原生平台上验证安装、工具下载，以及重装后读取 RSS 和 MP3。手动运行时，可在 `youtube_url` 中输入有权使用的 YouTube 视频，以额外验证从预览到发布的完整流程。
 
 ## 贡献与许可证
 
