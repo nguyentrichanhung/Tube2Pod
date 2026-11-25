@@ -183,6 +183,95 @@ mod tests {
             .to_string()
     }
 
+    async fn connection_html(state: AppState) -> String {
+        let identity = crate::device::identity::Identity {
+            server_id: "server".into(),
+            server_key: "key".into(),
+            cert: Default::default(),
+            key: Default::default(),
+        };
+        let response = owner_connection_router(
+            state,
+            identity,
+            "127.0.0.1:8403".parse().unwrap(),
+            url::Url::parse("http://localhost:8402").unwrap(),
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/connection")
+                .header(header::HOST, "localhost:8402")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        String::from_utf8(
+            axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn owner_connection_shows_direct_origin_without_relay() {
+        let html = connection_html(test_state().await).await;
+        assert!(html.contains("https://pod.example.ts.net:8443"));
+        assert!(html.contains("Đã cấu hình"));
+        assert!(html.contains("id=\"generate\""));
+        assert!(html.contains("id=\"qr\""));
+    }
+
+    #[tokio::test]
+    async fn owner_connection_without_origin_stays_local() {
+        let mut state = test_state().await;
+        Arc::make_mut(&mut state.cfg).public_base_url = None;
+        let html = connection_html(state).await;
+        assert!(html.contains("Chưa cấu hình địa chỉ chia sẻ"));
+        assert!(!html.contains("podcast.example.com"));
+        assert!(html.contains("id=\"generate\""));
+    }
+
+    #[tokio::test]
+    async fn owner_connection_does_not_claim_internet_verified() {
+        let html = connection_html(test_state().await).await;
+        assert!(html.contains("Chưa kiểm tra truy cập từ Internet"));
+        assert!(!html.contains("Đã xác minh"));
+    }
+
+    #[tokio::test]
+    async fn owner_connection_relay_is_independent_of_direct_origin() {
+        let mut state = test_state().await;
+        Arc::make_mut(&mut state.cfg).public_base_url = None;
+        let dir = tempfile::tempdir().unwrap();
+        state.relay = Arc::new(
+            crate::relay::client::Runtime::load(
+                Some(url::Url::parse("https://relay.example.com").unwrap()),
+                dir.path().join("relay.json"),
+                "127.0.0.1:8401".parse().unwrap(),
+                "127.0.0.1:8400".parse().unwrap(),
+            )
+            .await
+            .unwrap(),
+        );
+        let html = connection_html(state).await;
+        assert!(html.contains("Chưa cấu hình địa chỉ chia sẻ"));
+        assert!(html.contains("Chuyển tiếp"));
+        assert!(html.contains("action=\"/connection/remote\""));
+    }
+
+    #[tokio::test]
+    async fn owner_connection_escapes_direct_origin() {
+        let mut state = test_state().await;
+        Arc::make_mut(&mut state.cfg).public_base_url =
+            Some(url::Url::parse("https://example.com/?a=1&b=2").unwrap());
+        let html = connection_html(state).await;
+        assert!(html.contains("https://example.com/?a=1&amp;b=2"));
+        assert!(!html.contains("https://example.com/?a=1&b=2"));
+    }
+
     #[tokio::test]
     async fn owner_connection_page_lists_devices_without_credentials() {
         let state = test_state().await;
