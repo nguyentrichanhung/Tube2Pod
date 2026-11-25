@@ -12,6 +12,7 @@ mod mobile_api;
 mod models;
 mod relay;
 mod services;
+mod setup;
 mod state;
 #[cfg(test)]
 mod test_tools;
