@@ -6,12 +6,15 @@ mod device;
 mod e2e;
 mod error;
 mod health;
+mod launch;
 mod lock;
 mod mobile_api;
 mod models;
 mod relay;
 mod services;
 mod state;
+#[cfg(test)]
+mod test_tools;
 mod web;
 mod worker;
 
@@ -25,14 +28,51 @@ use tokio::sync::Notify;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    let mut args = env::args_os().skip(1);
+    let file = match args.next() {
+        None => None,
+        Some(flag) if flag == "--config" => {
+            let path = args.next().context("--config requires a path")?;
+            if args.next().is_some() {
+                anyhow::bail!("unexpected command line argument");
+            }
+            Some(launch::load_file(std::path::Path::new(&path))?)
+        }
+        Some(_) => anyhow::bail!("unsupported command line argument"),
+    };
+    let get = |key: &str| {
+        let value = env::var(key).ok();
+        if let Some(file) = &file {
+            value
+                .filter(|v| !v.trim().is_empty())
+                .or_else(|| file.get(key).cloned())
+        } else {
+            value
+        }
+    };
+    let filter = tracing_subscriber::EnvFilter::new(get("RUST_LOG").unwrap_or_default());
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let cfg = Arc::new(Config::from_lookup(|key| env::var(key).ok())?);
+    let data_dir = if file.is_some() && get("DATA_DIR").is_none_or(|v| v.trim().is_empty()) {
+        Some(launch::portable_data_dir(|key| env::var(key).ok())?)
+    } else {
+        None
+    };
+    let cfg = Arc::new(Config::from_lookup(|key| {
+        if key == "DATA_DIR" {
+            data_dir
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .or_else(|| get(key))
+        } else {
+            get(key)
+        }
+    })?);
+    if file.is_some() {
+        launch::check_tools(&cfg).await?;
+    }
     let admin_addr = parse_loopback_bind("BIND_ADMIN", &cfg.bind_admin)?;
     let owner_addr = parse_loopback_bind("BIND_OWNER", &cfg.bind_owner)?;
-    let owner_origin = url::Url::parse(&format!("http://localhost:{}", owner_addr.port()))?;
     let public_addr = parse_loopback_bind("BIND_PUBLIC", &cfg.bind_public)?;
     for dir in ["tmp", "audio", "transcripts", "shows"] {
         tokio::fs::create_dir_all(cfg.data_dir.join(dir)).await?;
@@ -53,8 +93,8 @@ async fn main() -> anyhow::Result<()> {
     cleanup::spawn(pool.clone(), cfg.clone());
 
     let identity = device::identity::Identity::load(&cfg.data_dir).await?;
-    let lan_addr: SocketAddr = env::var("BIND_LAN")
-        .unwrap_or_else(|_| "0.0.0.0:8403".into())
+    let lan_addr: SocketAddr = get("BIND_LAN")
+        .unwrap_or_else(|| "0.0.0.0:8403".into())
         .parse()
         .context("invalid BIND_LAN")?;
     let _mdns = match device::lan::advertise(&identity.server_id, lan_addr.port()) {
@@ -70,8 +110,7 @@ async fn main() -> anyhow::Result<()> {
     let remote_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     remote_listener.set_nonblocking(true)?;
     let remote_addr = remote_listener.local_addr()?;
-    let relay_endpoint = env::var("TUBE2POD_RELAY_ENDPOINT")
-        .ok()
+    let relay_endpoint = get("TUBE2POD_RELAY_ENDPOINT")
         .map(|s| url::Url::parse(&s))
         .transpose()?;
     let relay = Arc::new(
@@ -99,6 +138,9 @@ async fn main() -> anyhow::Result<()> {
     let owner_listener = tokio::net::TcpListener::bind(owner_addr)
         .await
         .context("bind owner listener")?;
+    let owner_addr = owner_listener.local_addr()?;
+    let owner_origin = url::Url::parse(&format!("http://localhost:{}", owner_addr.port()))?;
+    println!("Owner: {owner_origin}");
     tracing::info!(%admin_addr, %public_addr, %owner_addr, "tube2pod listening");
     let admin = axum::serve(admin_listener, web::admin_router(state.clone()))
         .with_graceful_shutdown(shutdown_signal());

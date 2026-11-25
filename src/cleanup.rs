@@ -492,10 +492,21 @@ mod tests {
 
     fn age(path: &Path, seconds: u64) {
         let modified = SystemTime::now() - Duration::from_secs(seconds);
-        std::fs::File::open(path)
-            .unwrap()
-            .set_modified(modified)
-            .unwrap();
+        #[cfg(windows)]
+        let file = {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_WRITE_ATTRIBUTES: u32 = 0x100;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x02000000;
+            // Windows needs attribute-write access and backup semantics for directory handles.
+            std::fs::OpenOptions::new()
+                .access_mode(FILE_WRITE_ATTRIBUTES)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)
+                .unwrap()
+        };
+        #[cfg(not(windows))]
+        let file = std::fs::File::open(path).unwrap();
+        file.set_modified(modified).unwrap();
     }
 
     fn write(path: &Path, contents: &[u8]) {

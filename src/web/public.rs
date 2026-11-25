@@ -1152,7 +1152,25 @@ mod tests {
     #[tokio::test]
     async fn public_router_does_not_expose_admin_routes() {
         let fx = fixture().await;
-        for uri in ["/", "/settings", "/library", "/api/queue"] {
+        for uri in [
+            "/",
+            "/connection",
+            "/settings",
+            "/library",
+            "/api/queue",
+            "/v1/pair",
+            "/v1/connection",
+            "/v1/shows",
+            "/v1/shows/1",
+            "/v1/shows/1/cover",
+            "/v1/shows/1/feed",
+            "/v1/shows/1/episodes",
+            "/v1/episodes/id",
+            "/v1/episodes/id/publish",
+            "/v1/episodes/id/audio",
+            "/api/v1/connection",
+            "/api/v1/shows",
+        ] {
             assert_eq!(
                 get(&fx.state, uri).await.status(),
                 StatusCode::NOT_FOUND,

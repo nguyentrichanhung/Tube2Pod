@@ -10,56 +10,39 @@ use axum::{
     http::{Request, StatusCode},
 };
 use http_body_util::BodyExt;
-use std::{os::unix::fs::PermissionsExt, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::Notify;
 use tower::ServiceExt;
-
-fn fake_tool(dir: &std::path::Path, name: &str, body: &str) {
-    let path = dir.join(name);
-    std::fs::write(&path, body).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-}
 
 #[tokio::test]
 async fn youtube_url_becomes_a_published_feed_item() {
     let dir = tempfile::tempdir().unwrap();
-    let args = dir.path().join("args");
-    fake_tool(
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audio_sine.mp3");
+    let ytdlp = crate::test_tools::tool(
         dir.path(),
         "yt-dlp",
         &format!(
-            r##"#!/bin/sh
-if [ "$1" = "--dump-single-json" ]; then
-  printf '%s' '{{"title":"Video", "description":"Source description", "duration":600, "formats":[{{"format_id":"main", "audio_track_id":"main", "acodec":"opus", "vcodec":"none", "format_note":"main (default)"}}, {{"format_id":"alternate", "audio_track_id":"alt", "acodec":"opus", "vcodec":"none", "format_note":"alternate"}}]}}'
-  exit 0
-fi
-printf '%s\n' "$@" > '{}'
-while [ $# -gt 0 ]; do if [ "$1" = -o ]; then shift; out=$1; fi; shift; done
-out=$(printf '%s' "$out" | sed 's/%(ext)s/webm/')
-printf audio > "$out"
-printf '%s\n' "$out"
-"##,
-            args.display()
-        ),
-    );
-    let fixture =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audio_sine.mp3");
-    fake_tool(
-        dir.path(),
-        "ffmpeg",
-        &format!(
-            "#!/bin/sh\nfor a in \"$@\"; do out=$a; done\ncp '{}' \"$out\"\n",
+            r#"download-copy
+source={}
+json={{"title":"Video","description":"Source description","duration":600,"formats":[{{"format_id":"main","audio_track_id":"main","acodec":"opus","vcodec":"none","format_note":"main (default)"}},{{"format_id":"alternate","audio_track_id":"alt","acodec":"opus","vcodec":"none","format_note":"alternate"}}]}}"#,
             fixture.display()
         ),
     );
-    fake_tool(dir.path(), "ffprobe", "#!/bin/sh\necho 1.044898\n");
+    let args = ytdlp.with_extension("args");
+    let ffmpeg = crate::test_tools::tool(
+        dir.path(),
+        "ffmpeg",
+        &format!("conversion-copy\nsource={}", fixture.display()),
+    );
+    let ffprobe = crate::test_tools::tool(dir.path(), "ffprobe", "probe\noutput=1.044898");
     let cfg = Arc::new(
         Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net:8443".into()),
             "DATA_DIR" => Some(dir.path().display().to_string()),
-            "YTDLP_PATH" => Some(dir.path().join("yt-dlp").display().to_string()),
-            "FFMPEG_PATH" => Some(dir.path().join("ffmpeg").display().to_string()),
-            "FFPROBE_PATH" => Some(dir.path().join("ffprobe").display().to_string()),
+            "YTDLP_PATH" => Some(ytdlp.display().to_string()),
+            "FFMPEG_PATH" => Some(ffmpeg.display().to_string()),
+            "FFPROBE_PATH" => Some(ffprobe.display().to_string()),
             _ => None,
         })
         .unwrap(),

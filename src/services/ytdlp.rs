@@ -287,12 +287,15 @@ mod tests {
 
     #[tokio::test]
     async fn downloads_the_requested_format_into_episode_directory() {
-        use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
-        let script = root.path().join("yt-dlp");
-        let args = root.path().join("args");
-        std::fs::write(&script, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nwhile [ $# -gt 0 ]; do if [ \"$1\" = '-o' ]; then shift; out=$1; fi; shift; done\nout=$(printf '%s' \"$out\" | sed 's/%(ext)s/webm/')\nprintf audio > \"$out\"\nprintf '%s\\n' \"$out\"\n", args.display())).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let source = root.path().join("source audio");
+        std::fs::write(&source, b"audio").unwrap();
+        let script = crate::test_tools::tool(
+            root.path(),
+            "yt-dlp",
+            &format!("download-copy\nsource={}", source.display()),
+        );
+        let args = script.with_extension("args");
         let mut cfg = Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net".into()),
             "DATA_DIR" => Some(root.path().display().to_string()),
@@ -317,11 +320,11 @@ mod tests {
         assert!(args.contains("after_move:filepath"));
         let outside = root.path().join("outside");
         std::fs::write(&outside, b"audio").unwrap();
-        std::fs::write(
-            &script,
-            format!("#!/bin/sh\nprintf '%s\\n' '{}'\n", outside.display()),
-        )
-        .unwrap();
+        crate::test_tools::tool(
+            root.path(),
+            "yt-dlp",
+            &format!("print\noutput={}", outside.display()),
+        );
         assert!(download_audio(
             &cfg,
             &VideoId {

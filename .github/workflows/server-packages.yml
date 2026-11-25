@@ -1,0 +1,104 @@
+name: Native server packages
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: 'Authorized YouTube source for real pipeline smoke (empty skips Internet test)'
+        required: false
+        default: ''
+  pull_request:
+    paths: ['src/**', 'tests/**', 'assets/**', 'templates/**', 'deploy/**', 'Cargo.*', '.github/workflows/server-packages.yml']
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            ytdlp: yt-dlp_linux
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            ytdlp: yt-dlp.exe
+          - os: macos-15
+            target: aarch64-apple-darwin
+            ytdlp: yt-dlp_macos
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            ytdlp: yt-dlp_macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust stable
+        shell: bash
+        run: rustup update stable --no-self-update && rustup default stable
+      - name: Media tools (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          YTDLP_ASSET: ${{ matrix.ytdlp }}
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          else
+            brew install ffmpeg
+          fi
+          mkdir -p "$RUNNER_TEMP/media tools"
+          curl -fL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/$YTDLP_ASSET" -o "$RUNNER_TEMP/media tools/yt-dlp"
+          chmod +x "$RUNNER_TEMP/media tools/yt-dlp"
+          echo "YTDLP_PATH=$RUNNER_TEMP/media tools/yt-dlp" >> "$GITHUB_ENV"
+      - name: Media tools (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:RUNNER_TEMP 'media tools'
+          New-Item -ItemType Directory -Path $tools | Out-Null
+          Invoke-WebRequest https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -OutFile "$tools/yt-dlp.exe"
+          # FFmpeg links this Windows binary distributor on its official download page.
+          Invoke-WebRequest https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile "$tools/ffmpeg.zip"
+          Expand-Archive "$tools/ffmpeg.zip" "$tools/ffmpeg"
+          $ffmpeg = (Get-ChildItem "$tools/ffmpeg" -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName
+          $ffprobe = (Get-ChildItem "$tools/ffmpeg" -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName
+          "YTDLP_PATH=$tools/yt-dlp.exe" >> $env:GITHUB_ENV
+          "FFMPEG_PATH=$ffmpeg" >> $env:GITHUB_ENV
+          "FFPROBE_PATH=$ffprobe" >> $env:GITHUB_ENV
+      - name: Test native code and real media
+        shell: bash
+        run: |
+          cargo test --locked --all-targets
+          cargo test --locked --bin tube2pod real_media_conversion_with_spaces -- --ignored
+          "$YTDLP_PATH" --version
+          python tests/package_scripts.py
+          cargo build --release --locked --bin tube2pod
+      - name: Package Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+        run: deploy/package.sh "$PACKAGE_TARGET" target/release/tube2pod dist
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: deploy/package.ps1 -Target x86_64-pc-windows-msvc -Binary target/release/tube2pod.exe -OutDir dist
+      - name: Extract, launch and restart package
+        shell: bash
+        env:
+          SOURCE_URL: ${{ inputs.youtube_url }}
+        run: |
+          archive=(dist/*)
+          options=()
+          if [ -n "$SOURCE_URL" ]; then options+=(--url "$SOURCE_URL"); fi
+          python tests/package_smoke.py "${archive[0]}" --work-dir "$RUNNER_TEMP/package smoke" "${options[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tube2pod-${{ matrix.target }}
+          path: dist/*
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-evidence-${{ matrix.target }}
+          path: ${{ runner.temp }}/package smoke/*.log
+          if-no-files-found: ignore

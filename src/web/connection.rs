@@ -25,6 +25,7 @@ struct Device {
 #[template(path = "connection.html")]
 struct ConnectionTemplate {
     csrf: String,
+    public_base_url: String,
     devices: Vec<Device>,
     remote_enabled: bool,
     remote_available: bool,
@@ -41,6 +42,12 @@ pub async fn index(
     Ok(Html(
         ConnectionTemplate {
             csrf: token.0,
+            public_base_url: state
+                .cfg
+                .public_base_url
+                .as_ref()
+                .map(|url| url.as_str().trim_end_matches('/').to_string())
+                .unwrap_or_default(),
             devices,
             remote_enabled: state.relay.enabled(),
             remote_available: state.relay.available(),

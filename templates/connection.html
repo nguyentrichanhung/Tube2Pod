@@ -1,9 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Kết nối{% endblock %}
 {% block content %}
-<header class="page-header"><div><h1>Kết nối điện thoại</h1><p class="muted">Ghép điện thoại với máy chủ tại nhà</p></div></header>
+<header class="page-header"><div><h1>Kết nối &amp; chia sẻ</h1><p class="muted">Podcast ở máy nhà. Người nghe truy cập qua địa chỉ của bạn.</p></div></header>
+<div class="grid two">
+  <section class="card stack"><div class="row between"><h2>Địa chỉ chia sẻ podcast</h2>{% if !public_base_url.is_empty() %}<span class="badge">Đã cấu hình</span>{% endif %}</div>
+    <p class="muted">Dùng cho feed RSS, các tập đã phát hành và ảnh bìa.</p>
+    {% if public_base_url.is_empty() %}<p>Chưa cấu hình địa chỉ chia sẻ</p>{% else %}<div class="row"><label>Địa chỉ HTTPS <input id="public-origin" value="{{ public_base_url }}" readonly></label><button type="button" class="secondary" id="copy-origin">Sao chép</button></div><p>Chưa kiểm tra truy cập từ Internet</p>{% endif %}
+    <div class="flow" aria-label="Máy chủ tại nhà qua router NAT đến người nghe"><div><div class="flow-symbol" aria-hidden="true">▤</div><strong>Máy chủ tại nhà</strong><p>Lưu và xử lý MP3</p></div><span aria-hidden="true">→</span><div><div class="flow-symbol" aria-hidden="true">⇄</div><strong>Router của bạn</strong><p>Chuyển tiếp HTTPS</p></div><span aria-hidden="true">→</span><div><div class="flow-symbol" aria-hidden="true">♫</div><strong>Người nghe</strong><p>Mở feed bằng app podcast</p></div></div>
+    <p>Máy cần đang chạy và có Internet khi người nghe truy cập.</p>
+    <details><summary>Các bước cấu hình HTTPS tại nhà</summary><ol><li>Trỏ tên miền tới IP public của mạng nhà.</li><li>Cấu hình HTTPS và chuyển tiếp cổng trên router.</li><li>Chỉ đưa đường phục vụ podcast ra Internet.</li><li>Kiểm tra feed, ảnh bìa và MP3 từ mạng ngoài nhà.</li></ol></details>
+  </section>
+  <aside class="card stack"><h2>Những gì được chia sẻ</h2><p>Bạn chọn tập phát hành và bật RSS cho từng show.</p><ul><li>Feed RSS theo liên kết của show</li><li>Audio MP3 của các tập đã phát hành</li><li>Ảnh bìa của show có feed được bật</li></ul><h3>Quản trị tại nhà</h3><p>Đường chia sẻ podcast không mở trang quản trị.</p><a href="/shows">Xem feed của show</a></aside>
+</div>
 <section class="card pairing">
-  <div class="stack"><h2>Mã ghép cặp</h2><p>Mở app Tube2Pod trên điện thoại và quét mã QR dùng một lần.</p><div><button type="button" id="generate">Tạo mã ghép cặp</button></div><p id="pair-status" role="status">Chưa tạo mã</p></div>
+  <div class="stack"><h2>Điện thoại trong mạng nhà</h2><p>Mở app Tube2Pod trên điện thoại và quét mã QR dùng một lần.</p><div><button type="button" id="generate">Tạo mã ghép cặp</button></div><p id="pair-status" role="status">Chưa tạo mã</p></div>
   <div class="qr-stage"><div id="qr">Mã QR sẽ xuất hiện ở đây</div></div>
 </section>
 <div class="grid two">
@@ -14,15 +24,20 @@
     </div>
     {% else %}<p class="empty-state">Chưa có thiết bị nào được ghép.</p>{% endfor %}
   </section>
-  <section class="card stack"><h2>Truy cập ngoài nhà</h2>
-    {% if remote_available %}<p>{% if remote_enabled %}Đang bật{% else %}Đang tắt{% endif %}</p>
+  {% if remote_available %}<section class="card stack"><h2>Chuyển tiếp</h2>
+    <p>{% if remote_enabled %}Đang bật{% else %}Đang tắt{% endif %}</p>
     <form method="post" action="/connection/remote">
       <input type="hidden" name="_csrf" value="{{ csrf }}">
       <input type="hidden" name="enabled" value="{% if remote_enabled %}false{% else %}true{% endif %}">
       <button type="submit">{% if remote_enabled %}Tắt truy cập ngoài nhà{% else %}Bật truy cập ngoài nhà{% endif %}</button>
     </form>
-    {% else %}<p>Truy cập ngoài nhà chưa khả dụng. Bạn vẫn có thể kết nối trong mạng nhà.</p>{% endif %}
-  </section>
+  </section>{% endif %}
 </div>
+<script>
+  document.getElementById('copy-origin')?.addEventListener('click', async () => {
+    const input = document.getElementById('public-origin');
+    try { await navigator.clipboard.writeText(input.value); } catch (_) { input.select(); }
+  });
+</script>
 <script src="/assets/qrcode.js"></script><script src="/assets/connection.js" defer></script>
 {% endblock %}
