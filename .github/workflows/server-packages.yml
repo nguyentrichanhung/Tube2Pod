@@ -126,5 +126,7 @@ jobs:
         if: always()
         with:
           name: smoke-evidence-${{ matrix.target }}
-          path: ${{ runner.temp }}/package smoke/*.log
+          path: |
+            ${{ runner.temp }}/package smoke/*.log
+            ${{ runner.temp }}/package smoke/preview.html
           if-no-files-found: ignore
