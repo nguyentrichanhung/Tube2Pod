@@ -91,6 +91,19 @@
       </form>
       {% endif %}
     </div>
+    <details>
+      <summary>Đổi liên kết RSS</summary>
+      <form method="post" action="/shows/{{ show.id }}/feed/rotate" hx-post="/shows/{{ show.id }}/feed/rotate" class="stack" hx-confirm="Vô hiệu liên kết hiện tại và tạo liên kết mới?">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <p class="muted">Người đăng ký sẽ phải thêm lại feed bằng liên kết mới.</p>
+        <label>Nhập tên show để xác nhận<input name="confirm_title" placeholder="{{ show.title }}" required></label>
+        <button class="btn btn-danger" type="submit">Đổi liên kết</button>
+      </form>
+    </details>
+  </section>
+  <aside class="card stack">
+    <h2>Nội dung feed</h2>
+    <p>Tập đã phát hành xuất hiện trong feed khi RSS được bật.</p>
     <details {% if !can_enable %}open{% endif %}>
       <summary>Thông tin cần để bật feed</summary>
       <div class="stack metrics-list">
@@ -104,17 +117,6 @@
       <input type="hidden" name="confirm_title" value="{{ show.title }}">
       <button class="btn btn-secondary" type="submit">Phát hành tất cả tập đang sẵn sàng</button>
     </form>
-    <details>
-      <summary>Đổi liên kết RSS</summary>
-      <form method="post" action="/shows/{{ show.id }}/feed/rotate" hx-post="/shows/{{ show.id }}/feed/rotate" class="stack" hx-confirm="Vô hiệu liên kết hiện tại và tạo liên kết mới?">
-        <input type="hidden" name="_csrf" value="{{ csrf }}">
-        <p class="muted">Người đăng ký sẽ phải thêm lại feed bằng liên kết mới.</p>
-        <label>Nhập tên show để xác nhận<input name="confirm_title" placeholder="{{ show.title }}" required></label>
-        <button class="btn btn-danger" type="submit">Đổi liên kết</button>
-      </form>
-    </details>
-  </section>
-  <aside class="card stack">
     <h2>Apple Podcasts</h2>
     <p>Trong Apple Podcasts Connect, thêm show bằng RSS và dán liên kết đã sao chép.</p>
     <a href="https://podcastsconnect.apple.com/">Mở Apple Podcasts Connect</a>

@@ -17,7 +17,7 @@
                {% if !row.deletable() %}disabled title="Không thể xoá tập đang xử lý"{% endif %}>
       </td>
       {% endif %}
-      <td><a href="/episodes/{{ row.episode.uuid }}">{{ row.episode.source_title }}</a></td>
+      <td><div class="library-title"><object data="/shows/{{ row.episode.show_id }}/cover" type="image/jpeg" aria-hidden="true"><span class="cover-fallback">♫</span></object><a href="/episodes/{{ row.episode.uuid }}">{{ row.episode.source_title }}</a></div></td>
       <td>{{ row.show_title }}</td>
       <td>
         <span class="badge{% if row.episode.status == "published" || row.episode.status == "ready" %} badge-ok{% else if row.episode.status == "failed" %} badge-err{% endif %}">{{ row.episode.status_label() }}</span>

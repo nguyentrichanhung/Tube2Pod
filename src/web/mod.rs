@@ -604,7 +604,7 @@ mod tests {
             .await
             .unwrap();
         let css = String::from_utf8(bytes.to_vec()).unwrap();
-        assert!(css.contains("--ink:#1d2030"));
+        assert!(css.contains("--ink:#242523"));
         assert!(css.contains("--paper:#fff"));
         assert!(css.contains(".app-shell"));
         assert!(css.contains(".cover-fallback"));
