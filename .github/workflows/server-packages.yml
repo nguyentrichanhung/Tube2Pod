@@ -72,6 +72,7 @@ jobs:
           cargo test --locked --bin tube2pod real_media_conversion_with_spaces -- --ignored
           "$YTDLP_PATH" --version
           python tests/package_scripts.py
+          python tests/native_package_scripts.py
           cargo build --release --locked --bin tube2pod
       - name: Package Unix
         if: runner.os != 'Windows'
@@ -88,10 +89,27 @@ jobs:
         env:
           SOURCE_URL: ${{ inputs.youtube_url }}
         run: |
-          archive=(dist/*)
+          shopt -s nullglob
+          archive=(dist/*.tar.gz dist/*.zip)
           options=()
           if [ -n "$SOURCE_URL" ]; then options+=(--url "$SOURCE_URL"); fi
           python tests/package_smoke.py "${archive[0]}" --work-dir "$RUNNER_TEMP/package smoke" "${options[@]}"
+      - name: Package native installer (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+        run: deploy/installers/package.sh "$PACKAGE_TARGET" target/release/tube2pod dist
+      - name: Package native installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: deploy/installers/package.ps1 -Binary target/release/tube2pod.exe -OutDir dist
+      - name: Install and exercise native launcher
+        shell: bash
+        run: |
+          shopt -s nullglob
+          installer=(dist/*.deb dist/*.pkg dist/*.exe)
+          python tests/native_package_smoke.py "${installer[0]}"
       - uses: actions/upload-artifact@v4
         with:
           name: tube2pod-${{ matrix.target }}

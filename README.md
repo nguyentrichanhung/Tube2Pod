@@ -36,6 +36,10 @@ Chủ máy  → http://localhost:8402 → web quản trị
 
 Đã kiểm tra HTTPS local, RSS/ảnh/MP3, HEAD/Range và cách ly quản trị. Chưa kiểm chứng DNS/NAT/phát podcast từ mạng ngoài nhà. Tên gói trong bảng không đồng nghĩa đã có bản phát hành để tải.
 
+### Cài ứng dụng trên máy cá nhân
+
+Khi workflow thành công, tải bộ cài đúng máy từ trang Actions: Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`, Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`, macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg`, hoặc macOS Intel `tube2pod-x86_64-apple-darwin.pkg`. Mở tệp và làm theo trình cài, rồi mở **Tube2Pod** từ Start, danh sách ứng dụng Ubuntu hoặc Applications trên macOS. Kết nối Internet để hoàn tất tải công cụ trong màn hình thiết lập. Gỡ hay cài lại ứng dụng giữ dữ liệu và cấu hình. Các bộ cài chưa được xác nhận trên mọi nền tảng; cảnh báo chữ ký hệ điều hành cũng chưa được kiểm tra.
+
 <a id="demo"></a>
 ## Demo bằng Chrome
 

@@ -36,6 +36,10 @@ YouTube → yt-dlp → ffmpeg → 家中电脑上的 MP3 + SQLite
 
 已检查本地 HTTPS、RSS/封面/MP3、HEAD/Range 和管理接口隔离。真实 DNS/NAT 及外网播客播放尚未验证。表中的文件名不代表已有公开发行包可供下载。
 
+### 安装桌面应用
+
+工作流成功后，从对应的 Actions 页面下载适合电脑的安装程序：Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`、Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`、macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg` 或 macOS Intel `tube2pod-x86_64-apple-darwin.pkg`。打开文件并完成安装，再从开始菜单、Ubuntu 应用列表或 macOS Applications 打开 **Tube2Pod**。在设置界面联网下载工具。卸载或重新安装会保留数据和配置。尚未验证所有平台的安装程序及系统签名提示。
+
 <a id="demo"></a>
 ## Chrome 演示
 

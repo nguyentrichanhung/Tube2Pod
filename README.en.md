@@ -36,6 +36,10 @@ Owner    → http://localhost:8402 → management website
 
 Local HTTPS, RSS/artwork/MP3, HEAD/Range and admin isolation have been checked. DNS/NAT and podcast playback from outside the home remain unverified. Package names do not imply that published downloads are available.
 
+### Install the desktop app
+
+After a successful workflow run, download the installer for your computer from its Actions page: Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`, Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`, macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg`, or macOS Intel `tube2pod-x86_64-apple-darwin.pkg`. Open it and follow the installer, then open **Tube2Pod** from Start, Ubuntu's applications list, or macOS Applications. Connect to the Internet to download the tools in setup. Uninstalling or reinstalling preserves data and configuration. Installers and operating system signature prompts have not yet been verified on every platform.
+
 <a id="demo"></a>
 ## Chrome demo
 
