@@ -103,15 +103,28 @@ async fn version(path: &Path, name: &str) -> anyhow::Result<()> {
     } else {
         "-version"
     };
-    let status = tokio::time::timeout(
-        Duration::from_secs(10),
-        tokio::process::Command::new(path)
-            .arg(flag)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .status(),
-    )
+    let status = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut delay = Duration::from_millis(10);
+        for attempt in 0..=5 {
+            let child = tokio::process::Command::new(path)
+                .arg(flag)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn();
+            match child {
+                Ok(mut child) => return child.wait().await,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 5 =>
+                {
+                    tokio::time::sleep(delay).await;
+                    delay *= 2;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!()
+    })
     .await
     .context("version check timed out")??;
     if !status.success() {
@@ -255,15 +268,18 @@ fn extract(source: &Path, destination: &Path, asset: &Asset) -> anyhow::Result<(
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+    #[cfg(unix)]
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn retries_missing_tools_and_preserves_completed_installations() {
         let dir = tempfile::tempdir().unwrap();
@@ -337,6 +353,7 @@ mod tests {
         install_assets(dir.path(), &retry, |_| {}).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn extracts_both_binaries_from_one_verified_archive() {
         use std::io::{Cursor, Write};
@@ -380,6 +397,26 @@ mod tests {
         server.await.unwrap();
         assert!(dir.path().join("ffmpeg").is_file());
         assert!(dir.path().join("ffprobe").is_file());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn version_retries_while_executable_is_busy() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ffmpeg");
+        std::fs::write(&path, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        let error = std::process::Command::new(&path).spawn().unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::ExecutableFileBusy);
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            drop(held);
+        });
+        let result = version(&path, "ffmpeg").await;
+        release.join().unwrap();
+        result.unwrap();
     }
 
     #[tokio::test]
