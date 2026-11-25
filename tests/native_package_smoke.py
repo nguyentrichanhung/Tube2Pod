@@ -1,5 +1,6 @@
 """Install a native package on a disposable runner and exercise its desktop launcher."""
 import json
+import math
 import os
 from pathlib import Path
 import shlex
@@ -58,6 +59,16 @@ def check_architecture(binary):
     else:
         assert header[:4] == b'\x7fELF'
         assert struct.unpack_from('<H', header, 18)[0] == 62
+
+def convert_fixture(tools, suffix, output):
+    source = Path(__file__).parent / 'fixtures/audio_sine.mp3'
+    subprocess.run([str(tools / ('ffmpeg' + suffix)), '-hide_banner', '-loglevel', 'error', '-y',
+                    '-i', str(source), '-map', '0:a:0', '-ac', '2', '-c:a', 'libmp3lame',
+                    '-b:a', '128k', '-f', 'mp3', str(output)], check=True)
+    duration = float(subprocess.check_output([str(tools / ('ffprobe' + suffix)), '-v', 'error',
+        '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', str(output)], text=True).strip())
+    assert math.isfinite(duration) and duration > 0 and output.stat().st_size > 0
+    return duration
 
 def launcher():
     if windows:
@@ -163,13 +174,13 @@ try:
         assert state(info) == 'running'
     # Seed a deterministic published episode; no network source is used for this fixture.
     audio = data / 'audio' / '00000000-0000-4000-8000-000000000001-1.mp3'
-    audio.write_bytes((Path(__file__).parent / 'fixtures/audio_sine.mp3').read_bytes())
+    duration = convert_fixture(data / 'tools', suffix, audio)
     cover = data / 'shows' / 'fixture-cover.jpg'
     cover.write_bytes(b'fixture cover')
     token = 'installer-smoke-feed-token'
     with sqlite3.connect(data / 'tube2pod.db') as db:
         db.execute("INSERT INTO shows (id,title,description,category,owner_name,owner_email,cover_path,feed_token,feed_enabled,created_at,updated_at) VALUES (1,'Installer fixture','Fixture show','Technology','Fixture','fixture@example.com',?,?,1,1,1)", (str(cover), token))
-        db.execute("INSERT INTO episodes (uuid,show_id,video_id,source_url,source_title,language,stage,status,audio_path,audio_bytes,audio_duration_s,published_at,created_at,updated_at) VALUES ('00000000-0000-4000-8000-000000000001',1,'fixture','https://example.com/fixture','Fixture episode','en','complete','published',?,?,1,1,1,1)", (str(audio), audio.stat().st_size))
+        db.execute("INSERT INTO episodes (uuid,show_id,video_id,source_url,source_title,language,stage,status,audio_path,audio_bytes,audio_duration_s,published_at,created_at,updated_at) VALUES ('00000000-0000-4000-8000-000000000001',1,'fixture','https://example.com/fixture','Fixture episode','en','complete','published',?,?,?,1,1,1)", (str(audio), audio.stat().st_size, max(1, round(duration))))
     feed_path = '/feed/' + token + '.xml'
     audio_path = '/audio/' + token + '/00000000-0000-4000-8000-000000000001-1.mp3'
     public_origin = 'http://' + env['BIND_PUBLIC']
