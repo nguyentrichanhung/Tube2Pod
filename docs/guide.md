@@ -80,7 +80,7 @@ Dùng `yt-dlp_linux` cho Linux x64, `yt-dlp_macos` cho macOS, `yt-dlp.exe` cho W
 
 ### Cài ứng dụng trên máy cá nhân
 
-1. Đăng nhập GitHub, mở [trang tải bộ cài](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342) và tìm mục **Artifacts**. Chọn gói khớp với máy trong bảng trên. Trên Mac, mở menu Apple → **Giới thiệu về máy Mac này** để xem máy dùng chip Apple hay Intel. Bản 0.1.0 hiện ở dạng nháp.
+1. Mở [Tube2Pod 0.1.0](https://github.com/nguyentrichanhung/Tube2Pod/releases/tag/v0.1.0) và chọn bộ cài khớp với máy trong mục **Assets**. Trên Mac, xem loại chip trong menu Apple → **Giới thiệu về máy Mac này**.
 2. Giải nén tệp tải về, mở bộ cài rồi làm theo hướng dẫn. Sau đó mở **Tube2Pod** từ Start trên Windows, danh sách ứng dụng trên Ubuntu hoặc Applications trên Mac.
 3. Kết nối Internet và bấm **Cài đặt**. Tube2Pod tự tải yt-dlp, FFmpeg và ffprobe. Khi màn hình báo sẵn sàng, bấm **Mở Tube2Pod**. Gỡ rồi cài lại ứng dụng sẽ giữ dữ liệu và cấu hình.
 

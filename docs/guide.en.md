@@ -80,7 +80,7 @@ Use `yt-dlp_linux` for Linux x64, `yt-dlp_macos` for macOS and `yt-dlp.exe` for 
 
 ### Install the desktop app
 
-1. Sign in to GitHub, open the [installer downloads](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342) and find **Artifacts**. Choose the package matching your computer in the table above. On a Mac, check **About This Mac** in the Apple menu to see whether it uses an Apple or Intel chip. Version 0.1.0 is a draft.
+1. Open [Tube2Pod 0.1.0](https://github.com/nguyentrichanhung/Tube2Pod/releases/tag/v0.1.0) and select the installer for your computer under **Assets**. On a Mac, check the chip under **About This Mac** in the Apple menu.
 2. Extract the downloaded archive, open the installer and follow its instructions. Launch **Tube2Pod** from Windows Start, the Ubuntu applications list or macOS Applications.
 3. Connect to the Internet and select **Cài đặt** (Install). Tube2Pod downloads yt-dlp, FFmpeg and ffprobe. When setup is ready, select **Mở Tube2Pod** (Open Tube2Pod). Uninstalling and reinstalling preserves your data and settings.
 

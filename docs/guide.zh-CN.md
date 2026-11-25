@@ -80,7 +80,7 @@ Linux x64 使用 `yt-dlp_linux`，macOS 使用 `yt-dlp_macos`，Windows 使用 `
 
 ### 安装桌面应用
 
-1. 登录 GitHub，打开[安装包下载页面](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342)，在 **Artifacts** 中选择与上表中电脑型号对应的包。Mac 用户可从苹果菜单打开“关于本机”，查看使用的是 Apple 芯片还是 Intel 处理器。0.1.0 目前为草稿版本。
+1. 打开 [Tube2Pod 0.1.0](https://github.com/nguyentrichanhung/Tube2Pod/releases/tag/v0.1.0)，在 **Assets** 中选择适合电脑的安装程序。Mac 用户可从苹果菜单打开“关于本机”，查看使用的是 Apple 芯片还是 Intel 处理器。
 2. 解压下载的文件，打开安装程序并按提示操作。随后从 Windows 开始菜单、Ubuntu 应用列表或 macOS 的“应用程序”打开 **Tube2Pod**。
 3. 联网后点击 **Cài đặt**（安装）。Tube2Pod 会自动下载 yt-dlp、FFmpeg 和 ffprobe。准备就绪后点击 **Mở Tube2Pod**（打开 Tube2Pod）。卸载后重新安装会保留数据和配置。
 
