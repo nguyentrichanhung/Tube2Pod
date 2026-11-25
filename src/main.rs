@@ -30,6 +30,9 @@ use tokio::sync::Notify;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut args = env::args_os().skip(1);
+    if env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--desktop")) {
+        return setup::desktop(args.skip(1).collect()).await;
+    }
     let file = match args.next() {
         None => None,
         Some(flag) if flag == "--config" => {
