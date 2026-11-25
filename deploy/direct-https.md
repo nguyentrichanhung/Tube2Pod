@@ -13,7 +13,7 @@ Bạn cần IP public và quyền cấu hình router. Nếu chưa có tên miề
 
 ## Cấu hình và chạy
 
-1. Sao chép `deploy/Caddyfile.example` thành file cấu hình Caddy của bạn và thay `podcast.example.com` bằng hostname thật. Proxy chỉ trỏ tới `127.0.0.1:8401`.
+1. Sao chép `Caddyfile.example` ở thư mục gói (hoặc `deploy/Caddyfile.example` trong source checkout) thành file cấu hình Caddy của bạn và thay `podcast.example.com` bằng hostname thật. Proxy chỉ trỏ tới `127.0.0.1:8401`.
 2. Trong cấu hình Tube2Pod, đặt `PUBLIC_BASE_URL=https://<hostname-thật>`. Để trống nếu chỉ dùng local/LAN. Khởi động lại Tube2Pod sau khi sửa cấu hình.
 3. Trên router, chuyển tiếp TCP 80 và 443 tới máy chạy Caddy; cho phép các cổng đó qua firewall của máy. Không chuyển tiếp 8400, 8401, 8402 hay 8403 ra Internet. Giữ admin 8400, public 8401, owner 8402 trên loopback; 8403 chỉ dành cho ghép thiết bị LAN.
 4. Chạy Tube2Pod và Caddy thành hai tiến trình riêng. Ví dụ chạy Caddy foreground với `caddy run --config /đường/dẫn/Caddyfile --adapter caddyfile`. Với hostname thật, DNS đúng và cổng mở, Caddy tự cấp và gia hạn chứng chỉ; xem [Automatic HTTPS](https://caddyserver.com/docs/automatic-https). Giữ dữ liệu Caddy bền vững để duy trì chứng chỉ.

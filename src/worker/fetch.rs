@@ -126,16 +126,13 @@ mod tests {
         self,
         shows::{self, NewShow},
     };
-    use std::os::unix::fs::PermissionsExt;
 
     async fn setup(
         root: &std::path::Path,
         script: &str,
         key: &str,
     ) -> (Config, SqlitePool, Episode) {
-        let tool = root.join("yt-dlp");
-        std::fs::write(&tool, script).unwrap();
-        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let tool = crate::test_tools::tool(root, "yt-dlp", script);
         let cfg = Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net".into()),
             "DATA_DIR" => Some(root.display().to_string()),
@@ -178,7 +175,7 @@ mod tests {
     #[tokio::test]
     async fn source_limits_are_read_from_settings() {
         let dir = tempfile::tempdir().unwrap();
-        let script = "#!/bin/sh\nprintf '%s' '{\"title\":\"Video\",\"duration\":120}'\n";
+        let script = "metadata\noutput={\"title\":\"Video\",\"duration\":120}";
         let (cfg, pool, ep) = setup(dir.path(), script, "id:alt").await;
         db::settings::set(&pool, "max_source_minutes", "1")
             .await
@@ -202,7 +199,7 @@ mod tests {
     #[tokio::test]
     async fn selected_audio_missing_at_download_fails_without_switching_tracks() {
         let dir = tempfile::tempdir().unwrap();
-        let script = "#!/bin/sh\nprintf '%s' '{\"title\":\"Video\",\"duration\":600,\"formats\":[{\"format_id\":\"main\",\"audio_track_id\":\"main\",\"acodec\":\"opus\",\"vcodec\":\"none\"}]}'\n";
+        let script = "metadata\noutput={\"title\":\"Video\",\"duration\":600,\"formats\":[{\"format_id\":\"main\",\"audio_track_id\":\"main\",\"acodec\":\"opus\",\"vcodec\":\"none\"}]}";
         let (cfg, pool, ep) = setup(dir.path(), script, "id:alt").await;
         let err = fetch_episode(&pool, &cfg, &ep).await.unwrap_err();
         assert!(!err.retryable);
@@ -220,7 +217,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let started = dir.path().join("started");
         let finished = dir.path().join("finished");
-        let script = format!("#!/bin/sh\nif [ \"$1\" = --dump-single-json ]; then printf '%s' '{{\"title\":\"Video\",\"duration\":600,\"formats\":[{{\"format_id\":\"alt\",\"audio_track_id\":\"alt\",\"acodec\":\"opus\",\"vcodec\":\"none\"}}]}}'; exit; fi\ntouch '{}'\nsleep 2\ntouch '{}'\n", started.display(), finished.display());
+        let script = format!("delayed-write\njson={{\"title\":\"Video\",\"duration\":600,\"formats\":[{{\"format_id\":\"alt\",\"audio_track_id\":\"alt\",\"acodec\":\"opus\",\"vcodec\":\"none\"}}]}}\nstarted={}\nfinished={}", started.display(), finished.display());
         let (cfg, pool, ep) = setup(dir.path(), &script, "id:alt").await;
         let uuid = ep.uuid.clone();
         let task_pool = pool.clone();

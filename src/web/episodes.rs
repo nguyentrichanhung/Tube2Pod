@@ -660,11 +660,8 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_retry_waits_for_track_confirmation() {
-        use std::os::unix::fs::PermissionsExt;
         let mut context = ctx().await;
-        let tool = context._dir.path().join("yt-dlp");
-        std::fs::write(&tool, "#!/bin/sh\nprintf '%s' '{\"title\":\"Video\",\"duration\":600,\"formats\":[{\"format_id\":\"main\",\"audio_track_id\":\"main\",\"acodec\":\"opus\",\"vcodec\":\"none\",\"format_note\":\"main (default)\"},{\"format_id\":\"alt\",\"audio_track_id\":\"alt\",\"acodec\":\"opus\",\"vcodec\":\"none\",\"format_note\":\"alternate\"}]}'\n").unwrap();
-        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let tool = crate::test_tools::tool(context._dir.path(), "yt-dlp", "metadata\noutput={\"title\":\"Video\",\"duration\":600,\"formats\":[{\"format_id\":\"main\",\"audio_track_id\":\"main\",\"acodec\":\"opus\",\"vcodec\":\"none\",\"format_note\":\"main (default)\"},{\"format_id\":\"alt\",\"audio_track_id\":\"alt\",\"acodec\":\"opus\",\"vcodec\":\"none\",\"format_note\":\"alternate\"}]}");
         Arc::make_mut(&mut context.state.cfg).ytdlp_path = tool.display().to_string();
         let show = create_show(&context, "Show").await;
         let ep = create_episode(&context, show.id, "Old").await;

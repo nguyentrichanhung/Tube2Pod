@@ -4,12 +4,28 @@ YouTube URL → RSS podcast. Tube2Pod downloads the selected source audio with
 `yt-dlp`, converts the full track to MP3 with `ffmpeg`, measures it with
 `ffprobe`, and publishes one RSS feed per show.
 
+### Home publishing without Tailscale
+
+Use the [portable server guide](deploy/portable.md) for Windows x64, Linux x64,
+macOS ARM64 or Intel. The package contains the server, launcher and examples;
+install media tools separately. Open the owner UI at `http://localhost:8402`.
+For Internet listening, follow [direct HTTPS/NAT](deploy/direct-https.md): free
+DuckDNS hostname → home router → Caddy → public listener. Administration stays
+local. No relay or Omnivoice is required.
+
+Native packages are built by `.github/workflows/server-packages.yml`. Build and
+runtime evidence must be checked separately; a configured CI matrix is not a
+successful release. Locally verified: Ubuntu 22.04.5 x64 package, real YouTube
+audio conversion/publishing, restart persistence and Caddy with a local CA.
+Windows/macOS native runs and real Internet NAT remain unverified. Current verification is recorded in the approved implementation
+plan under `docs/superpowers/plans/2026-11-25-direct-home-publishing.md`.
+
 ### Local development
 
 Requirements: Rust 1.85+, `yt-dlp`, `ffmpeg`, and `ffprobe`.
 
 ```bash
-export PUBLIC_BASE_URL=https://pod.example.ts.net:8443
+export PUBLIC_BASE_URL=https://your-name.duckdns.org
 export DATA_DIR=./data
 export YTDLP_PATH=yt-dlp
 export FFMPEG_PATH=ffmpeg
@@ -20,8 +36,8 @@ cargo run
 ```
 
 The admin and public listeners bind to `http://127.0.0.1:8400` and
-`http://127.0.0.1:8401`. Open the admin through the existing HTTPS proxy;
-form Origin verification requires HTTPS. Feed URLs use `PUBLIC_BASE_URL`.
+`http://127.0.0.1:8401`. Manage the server locally at `http://localhost:8402`.
+Feed URLs use `PUBLIC_BASE_URL`; publish only the public listener through Caddy.
 
 ### Upgrade from the old pipeline
 
@@ -90,7 +106,7 @@ episode. Keep the demo server and its access available for the review period;
 a used or expired QR needs a new one. If the reviewer cannot reach the demo
 server over LAN, agree on another review approach before submitting.
 
-### Tailscale Serve and Funnel
+### Optional existing Tailscale deployment
 
 Admin stays tailnet-only on 443; public feed uses Funnel on 8443:
 
@@ -107,7 +123,7 @@ and without a trailing slash. Do not expose `:8400` with Funnel.
 1. Create a show in `/shows`.
 2. Complete the feed checklist and enable the feed.
 3. Open the show's **Feed** tab and copy the absolute Feed URL, for example
-   `https://YOUR-MACHINE.YOUR-TAILNET.ts.net:8443/feed/<token>.xml`. Use the
+   `https://your-name.duckdns.org/feed/<token>.xml`. Use the
    full URL, not just the `/feed/<token>.xml` path.
 4. In Apple Podcasts Connect choose **Add Show → Add by URL**.
 5. Paste the absolute feed URL.

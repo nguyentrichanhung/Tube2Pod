@@ -13,6 +13,8 @@ mod models;
 mod relay;
 mod services;
 mod state;
+#[cfg(test)]
+mod test_tools;
 mod web;
 mod worker;
 

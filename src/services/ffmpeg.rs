@@ -130,16 +130,14 @@ pub fn format_duration(seconds: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
-    use std::path::PathBuf;
 
     #[tokio::test]
     async fn converts_selected_stream_to_stereo_and_probes_output() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = test_config(dir.path());
-        let args = dir.path().join("args");
-        fake_binary(dir.path(), "ffmpeg", &format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nfor a in \"$@\"; do out=\"$a\"; done\nprintf audio > \"$out\"\n", args.display()));
-        fake_binary(dir.path(), "ffprobe", "#!/bin/sh\nprintf '12.5\\n'\n");
+        let source = dir.path().join("source");
+        std::fs::write(&source, b"audio").unwrap();
+        let args = std::path::Path::new(&cfg.ffmpeg_path).with_extension("args");
         let result = convert_to_mp3(
             &cfg,
             &dir.path().join("source"),
@@ -168,25 +166,24 @@ mod tests {
             _ => None,
         })
         .unwrap();
-        cfg.ffmpeg_path = dir.join("ffmpeg").display().to_string();
-        cfg.ffprobe_path = dir.join("ffprobe").display().to_string();
+        cfg.ffmpeg_path = crate::test_tools::tool(
+            dir,
+            "ffmpeg",
+            &format!("conversion-copy\nsource={}", dir.join("source").display()),
+        )
+        .display()
+        .to_string();
+        cfg.ffprobe_path = crate::test_tools::tool(dir, "ffprobe", "probe\noutput=12.5")
+            .display()
+            .to_string();
         cfg
-    }
-
-    fn fake_binary(dir: &Path, name: &str, body: &str) -> PathBuf {
-        let path = dir.join(name);
-        std::fs::write(&path, body).unwrap();
-        let mut perms = std::fs::metadata(&path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&path, perms).unwrap();
-        path
     }
 
     #[tokio::test]
     async fn probe_parses_trimmed_duration() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = test_config(dir.path());
-        fake_binary(dir.path(), "ffprobe", "#!/bin/sh\nprintf '  9.25  \\n'\n");
+        crate::test_tools::tool(dir.path(), "ffprobe", "probe\noutput=  9.25  ");
 
         assert_eq!(
             probe(&cfg, &dir.path().join("audio.mp3")).await.unwrap(),
@@ -198,7 +195,7 @@ mod tests {
     async fn probe_rejects_invalid_output() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = test_config(dir.path());
-        fake_binary(dir.path(), "ffprobe", "#!/bin/sh\nprintf 'nope\\n'\n");
+        crate::test_tools::tool(dir.path(), "ffprobe", "probe\noutput=nope");
 
         let err = probe(&cfg, &dir.path().join("audio.mp3"))
             .await
@@ -207,5 +204,29 @@ mod tests {
             matches!(err, AppError::Upstream(_)),
             "unexpected error: {err:?}"
         );
+    }
+    #[tokio::test]
+    #[ignore = "requires installed ffmpeg and ffprobe; run in native packaging CI"]
+    async fn real_media_conversion_with_spaces() {
+        let dir = tempfile::Builder::new()
+            .prefix("media smoke ")
+            .tempdir()
+            .unwrap();
+        let cfg = Config::from_lookup(|key| match key {
+            "DATA_DIR" => Some(dir.path().display().to_string()),
+            "FFMPEG_PATH" | "FFPROBE_PATH" => std::env::var(key).ok(),
+            _ => None,
+        })
+        .unwrap();
+        let source = dir.path().join("source audio.mp3");
+        std::fs::write(
+            &source,
+            include_bytes!("../../tests/fixtures/audio_sine.mp3"),
+        )
+        .unwrap();
+        let out = dir.path().join("converted audio.mp3");
+        let result = convert_to_mp3(&cfg, &source, &out).await.unwrap();
+        assert!(result.bytes > 0 && result.duration_s > 0.0);
+        assert_eq!(std::fs::metadata(out).unwrap().len(), result.bytes);
     }
 }

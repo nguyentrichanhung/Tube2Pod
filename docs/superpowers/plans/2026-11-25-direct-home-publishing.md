@@ -119,16 +119,16 @@ Thực hiện tuần tự. Task 2 dùng layout riêng theo mẫu; Task 3 áp d�
 
 ## Kết quả xác minh (điền khi thực hiện)
 
-| Hạng mục | Trạng thái ban đầu |
+| Hạng mục | Kết quả 25/11/2026 |
 | --- | --- |
 | Thiết kế và layout | Người dùng đã duyệt |
-| Linux x64 artifact / runtime | Chưa thực hiện |
-| Windows x64 artifact / runtime | Chưa thực hiện |
-| macOS arm64 artifact / runtime | Chưa thực hiện |
-| macOS x64 artifact / runtime | Chưa thực hiện |
-| UI sản phẩm với backend | Chưa thực hiện; mockup đã thử riêng |
-| HTTPS local proxy / public isolation | Chưa thực hiện |
-| Domain thật, NAT, app podcast từ ngoài nhà | Chưa thực hiện |
+| Linux x64 artifact / runtime | 1 artifact build/run/pass trên Ubuntu22.04.5 x64; source thật67s → MP3/publish/restart giữ show/token/audio |
+| Windows x64 artifact / runtime | Workflow đã chuẩn bị; 0 build/run/pass native, chưa chạy CI |
+| macOS arm64 artifact / runtime | Workflow đã chuẩn bị; 0 build/run/pass native, chưa chạy CI |
+| macOS x64 artifact / runtime | Workflow đã chuẩn bị; 0 build/run/pass native, chưa chạy CI |
+| UI sản phẩm với backend | Task3 browser1440/390, theme, preview fixture, feed actions và cover đạt; Task4 source preview/pipeline thật qua HTTP đạt |
+| HTTPS local proxy / public isolation | Caddy local CA verified: RSS/cover/audio200, HEAD200, Range206; 8admin/mobile routes404 |
+| Domain thật, NAT, app podcast từ ngoài nhà | Chưa kiểm chứng: chưa có hostname DuckDNS đăng ký, router forwarding và thiết bị ngoài mạng |
 
 ## Tự review kế hoạch
 

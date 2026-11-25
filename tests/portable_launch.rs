@@ -1,11 +1,10 @@
-#![cfg(unix)]
+#[path = "../src/test_tools.rs"]
+mod test_tools;
 
-use std::{fs, net::TcpListener, os::unix::fs::PermissionsExt, path::Path, process::Command};
+use std::{fs, net::TcpListener, path::Path, process::Command};
 
 fn config(dir: &Path, extra: &str) -> std::path::PathBuf {
-    let tool = dir.join("media tool");
-    fs::write(&tool, "#!/bin/sh\nexit 0\n").unwrap();
-    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    let tool = test_tools::tool(dir, "media tool", "ok");
     let path = dir.join("settings with spaces.env");
     fs::write(&path, format!("DATA_DIR={}\nYTDLP_PATH={}\nFFMPEG_PATH={}\nFFPROBE_PATH={}\nBIND_ADMIN=127.0.0.1:0\nBIND_PUBLIC=127.0.0.1:0\nBIND_OWNER=127.0.0.1:0\nBIND_LAN=127.0.0.1:0\n{extra}", dir.join("data space").display(), tool.display(), tool.display(), tool.display())).unwrap();
     path
@@ -92,7 +91,7 @@ fn environment_precedence_and_empty_data_override() {
 fn rejects_unsuccessful_tool_version() {
     let dir = tempfile::tempdir().unwrap();
     let path = config(dir.path(), "");
-    fs::write(dir.path().join("media tool"), "#!/bin/sh\nexit 7\n").unwrap();
+    test_tools::tool(dir.path(), "media tool", "fail");
     fails(
         &[std::ffi::OsStr::new("--config"), path.as_os_str()],
         "version check failed",
@@ -103,7 +102,15 @@ fn rejects_unsuccessful_tool_version() {
 fn times_out_unresponsive_tool() {
     let dir = tempfile::tempdir().unwrap();
     let path = config(dir.path(), "");
-    fs::write(dir.path().join("media tool"), "#!/bin/sh\nexec sleep 30\n").unwrap();
+    test_tools::tool(
+        dir.path(),
+        "media tool",
+        &format!(
+            "delayed-write\nms=30000\nstarted={}\nfinished={}",
+            dir.path().join("started").display(),
+            dir.path().join("finished").display()
+        ),
+    );
     let started = std::time::Instant::now();
     fails(
         &[std::ffi::OsStr::new("--config"), path.as_os_str()],

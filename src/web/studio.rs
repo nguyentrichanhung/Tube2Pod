@@ -634,11 +634,8 @@ mod tests {
     }
 
     async fn state_with_probe() -> (AppState, tempfile::TempDir) {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let executable = dir.path().join("probe");
-        std::fs::write(&executable, "#!/bin/sh\nprintf '%s' '{\"title\":\"Probed\",\"channel\":\"Channel\",\"description\":\"Description\",\"duration\":120,\"upload_date\":\"20240101\",\"formats\":[{\"format_id\":\"1\",\"acodec\":\"aac\",\"audio_track_id\":\"main\",\"language\":\"en\",\"language_preference\":5},{\"format_id\":\"2\",\"acodec\":\"aac\",\"audio_track_id\":\"alt\"}]}'\n").unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let executable = crate::test_tools::tool(dir.path(), "probe", "metadata\noutput={\"title\":\"Probed\",\"channel\":\"Channel\",\"description\":\"Description\",\"duration\":120,\"upload_date\":\"20240101\",\"formats\":[{\"format_id\":\"1\",\"acodec\":\"aac\",\"audio_track_id\":\"main\",\"language\":\"en\",\"language_preference\":5},{\"format_id\":\"2\",\"acodec\":\"aac\",\"audio_track_id\":\"alt\"}]}");
         let mut state = test_state().await;
         Arc::make_mut(&mut state.cfg).ytdlp_path = executable.to_string_lossy().into_owned();
         (state, dir)

@@ -71,22 +71,20 @@ mod tests {
         self,
         shows::{self, NewShow},
     };
-    use std::os::unix::fs::PermissionsExt;
 
     async fn setup(root: &std::path::Path, ffmpeg: &str) -> (Config, SqlitePool, Episode) {
-        for (name, body) in [("ffmpeg", ffmpeg), ("ffprobe", "#!/bin/sh\necho 12.5\n")] {
-            let path = root.join(name);
-            std::fs::write(&path, body).unwrap();
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
         let mut cfg = Config::from_lookup(|key| match key {
             "PUBLIC_BASE_URL" => Some("https://pod.example.ts.net".into()),
             "DATA_DIR" => Some(root.display().to_string()),
             _ => None,
         })
         .unwrap();
-        cfg.ffmpeg_path = root.join("ffmpeg").display().to_string();
-        cfg.ffprobe_path = root.join("ffprobe").display().to_string();
+        cfg.ffmpeg_path = crate::test_tools::tool(root, "ffmpeg", ffmpeg)
+            .display()
+            .to_string();
+        cfg.ffprobe_path = crate::test_tools::tool(root, "ffprobe", "probe\noutput=12.5")
+            .display()
+            .to_string();
         let pool = db::test_pool().await;
         let show = shows::create(
             &pool,
@@ -130,9 +128,11 @@ mod tests {
     #[tokio::test]
     async fn database_failure_can_retry_without_incrementing_version() {
         let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("fixture source");
+        std::fs::write(&source, b"audio").unwrap();
         let (cfg, pool, ep) = setup(
             root.path(),
-            "#!/bin/sh\nfor a in \"$@\"; do out=$a; done\nprintf audio > \"$out\"\n",
+            &format!("conversion-copy\nsource={}", source.display()),
         )
         .await;
         let audio_dir = root.path().join("audio");
@@ -169,7 +169,7 @@ mod tests {
     #[tokio::test]
     async fn missing_temporary_source_returns_to_fetch_with_saved_track() {
         let root = tempfile::tempdir().unwrap();
-        let (cfg, pool, ep) = setup(root.path(), "#!/bin/sh\nexit 1\n").await;
+        let (cfg, pool, ep) = setup(root.path(), "fail").await;
         std::fs::remove_file(root.path().join("tmp").join(&ep.uuid).join("source.media")).unwrap();
         assemble_episode(&pool, &cfg, &ep).await.unwrap();
         let resumed = episodes::get(&pool, &ep.uuid).await.unwrap().unwrap();
@@ -183,7 +183,7 @@ mod tests {
         let started = root.path().join("started");
         let finished = root.path().join("finished");
         let script = format!(
-            "#!/bin/sh\ntouch '{}'\nsleep 2\ntouch '{}'\n",
+            "delayed-write\nstarted={}\nfinished={}",
             started.display(),
             finished.display()
         );
