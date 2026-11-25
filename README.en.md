@@ -17,7 +17,7 @@ Direct home publishing requires no Omnivoice, Tailscale or relay server.
 - Manage shows, episodes, queues, artwork and a separate RSS feed for each show.
 - Preview audio, publish episodes and filter the library; light, dark and system themes.
 - Pair the mobile app on your LAN using a one-use QR code; administration stays at home.
-- Publish directly through Caddy and router NAT; install media tools and Caddy separately.
+- Publish directly through Caddy and router NAT; the desktop installer downloads media tools, and Caddy is installed separately.
 
 ```text
 YouTube → yt-dlp → ffmpeg → MP3 + SQLite on your home machine
@@ -29,16 +29,12 @@ Owner    → http://localhost:8402 → management website
 
 | Platform | Intended package | Verified |
 | --- | --- | --- |
-| Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.tar.gz` | Ubuntu 22.04.5: build, launch, real source, publishing and restart |
-| Windows x64 | `tube2pod-x86_64-pc-windows-msvc.zip` | Workflow prepared; native run pending |
-| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.tar.gz` | Workflow prepared; native run pending |
-| macOS Intel | `tube2pod-x86_64-apple-darwin.tar.gz` | Workflow prepared; native run pending |
+| Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | Clean Ubuntu container: GDebi install, tool download, real source/RSS, offline reopen after reinstall |
+| Windows x64 | `tube2pod-x86_64-pc-windows-msvc.exe` | Workflow prepared; native run pending |
+| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | Tool source decision pending; unavailable on clean machines |
+| macOS Intel | `tube2pod-x86_64-apple-darwin.pkg` | Workflow prepared; native run pending |
 
 Local HTTPS, RSS/artwork/MP3, HEAD/Range and admin isolation have been checked. DNS/NAT and podcast playback from outside the home remain unverified. Package names do not imply that published downloads are available.
-
-### Install the desktop app
-
-After a successful workflow run, download the installer for your computer from its Actions page: Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`, Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`, macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg`, or macOS Intel `tube2pod-x86_64-apple-darwin.pkg`. Open it and follow the installer, then open **Tube2Pod** from Start, Ubuntu's applications list, or macOS Applications. Connect to the Internet to download the tools in setup. Uninstalling or reinstalling preserves data and configuration. Installers and operating system signature prompts have not yet been verified on every platform.
 
 <a id="demo"></a>
 ## Chrome demo
@@ -67,6 +63,8 @@ Chrome was used to preview the real YouTube source, edit the show, open the libr
 <a id="requirements"></a>
 ## Requirements
 
+The desktop installer downloads media tools; manual installation below is only for the portable package.
+
 | Component | Needed for | Installation source |
 | --- | --- | --- |
 | Native Tube2Pod | Always | Build from source or use a successful workflow artifact |
@@ -80,7 +78,19 @@ Use `yt-dlp_linux` for Linux x64, `yt-dlp_macos` for macOS and `yt-dlp.exe` for 
 <a id="installation"></a>
 ## Install and run
 
-### 1. Install media tools
+### Install the desktop app
+
+After a successful workflow run, download the installer for your computer from its Actions page: Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`, Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`, macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg`, or macOS Intel `tube2pod-x86_64-apple-darwin.pkg`. Open it and follow the installer, then open **Tube2Pod** from Start, Ubuntu's applications list, or macOS Applications. Connect to the Internet to download the tools in setup. Uninstalling or reinstalling preserves data and configuration.
+
+Ubuntu Desktop x64 was tested in a clean container using the GDebi GUI: installation, first-use tool downloads, a real source and RSS, and offline reopening after uninstall/reinstall. Windows x64 and macOS Intel await native validation. The macOS Apple Silicon tool source decision is pending; setup is currently unavailable on clean machines.
+
+Windows and macOS signature prompts have not been verified.
+
+### Portable package (manual setup)
+
+The steps below apply only to the portable package; the desktop installer downloads the tools during setup.
+
+#### 1. Install media tools
 
 - **Ubuntu/Debian:** `sudo apt install ffmpeg`; download standalone yt-dlp from the source above, put it in your tools directory and run `chmod +x /path/to/yt-dlp_linux`.
 - **macOS:** if you use Homebrew, `brew install ffmpeg` supplies ffmpeg/ffprobe; download `yt-dlp_macos` and make it executable.
@@ -88,7 +98,7 @@ Use `yt-dlp_linux` for Linux x64, `yt-dlp_macos` for macOS and `yt-dlp.exe` for 
 
 Set absolute tool paths in the config if they are not on PATH. Check `yt-dlp --version`, `ffmpeg -version`, `ffprobe -version`, using the actual installed paths/filenames when different.
 
-### 2. Obtain and extract a package
+#### 2. Obtain and extract a package
 
 Once the repository's [Native server packages workflow](.github/workflows/server-packages.yml) succeeds, download the matching target artifact from that run's Actions page. Windows/macOS results are not yet confirmed. If no artifact exists, [build from source](#development). Extract the entire package into its own directory.
 
@@ -104,7 +114,7 @@ cp portable.env.example tube2pod.env
 Copy-Item portable.env.example tube2pod.env
 ```
 
-### 3. Configure tools and data
+#### 3. Configure tools and data
 
 Windows example; use equivalent absolute paths on Unix:
 
@@ -120,7 +130,7 @@ DATA_DIR=C:\Tube2Pod data
 
 The UTF-8 file uses `KEY=VALUE`, allowing BOM/CRLF, blank lines, leading `#` comments and matching outer quotes. It does not expand `$HOME`, `~`, shell commands, escapes or trailing comments. Duplicate keys and malformed lines fail. Precedence: **nonblank environment → file → defaults**. The launcher switches to the package directory; use absolute tool/data paths.
 
-### 4. Start the server and open the website
+#### 4. Start the server and open the website
 
 ```sh
 # Linux / macOS, first terminal

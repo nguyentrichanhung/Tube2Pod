@@ -17,7 +17,7 @@ Không cần Omnivoice, Tailscale hay máy chủ relay để chia sẻ trực ti
 - Quản lý show, tập, hàng đợi, ảnh bìa và feed RSS riêng cho từng show.
 - Nghe thử, phát hành, lọc thư viện; giao diện sáng/tối/theo hệ thống.
 - Ghép app điện thoại trong LAN bằng QR một lần; quản trị chỉ ở máy nhà.
-- HTTPS trực tiếp qua Caddy và NAT; công cụ media và Caddy được cài riêng.
+- HTTPS trực tiếp qua Caddy và NAT; bộ cài tải công cụ media, Caddy cài riêng.
 
 ```text
 YouTube → yt-dlp → ffmpeg → MP3 + SQLite trên máy nhà
@@ -29,16 +29,12 @@ Chủ máy  → http://localhost:8402 → web quản trị
 
 | Nền tảng | Gói mục tiêu | Đã kiểm chứng |
 | --- | --- | --- |
-| Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.tar.gz` | Ubuntu 22.04.5: build, chạy, nguồn thật, publish và restart |
-| Windows x64 | `tube2pod-x86_64-pc-windows-msvc.zip` | Có workflow; chưa chạy native |
-| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.tar.gz` | Có workflow; chưa chạy native |
-| macOS Intel | `tube2pod-x86_64-apple-darwin.tar.gz` | Có workflow; chưa chạy native |
+| Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | GDebi trên container Ubuntu sạch: cài, tải công cụ, nguồn thật/RSS, mở offline sau cài lại |
+| Windows x64 | `tube2pod-x86_64-pc-windows-msvc.exe` | Có workflow; chưa chạy native |
+| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | Nguồn công cụ đang chờ quyết định; chưa dùng được trên máy sạch |
+| macOS Intel | `tube2pod-x86_64-apple-darwin.pkg` | Có workflow; chưa chạy native |
 
 Đã kiểm tra HTTPS local, RSS/ảnh/MP3, HEAD/Range và cách ly quản trị. Chưa kiểm chứng DNS/NAT/phát podcast từ mạng ngoài nhà. Tên gói trong bảng không đồng nghĩa đã có bản phát hành để tải.
-
-### Cài ứng dụng trên máy cá nhân
-
-Khi workflow thành công, tải bộ cài đúng máy từ trang Actions: Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`, Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`, macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg`, hoặc macOS Intel `tube2pod-x86_64-apple-darwin.pkg`. Mở tệp và làm theo trình cài, rồi mở **Tube2Pod** từ Start, danh sách ứng dụng Ubuntu hoặc Applications trên macOS. Kết nối Internet để hoàn tất tải công cụ trong màn hình thiết lập. Gỡ hay cài lại ứng dụng giữ dữ liệu và cấu hình. Các bộ cài chưa được xác nhận trên mọi nền tảng; cảnh báo chữ ký hệ điều hành cũng chưa được kiểm tra.
 
 <a id="demo"></a>
 ## Demo bằng Chrome
@@ -67,6 +63,8 @@ Trong Chrome, đã xem trước nguồn YouTube thật, sửa thông tin show, m
 <a id="requirements"></a>
 ## Yêu cầu
 
+Bộ cài ứng dụng tự tải công cụ media; hướng dẫn cài thủ công dưới đây chỉ áp dụng cho gói portable.
+
 | Thành phần | Khi nào cần | Nguồn cài đặt |
 | --- | --- | --- |
 | Tube2Pod native | Luôn cần | Build từ source hoặc artifact của workflow thành công |
@@ -80,7 +78,19 @@ Dùng `yt-dlp_linux` cho Linux x64, `yt-dlp_macos` cho macOS, `yt-dlp.exe` cho W
 <a id="installation"></a>
 ## Cài đặt và chạy
 
-### 1. Cài công cụ media
+### Cài ứng dụng trên máy cá nhân
+
+Khi workflow thành công, tải bộ cài đúng máy từ trang Actions: Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`, Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`, macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg`, hoặc macOS Intel `tube2pod-x86_64-apple-darwin.pkg`. Mở tệp và làm theo trình cài, rồi mở **Tube2Pod** từ Start, danh sách ứng dụng Ubuntu hoặc Applications trên macOS. Kết nối Internet để hoàn tất tải công cụ trong màn hình thiết lập. Gỡ hay cài lại ứng dụng giữ dữ liệu và cấu hình.
+
+Ubuntu Desktop x64 đã được thử trong container sạch với GDebi: cài qua giao diện, tải công cụ lần đầu, xử lý nguồn thật và RSS, rồi mở lại không có mạng sau khi gỡ/cài lại. Windows x64 và macOS Intel đang chờ kiểm thử native. Nguồn công cụ cho macOS Apple Silicon đang chờ quyết định; thiết lập hiện chưa dùng được trên máy sạch.
+
+Lời nhắc chữ ký trên Windows và macOS chưa được kiểm chứng.
+
+### Dùng gói portable (cài thủ công)
+
+Các bước dưới đây chỉ dành cho gói portable; bộ cài ứng dụng tải công cụ trong màn hình thiết lập.
+
+#### 1. Cài công cụ media
 
 - **Ubuntu/Debian:** `sudo apt install ffmpeg`; tải yt-dlp standalone từ nguồn ở trên, đặt trong thư mục công cụ và cấp quyền chạy bằng `chmod +x /đường/dẫn/yt-dlp_linux`.
 - **macOS:** cài `ffmpeg`/`ffprobe` bằng `brew install ffmpeg` nếu đã dùng Homebrew; tải `yt-dlp_macos` và cấp quyền chạy tương tự.
@@ -88,7 +98,7 @@ Dùng `yt-dlp_linux` cho Linux x64, `yt-dlp_macos` cho macOS, `yt-dlp.exe` cho W
 
 Trỏ đường dẫn tuyệt đối trong cấu hình nếu công cụ không có trong PATH. Kiểm tra bằng `yt-dlp --version`, `ffmpeg -version`, `ffprobe -version` hoặc đường dẫn/tên file thực tế đã cài.
 
-### 2. Lấy và giải nén gói
+#### 2. Lấy và giải nén gói
 
 Khi [workflow Native server packages](.github/workflows/server-packages.yml) đã chạy thành công trên repository, lấy artifact đúng target từ trang Actions của lần chạy đó. Hiện chưa có kết quả Windows/macOS được xác nhận. Nếu chưa có artifact, xem [build từ source](#development). Giải nén cả gói vào thư mục riêng.
 
@@ -104,7 +114,7 @@ cp portable.env.example tube2pod.env
 Copy-Item portable.env.example tube2pod.env
 ```
 
-### 3. Sửa cấu hình
+#### 3. Sửa cấu hình
 
 Ví dụ Windows; trên Unix thay bằng đường dẫn tuyệt đối tương ứng:
 
@@ -120,7 +130,7 @@ DATA_DIR=C:\Tube2Pod data
 
 File UTF-8 gồm `KEY=VALUE`; hỗ trợ BOM/CRLF, dòng trống, comment đầu dòng `#` và cặp nháy bao value. Không nội suy `$HOME`, `~`, lệnh shell, escape hay comment cuối dòng. Key trùng/dòng sai gây lỗi. Ưu tiên: **biến môi trường không rỗng → file → mặc định**. Launcher đổi thư mục làm việc sang thư mục gói; dùng đường dẫn tuyệt đối cho công cụ và dữ liệu.
 
-### 4. Chạy và mở giao diện
+#### 4. Chạy và mở giao diện
 
 ```sh
 # Linux / macOS, terminal thứ nhất

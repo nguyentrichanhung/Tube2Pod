@@ -17,7 +17,7 @@
 - 管理节目、单集、任务队列和封面；每个节目有独立的 RSS feed。
 - 试听、发布和筛选音频库；支持浅色、深色及跟随系统主题。
 - 通过一次性二维码在局域网内配对手机应用；管理入口保留在家中电脑上。
-- 通过 Caddy 和路由器 NAT 直接提供 HTTPS；媒体工具和 Caddy 需要单独安装。
+- 通过 Caddy 和路由器 NAT 直接提供 HTTPS；桌面安装程序会下载媒体工具，Caddy 需单独安装。
 
 ```text
 YouTube → yt-dlp → ffmpeg → 家中电脑上的 MP3 + SQLite
@@ -29,16 +29,12 @@ YouTube → yt-dlp → ffmpeg → 家中电脑上的 MP3 + SQLite
 
 | 平台 | 目标安装包 | 已验证情况 |
 | --- | --- | --- |
-| Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.tar.gz` | Ubuntu 22.04.5：构建、启动、真实来源、发布和重启 |
-| Windows x64 | `tube2pod-x86_64-pc-windows-msvc.zip` | 已准备 workflow；尚未在原生系统运行 |
-| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.tar.gz` | 已准备 workflow；尚未在原生系统运行 |
-| macOS Intel | `tube2pod-x86_64-apple-darwin.tar.gz` | 已准备 workflow；尚未在原生系统运行 |
+| Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | 干净 Ubuntu 容器：GDebi 安装、下载工具、真实来源/RSS、重装后离线打开 |
+| Windows x64 | `tube2pod-x86_64-pc-windows-msvc.exe` | 已准备 workflow；尚未在原生系统运行 |
+| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | 工具来源待定；干净机器暂不可用 |
+| macOS Intel | `tube2pod-x86_64-apple-darwin.pkg` | 已准备 workflow；尚未在原生系统运行 |
 
 已检查本地 HTTPS、RSS/封面/MP3、HEAD/Range 和管理接口隔离。真实 DNS/NAT 及外网播客播放尚未验证。表中的文件名不代表已有公开发行包可供下载。
-
-### 安装桌面应用
-
-工作流成功后，从对应的 Actions 页面下载适合电脑的安装程序：Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`、Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`、macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg` 或 macOS Intel `tube2pod-x86_64-apple-darwin.pkg`。打开文件并完成安装，再从开始菜单、Ubuntu 应用列表或 macOS Applications 打开 **Tube2Pod**。在设置界面联网下载工具。卸载或重新安装会保留数据和配置。尚未验证所有平台的安装程序及系统签名提示。
 
 <a id="demo"></a>
 ## Chrome 演示
@@ -67,6 +63,8 @@ YouTube → yt-dlp → ffmpeg → 家中电脑上的 MP3 + SQLite
 <a id="requirements"></a>
 ## 环境要求
 
+桌面安装程序会下载媒体工具；以下手动安装说明仅适用于便携包。
+
 | 组件 | 使用场景 | 安装来源 |
 | --- | --- | --- |
 | Tube2Pod 原生程序 | 必需 | 从源码构建或下载成功的 workflow 产物 |
@@ -80,7 +78,19 @@ Linux x64 使用 `yt-dlp_linux`，macOS 使用 `yt-dlp_macos`，Windows 使用 `
 <a id="installation"></a>
 ## 安装与启动
 
-### 1. 安装媒体工具
+### 安装桌面应用
+
+工作流成功后，从对应的 Actions 页面下载适合电脑的安装程序：Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`、Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`、macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg` 或 macOS Intel `tube2pod-x86_64-apple-darwin.pkg`。打开文件并完成安装，再从开始菜单、Ubuntu 应用列表或 macOS Applications 打开 **Tube2Pod**。在设置界面联网下载工具。卸载或重新安装会保留数据和配置。
+
+Ubuntu Desktop x64 已在干净容器中通过 GDebi 图形界面验证：安装、首次下载工具、处理真实来源和 RSS，以及卸载重装后离线打开。Windows x64 和 macOS Intel 尚待原生系统验证。macOS Apple Silicon 的工具来源尚待决定，当前无法在干净机器上完成设置。
+
+尚未验证 Windows 和 macOS 的签名提示。
+
+### 便携包（手动设置）
+
+以下步骤仅适用于便携包；桌面安装程序会在设置过程中下载工具。
+
+#### 1. 安装媒体工具
 
 - **Ubuntu/Debian：**运行 `sudo apt install ffmpeg`；从上述官方来源下载独立版 yt-dlp，放入工具目录，并执行 `chmod +x /path/to/yt-dlp_linux`。
 - **macOS：**如果已使用 Homebrew，运行 `brew install ffmpeg` 安装 ffmpeg/ffprobe；下载 `yt-dlp_macos` 并赋予执行权限。
@@ -88,7 +98,7 @@ Linux x64 使用 `yt-dlp_linux`，macOS 使用 `yt-dlp_macos`，Windows 使用 `
 
 工具不在 PATH 时，在配置文件里填写绝对路径。运行 `yt-dlp --version`、`ffmpeg -version`、`ffprobe -version` 检查，或替换为实际安装的路径和文件名。
 
-### 2. 获取并解压安装包
+#### 2. 获取并解压安装包
 
 仓库的 [Native server packages workflow](.github/workflows/server-packages.yml) 成功运行后，可从该次 Actions 运行页面下载对应架构的产物。目前 Windows/macOS 的运行结果尚未确认。如果没有产物，请[从源码构建](#development)。将整个安装包解压到独立目录。
 
@@ -104,7 +114,7 @@ cp portable.env.example tube2pod.env
 Copy-Item portable.env.example tube2pod.env
 ```
 
-### 3. 配置工具与数据目录
+#### 3. 配置工具与数据目录
 
 以下为 Windows 示例；Unix 请改为相应的绝对路径：
 
@@ -120,7 +130,7 @@ DATA_DIR=C:\Tube2Pod data
 
 配置使用 UTF-8 的 `KEY=VALUE` 格式，支持 BOM/CRLF、空行、行首 `#` 注释及成对的外层引号。不展开 `$HOME`、`~`、shell 命令、转义或行尾注释。重复键或格式错误会导致启动失败。优先级为：**非空环境变量 → 配置文件 → 默认值**。启动脚本会切换到安装包目录，工具和数据请使用绝对路径。
 
-### 4. 启动服务并打开网站
+#### 4. 启动服务并打开网站
 
 ```sh
 # Linux / macOS，第一个终端
