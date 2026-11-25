@@ -4,7 +4,7 @@
 
 Biến audio từ video YouTube thành podcast RSS, lưu và phục vụ từ máy của bạn.
 Quản trị bằng trình duyệt; người nghe đăng ký feed trong ứng dụng podcast.
-Không cần Omnivoice, Tailscale hay máy chủ relay để chia sẻ trực tiếp từ nhà.
+Không cần Tailscale hay máy chủ relay để chia sẻ trực tiếp từ nhà.
 
 ![Thư viện Tube2Pod với một tập đã phát hành](docs/images/demo-library.webp)
 
@@ -30,9 +30,9 @@ Chủ máy  → http://localhost:8402 → web quản trị
 | Nền tảng | Gói mục tiêu | Đã kiểm chứng |
 | --- | --- | --- |
 | Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | GDebi trên container Ubuntu sạch: cài, tải công cụ, nguồn thật/RSS, mở offline sau cài lại |
-| Windows x64 | `tube2pod-x86_64-pc-windows-msvc.exe` | Có workflow; chưa chạy native |
-| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | Đang chờ kiểm thử native |
-| macOS Intel | `tube2pod-x86_64-apple-darwin.pkg` | Có workflow; chưa chạy native |
+| Windows x64 | `tube2pod-x86_64-pc-windows-msvc.exe` | CI native: tải công cụ, RSS/MP3 fixture và cài lại đạt |
+| macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | CI native: tải công cụ, RSS/MP3 fixture và cài lại đạt |
+| macOS Intel | `tube2pod-x86_64-apple-darwin.pkg` | CI native: tải công cụ, RSS/MP3 fixture và cài lại đạt |
 
 Đã kiểm tra HTTPS local, RSS/ảnh/MP3, HEAD/Range và cách ly quản trị. Chưa kiểm chứng DNS/NAT/phát podcast từ mạng ngoài nhà. Tên gói trong bảng không đồng nghĩa đã có bản phát hành để tải.
 
@@ -80,9 +80,9 @@ Dùng `yt-dlp_linux` cho Linux x64, `yt-dlp_macos` cho macOS, `yt-dlp.exe` cho W
 
 ### Cài ứng dụng trên máy cá nhân
 
-Khi workflow thành công, tải bộ cài đúng máy từ trang Actions: Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`, Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`, macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg`, hoặc macOS Intel `tube2pod-x86_64-apple-darwin.pkg`. Mở tệp và làm theo trình cài, rồi mở **Tube2Pod** từ Start, danh sách ứng dụng Ubuntu hoặc Applications trên macOS. Kết nối Internet để hoàn tất tải công cụ trong màn hình thiết lập. Gỡ hay cài lại ứng dụng giữ dữ liệu và cấu hình.
+Người dùng đăng nhập GitHub có thể tải artifact từ [lần chạy Actions đã đạt](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342); bản nháp 0.1.0 hiện chỉ hiển thị với người bảo trì. Chọn bộ cài đúng máy: Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`, Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`, macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg`, hoặc macOS Intel `tube2pod-x86_64-apple-darwin.pkg`. Mở tệp và làm theo trình cài, rồi mở **Tube2Pod** từ Start, danh sách ứng dụng Ubuntu hoặc Applications trên macOS. Kết nối Internet để hoàn tất tải công cụ trong màn hình thiết lập. Gỡ hay cài lại ứng dụng giữ dữ liệu và cấu hình.
 
-Ubuntu Desktop x64 đã được thử trong container sạch với GDebi: cài qua giao diện, tải công cụ lần đầu, xử lý nguồn thật và RSS, rồi mở lại không có mạng sau khi gỡ/cài lại. Windows x64, macOS Intel và macOS Apple Silicon đang chờ kiểm thử native.
+[CI native](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342) đã đạt trên cả bốn nền tảng: tải công cụ thực và kiểm tra RSS/MP3 fixture qua gỡ/cài lại. Ubuntu Desktop x64 còn được thử trong container sạch với GDebi, nguồn YouTube thật và mở offline sau cài lại. Thử nguồn YouTube tùy chọn trên runner CI chưa được xác minh.
 
 Lời nhắc chữ ký trên Windows và macOS chưa được kiểm chứng.
 
@@ -100,7 +100,7 @@ Trỏ đường dẫn tuyệt đối trong cấu hình nếu công cụ không c
 
 #### 2. Lấy và giải nén gói
 
-Khi [workflow Native server packages](.github/workflows/server-packages.yml) đã chạy thành công trên repository, lấy artifact đúng target từ trang Actions của lần chạy đó. Hiện chưa có kết quả Windows/macOS được xác nhận. Nếu chưa có artifact, xem [build từ source](#development). Giải nén cả gói vào thư mục riêng.
+Tải gói portable đúng target từ [Actions](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342) sau khi đăng nhập GitHub, hoặc xem [build từ source](#development). Giải nén cả gói vào thư mục riêng.
 
 Trong thư mục gói, tạo file cấu hình:
 
