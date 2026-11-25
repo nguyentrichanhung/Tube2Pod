@@ -29,12 +29,12 @@ Owner    → http://localhost:8402 → management website
 
 | Platform | Intended package | Verified |
 | --- | --- | --- |
-| Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | Clean Ubuntu container: GDebi install, tool download, real source/RSS, offline reopen after reinstall |
+| Ubuntu Desktop 24.04 x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | Clean Ubuntu container: GDebi install, tool download, real source/RSS, offline reopen after reinstall |
 | Windows x64 | `tube2pod-x86_64-pc-windows-msvc.exe` | Native CI: tool downloads and fixture RSS/MP3 across reinstall passed |
 | macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | Native CI: tool downloads and fixture RSS/MP3 across reinstall passed |
 | macOS Intel | `tube2pod-x86_64-apple-darwin.pkg` | Native CI: tool downloads and fixture RSS/MP3 across reinstall passed |
 
-Local HTTPS, RSS/artwork/MP3, HEAD/Range and admin isolation have been checked. DNS/NAT and podcast playback from outside the home remain unverified. Package names do not imply that published downloads are available.
+Local HTTPS, RSS/artwork/MP3, HEAD/Range and admin isolation have been checked. DNS/NAT and podcast playback from outside the home remain unverified.
 
 <a id="demo"></a>
 ## Chrome demo
@@ -80,11 +80,13 @@ Use `yt-dlp_linux` for Linux x64, `yt-dlp_macos` for macOS and `yt-dlp.exe` for 
 
 ### Install the desktop app
 
-Signed-in GitHub users can download artifacts from the [successful Actions run](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342); the 0.1.0 draft is visible only to maintainers. Choose the installer for your computer: Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`, Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`, macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg`, or macOS Intel `tube2pod-x86_64-apple-darwin.pkg`. Open it and follow the installer, then open **Tube2Pod** from Start, Ubuntu's applications list, or macOS Applications. Connect to the Internet to download the tools in setup. Uninstalling or reinstalling preserves data and configuration.
+1. Sign in to GitHub, open the [installer downloads](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342) and find **Artifacts**. Choose the package matching your computer in the table above. On a Mac, check **About This Mac** in the Apple menu to see whether it uses an Apple or Intel chip. Version 0.1.0 is a draft.
+2. Extract the downloaded archive, open the installer and follow its instructions. Launch **Tube2Pod** from Windows Start, the Ubuntu applications list or macOS Applications.
+3. Connect to the Internet and select **Cài đặt** (Install). Tube2Pod downloads yt-dlp, FFmpeg and ffprobe. When setup is ready, select **Mở Tube2Pod** (Open Tube2Pod). Uninstalling and reinstalling preserves your data and settings.
 
-[Native CI](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342) passed on all four platforms with real tool downloads and fixture RSS/MP3 across uninstall and reinstall. Ubuntu Desktop x64 was also tested in a clean container using GDebi, a real YouTube source, and offline reopening after reinstall. The optional live YouTube test on hosted runners remains unverified.
+[Installer checks](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342) passed on all four targets. Each runner downloaded the tools, converted a sample to MP3 and retrieved the RSS feed and MP3 after reinstall. On a local Ubuntu machine, version 0.1.0 also published a 67-second episode from the sample YouTube video. When GitHub Actions tried the same video, YouTube required yt-dlp to sign in for a bot check during preview. [Diagnostic log](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45616026027/job/139211516893)
 
-Windows and macOS signature prompts have not been verified.
+The Windows and macOS installers are unsigned. The prompts shown when opening a downloaded installer on a personal computer have not been tested.
 
 ### Portable package (manual setup)
 
@@ -286,7 +288,7 @@ From the source checkout, copy `deploy/portable.env.example` to your own config,
 .\deploy\package.ps1 -Target x86_64-pc-windows-msvc -Binary target/release/tube2pod.exe -OutDir dist
 ```
 
-The workflow has four native runners, real media tests and extract/launch/restart smoke tests. Optional input `youtube_url` enables an authorized real-source test; leaving it empty skips real YouTube testing. Fixtures/cross-builds do not prove native runtime behavior. Latest Linux check: 267 tests passed, 2 ignored in the default suite; the real-media test passed separately.
+The workflow tests four native targets, including installation, tool downloads and RSS/MP3 retrieval after reinstall. When running it manually, enter an authorized YouTube video in `youtube_url` to also test preview through publication.
 
 ## Contributing and license
 

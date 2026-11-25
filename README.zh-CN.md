@@ -29,12 +29,12 @@ YouTube → yt-dlp → ffmpeg → 家中电脑上的 MP3 + SQLite
 
 | 平台 | 目标安装包 | 已验证情况 |
 | --- | --- | --- |
-| Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | 干净 Ubuntu 容器：GDebi 安装、下载工具、真实来源/RSS、重装后离线打开 |
+| Ubuntu Desktop 24.04 x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | 干净 Ubuntu 容器：GDebi 安装、下载工具、真实来源/RSS、重装后离线打开 |
 | Windows x64 | `tube2pod-x86_64-pc-windows-msvc.exe` | 原生 CI：下载工具及重装后 fixture RSS/MP3 测试通过 |
 | macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | 原生 CI：下载工具及重装后 fixture RSS/MP3 测试通过 |
 | macOS Intel | `tube2pod-x86_64-apple-darwin.pkg` | 原生 CI：下载工具及重装后 fixture RSS/MP3 测试通过 |
 
-已检查本地 HTTPS、RSS/封面/MP3、HEAD/Range 和管理接口隔离。真实 DNS/NAT 及外网播客播放尚未验证。表中的文件名不代表已有公开发行包可供下载。
+已检查本地 HTTPS、RSS/封面/MP3、HEAD/Range 和管理接口隔离。真实 DNS/NAT 及外网播客播放尚未验证。
 
 <a id="demo"></a>
 ## Chrome 演示
@@ -80,11 +80,13 @@ Linux x64 使用 `yt-dlp_linux`，macOS 使用 `yt-dlp_macos`，Windows 使用 `
 
 ### 安装桌面应用
 
-登录 GitHub 后可从[成功的 Actions 运行](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342)下载产物；0.1.0 草稿目前仅维护者可见。请选择适合电脑的安装程序：Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`、Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`、macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg` 或 macOS Intel `tube2pod-x86_64-apple-darwin.pkg`。打开文件并完成安装，再从开始菜单、Ubuntu 应用列表或 macOS Applications 打开 **Tube2Pod**。在设置界面联网下载工具。卸载或重新安装会保留数据和配置。
+1. 登录 GitHub，打开[安装包下载页面](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342)，在 **Artifacts** 中选择与上表中电脑型号对应的包。Mac 用户可从苹果菜单打开“关于本机”，查看使用的是 Apple 芯片还是 Intel 处理器。0.1.0 目前为草稿版本。
+2. 解压下载的文件，打开安装程序并按提示操作。随后从 Windows 开始菜单、Ubuntu 应用列表或 macOS 的“应用程序”打开 **Tube2Pod**。
+3. 联网后点击 **Cài đặt**（安装）。Tube2Pod 会自动下载 yt-dlp、FFmpeg 和 ffprobe。准备就绪后点击 **Mở Tube2Pod**（打开 Tube2Pod）。卸载后重新安装会保留数据和配置。
 
-四个平台的[原生 CI](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342)均通过真实工具下载及卸载重装前后的 fixture RSS/MP3 测试。Ubuntu Desktop x64 还在干净容器中使用 GDebi、真实 YouTube 来源及重装后离线打开进行了验证。托管 runner 的可选实时 YouTube 测试尚未验证。
+四个平台都通过了[安装包测试](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342)。每台机器均下载了所需工具，将音频样本转换为 MP3，卸载并重装后仍能读取 RSS 和 MP3。在本地 Ubuntu 上，0.1.0 版还成功将 YouTube 示例视频发布为 67 秒的播客节目。GitHub Actions 预览同一视频时，YouTube 要求 yt-dlp 登录以验证请求并非来自机器人。[诊断日志](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45616026027/job/139211516893)
 
-尚未验证 Windows 和 macOS 的签名提示。
+Windows 和 macOS 安装程序均未进行发行者签名。尚未测试用户在个人电脑上打开下载的安装程序时会看到哪些提示。
 
 ### 便携包（手动设置）
 
@@ -286,7 +288,7 @@ cargo test --locked --bin tube2pod real_media_conversion_with_spaces -- --ignore
 .\deploy\package.ps1 -Target x86_64-pc-windows-msvc -Binary target/release/tube2pod.exe -OutDir dist
 ```
 
-Workflow 配置了四个原生 runner、真实媒体测试和解压/启动/重启 smoke 测试。可选输入 `youtube_url` 用于有权使用的真实来源；留空则不测试真实 YouTube。Fixture 或交叉编译不能证明原生运行结果。最近一次 Linux 检查：267 个测试通过，默认测试集中 2 个被忽略；真实媒体测试单独运行并通过。
+工作流在四个原生平台上验证安装、工具下载，以及重装后读取 RSS 和 MP3。手动运行时，可在 `youtube_url` 中输入有权使用的 YouTube 视频，以额外验证从预览到发布的完整流程。
 
 ## 贡献与许可证
 

@@ -29,12 +29,12 @@ Chủ máy  → http://localhost:8402 → web quản trị
 
 | Nền tảng | Gói mục tiêu | Đã kiểm chứng |
 | --- | --- | --- |
-| Linux x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | GDebi trên container Ubuntu sạch: cài, tải công cụ, nguồn thật/RSS, mở offline sau cài lại |
+| Ubuntu Desktop 24.04 x64 | `tube2pod-x86_64-unknown-linux-gnu.deb` | GDebi trên container Ubuntu sạch: cài, tải công cụ, nguồn thật/RSS, mở offline sau cài lại |
 | Windows x64 | `tube2pod-x86_64-pc-windows-msvc.exe` | CI native: tải công cụ, RSS/MP3 fixture và cài lại đạt |
 | macOS Apple Silicon | `tube2pod-aarch64-apple-darwin.pkg` | CI native: tải công cụ, RSS/MP3 fixture và cài lại đạt |
 | macOS Intel | `tube2pod-x86_64-apple-darwin.pkg` | CI native: tải công cụ, RSS/MP3 fixture và cài lại đạt |
 
-Đã kiểm tra HTTPS local, RSS/ảnh/MP3, HEAD/Range và cách ly quản trị. Chưa kiểm chứng DNS/NAT/phát podcast từ mạng ngoài nhà. Tên gói trong bảng không đồng nghĩa đã có bản phát hành để tải.
+Đã kiểm tra HTTPS local, RSS/ảnh/MP3, HEAD/Range và cách ly quản trị. Chưa kiểm chứng DNS/NAT/phát podcast từ mạng ngoài nhà.
 
 <a id="demo"></a>
 ## Demo bằng Chrome
@@ -80,11 +80,13 @@ Dùng `yt-dlp_linux` cho Linux x64, `yt-dlp_macos` cho macOS, `yt-dlp.exe` cho W
 
 ### Cài ứng dụng trên máy cá nhân
 
-Người dùng đăng nhập GitHub có thể tải artifact từ [lần chạy Actions đã đạt](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342); bản nháp 0.1.0 hiện chỉ hiển thị với người bảo trì. Chọn bộ cài đúng máy: Windows x64 `tube2pod-x86_64-pc-windows-msvc.exe`, Ubuntu Desktop x64 `tube2pod-x86_64-unknown-linux-gnu.deb`, macOS Apple Silicon `tube2pod-aarch64-apple-darwin.pkg`, hoặc macOS Intel `tube2pod-x86_64-apple-darwin.pkg`. Mở tệp và làm theo trình cài, rồi mở **Tube2Pod** từ Start, danh sách ứng dụng Ubuntu hoặc Applications trên macOS. Kết nối Internet để hoàn tất tải công cụ trong màn hình thiết lập. Gỡ hay cài lại ứng dụng giữ dữ liệu và cấu hình.
+1. Đăng nhập GitHub, mở [trang tải bộ cài](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342) và tìm mục **Artifacts**. Chọn gói khớp với máy trong bảng trên. Trên Mac, mở menu Apple → **Giới thiệu về máy Mac này** để xem máy dùng chip Apple hay Intel. Bản 0.1.0 hiện ở dạng nháp.
+2. Giải nén tệp tải về, mở bộ cài rồi làm theo hướng dẫn. Sau đó mở **Tube2Pod** từ Start trên Windows, danh sách ứng dụng trên Ubuntu hoặc Applications trên Mac.
+3. Kết nối Internet và bấm **Cài đặt**. Tube2Pod tự tải yt-dlp, FFmpeg và ffprobe. Khi màn hình báo sẵn sàng, bấm **Mở Tube2Pod**. Gỡ rồi cài lại ứng dụng sẽ giữ dữ liệu và cấu hình.
 
-[CI native](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342) đã đạt trên cả bốn nền tảng: tải công cụ thực và kiểm tra RSS/MP3 fixture qua gỡ/cài lại. Ubuntu Desktop x64 còn được thử trong container sạch với GDebi, nguồn YouTube thật và mở offline sau cài lại. Thử nguồn YouTube tùy chọn trên runner CI chưa được xác minh.
+[Kiểm thử bộ cài](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45599981342) đã đạt trên cả bốn nền tảng. Mỗi máy đều tải công cụ, chuyển tệp âm thanh mẫu thành MP3 và đọc lại được RSS cùng MP3 sau khi gỡ rồi cài lại. Trên Ubuntu cục bộ, bản 0.1.0 cũng đã phát hành được tập dài 67 giây từ video YouTube mẫu. Khi thử cùng video trên GitHub Actions, YouTube yêu cầu yt-dlp đăng nhập để xác nhận người dùng ở bước xem trước. [Nhật ký chẩn đoán](https://github.com/nguyentrichanhung/Tube2Pod/actions/runs/45616026027/job/139211516893)
 
-Lời nhắc chữ ký trên Windows và macOS chưa được kiểm chứng.
+Bộ cài Windows và macOS chưa có chữ ký nhà phát hành. Cảnh báo khi người dùng mở bộ cài đã tải xuống chưa được kiểm tra.
 
 ### Dùng gói portable (cài thủ công)
 
@@ -286,7 +288,7 @@ Từ source checkout, copy `deploy/portable.env.example` thành file cấu hình
 .\deploy\package.ps1 -Target x86_64-pc-windows-msvc -Binary target/release/tube2pod.exe -OutDir dist
 ```
 
-Workflow có bốn runner native, test media và smoke giải nén/khởi động/restart. Input `youtube_url` tùy chọn cho nguồn thật có quyền sử dụng; để trống thì không thử YouTube thực. Test fixture/cross-build không thay bằng chứng runtime native. Lần kiểm tra Linux gần nhất: 267 test đạt, 2 ignored trong suite mặc định; test media thực chạy riêng đạt.
+Workflow kiểm thử trên bốn nền tảng, bao gồm cài đặt, tải công cụ và đọc lại RSS/MP3 sau khi cài lại. Khi chạy thủ công, nhập một video YouTube có quyền sử dụng vào `youtube_url` để kiểm tra thêm luồng từ xem trước đến phát hành.
 
 ## Đóng góp và giấy phép
 
