@@ -11,22 +11,24 @@ Người mới tải tệp dành cho máy mình, mở bộ cài và chọn Cài 
 
 Người dùng đã chọn tải công cụ trong lần cài đầu. Nền triển khai là nhánh có sẵn quy trình đóng gói native, luồng dùng âm thanh nguồn và các mặc định dữ liệu portable.
 
-## Phạm vi bản đầu và các lựa chọn đề xuất để duyệt
+## Phạm vi và màn hình đã duyệt
 
-| Máy | Tệp người dùng mở | Điểm mở lại |
+[Bản mẫu đã duyệt](assets/native-installer.html) hiển thị tên hệ điều hành và kiến trúc. Đuôi tệp chỉ dùng cho đóng gói, không hiển thị thành nhãn trên màn hình cài đặt. Hai hộp chọn gói và trạng thái phía trên cửa sổ dành cho việc xem bản mẫu.
+
+| Máy | Định dạng đóng gói | Điểm mở lại |
 | --- | --- | --- |
 | Windows x64 | Bộ cài .exe | Start |
 | Ubuntu Desktop x64 | Gói .deb qua trình cài phần mềm đồ họa | Danh sách ứng dụng |
 | macOS Apple Silicon và Intel | Bộ cài .pkg phù hợp kiến trúc | Applications |
 
-Ubuntu Desktop là phạm vi Linux đề xuất cho lần phát hành đầu. Cùng một thiết kế có thể dùng phần hoàn tất thiết lập chạy với tài khoản người dùng sau khi hệ điều hành cài tệp ứng dụng. Nếu nền tảng cần người dùng bấm biểu tượng để hoàn tất, bộ cài chỉ rõ bước đó. Màn hình thiết lập tải công cụ trước khi đưa người dùng tới giao diện quản trị.
+Ubuntu Desktop là phạm vi Linux cho lần phát hành đầu. Cùng một thiết kế có thể dùng phần hoàn tất thiết lập chạy với tài khoản người dùng sau khi hệ điều hành cài tệp ứng dụng. Nếu nền tảng cần người dùng bấm biểu tượng để hoàn tất, bộ cài chỉ rõ bước đó. Màn hình thiết lập tải công cụ trước khi đưa người dùng tới giao diện quản trị.
 
 ## Hành vi thiết lập và sử dụng
 
 - Tải bản yt-dlp standalone và cặp ffmpeg, ffprobe phù hợp với hệ điều hành và CPU. Lấy qua HTTPS từ nguồn phát hành yt-dlp và nhà phân phối bản dựng được dự án FFmpeg liên kết. Người triển khai chọn phiên bản và xác minh cặp binary chạy được trên hệ điều hành mục tiêu trước khi đưa vào bộ cài.
 - Cho biết công cụ đang tải. Tải vào vùng tạm và kiểm tra khả năng chạy của cả ba công cụ trước khi báo sẵn sàng. Nếu mất mạng hoặc thiếu chỗ, hiển thị nguyên nhân và nút **Thử lại**. Dùng lại công cụ đã tải thành công. Lần mở bình thường dùng bộ công cụ đã cài.
 - Lưu công cụ trong vùng riêng của Tube2Pod và cấp đường dẫn cho cơ chế cấu hình hiện có. Với máy mới, dùng thư mục dữ liệu mặc định theo hệ điều hành. Bảo toàn cấu hình hiện có và dữ liệu khi cài lại hoặc gỡ ứng dụng. Đối tượng của bộ cài là máy cá nhân. Việc di chuyển một dịch vụ systemd hay cơ sở dữ liệu đời cũ tiếp tục theo hướng dẫn nâng cấp riêng.
-- Đề xuất để duyệt: sau khi cài, người dùng chủ động bấm **Mở Tube2Pod**. Biểu tượng mở ứng dụng khởi chạy máy chủ cục bộ và mở trang chủ máy ở địa chỉ owner đang cấu hình khi máy chủ sẵn sàng. Mở lần nữa đưa người dùng về cùng máy chủ. Cung cấp thao tác **Dừng Tube2Pod** cho máy chủ do ứng dụng mở. Đóng tab tiếp tục cho phép nghe podcast như hiện tại. Việc cài đặt không đăng ký tự chạy khi đăng nhập.
+- Sau khi cài, người dùng chủ động bấm **Mở Tube2Pod**. Biểu tượng mở ứng dụng khởi chạy máy chủ cục bộ và mở trang chủ máy ở địa chỉ owner đang cấu hình khi máy chủ sẵn sàng. Mở lần nữa đưa người dùng về cùng máy chủ. Cung cấp thao tác **Dừng Tube2Pod** cho máy chủ do ứng dụng mở. Đóng tab tiếp tục cho phép nghe podcast như hiện tại. Việc cài đặt không đăng ký tự chạy khi đăng nhập.
 - Phạm vi là cài và dùng cục bộ. Chia sẻ RSS qua Internet dùng hướng dẫn HTTPS hiện có. Thiết lập router, Caddy và thay đổi ứng dụng di động nằm ngoài bản thiết kế này.
 
 ## Đóng gói và xác minh để phát hành

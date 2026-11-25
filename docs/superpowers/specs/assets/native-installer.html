@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bản mẫu bộ cài Tube2Pod</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f2f2e9;color:#1d3029;font:16px/1.55 system-ui,sans-serif}main{max-width:1080px;margin:auto;padding:clamp(20px,5vw,72px) 24px}header,.controls,.brand,.base,.actions,.row{display:flex;align-items:center;gap:12px}header,.base,.row{justify-content:space-between}header{border-bottom:1px solid #b9c0b6;padding-bottom:16px}.brand{font-size:19px;font-weight:650}.mark,.wave{display:flex;align-items:center;gap:3px}.mark i,.wave i{width:3px;height:12px;background:currentColor;border-radius:2px}.mark i:nth-child(2){height:24px}.mark i:nth-child(3){height:18px}header small{color:#4e6056}.controls{margin:28px 0;flex-wrap:wrap}label{color:#415149;font-size:14px;display:grid;gap:4px}button,select{font:inherit;border-radius:6px;min-height:44px}select{padding:7px 30px 7px 10px;color:#21392f;border:1px solid #a9b4ab;background:#fff}button{padding:10px 22px;background:#214f3d;color:white;border:1px solid transparent;cursor:pointer;font-weight:600}button:hover{background:#143c2b}button:active{transform:translateY(1px)}:focus-visible{outline:3px solid #bc5c16;outline-offset:3px}.window{border:1px solid #b5bfb3;border-radius:14px;overflow:hidden;background:#fdfdf8;display:grid;grid-template-columns:minmax(200px,32%) 1fr;box-shadow:0 14px 42px #1b332414}aside{background:#183e32;color:#e7f4e8;display:flex;flex-direction:column;justify-content:space-between;padding:32px;gap:32px}.wave{height:90px;gap:4px;color:#9acab2;align-self:stretch}.wave i{flex:1;max-width:4px}.platform{display:block;font-size:14px;color:#c4dacb}article{min-width:0;padding:clamp(24px,5vw,56px);display:flex;flex-direction:column;min-height:418px}h1{font-size:clamp(26px,3.2vw,38px);line-height:1.14;letter-spacing:-.035em;font-weight:600;margin:0 0 15px}p{color:#4e6056;margin:0 0 24px;max-width:50ch}ul{list-style:none;margin:0 0 28px;padding:0}.row{border-bottom:1px solid #d6ddd4;padding:9px 0;font-size:15px}.row small{font-family:ui-monospace,monospace;color:#58685e}.actions{margin-top:auto}.base{margin-top:16px;align-items:flex-start;color:#58685e;font-size:13px}.base span{max-width:58ch}progress{width:100%;height:9px;accent-color:#357450;margin-bottom:14px}.link{background:none;color:#214f3d;border:0;text-decoration:underline;font:inherit;padding:0 4px}.link:hover{background:#e1ebdf}.error{color:#934223}[hidden]{display:none!important}@media(max-width:650px){main{padding:18px 16px}.window{display:block}aside{padding:16px 22px;flex-direction:row;align-items:center}.wave{display:none}.controls{margin:16px 0;gap:8px}.controls label{flex:1}select{width:100%;font-size:14px}article{min-height:365px}.base{flex-wrap:wrap}.row{flex-wrap:wrap}.actions button{width:100%}}
+</style></head>
+<body><main><header><div class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Tube2Pod</div><small>Bản mẫu tương tác</small></header>
+<div class="controls"><label>Gói cài đặt<select id="os"><option>Windows x64</option><option>Ubuntu Desktop x64</option><option>macOS · Apple Silicon</option><option>macOS · Intel</option></select></label>
+<label>Xem màn hình<select id="step"><option>Trước khi cài</option><option>Đang tải công cụ</option><option>Mất kết nối</option><option>Thiếu dung lượng</option><option>Cài đặt hoàn tất</option><option>Đã mở ứng dụng</option></select></label></div>
+<section class="window" aria-label="Mô phỏng thiết lập Tube2Pod"><aside><div class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Tube2Pod</div><div class="wave" aria-hidden="true"></div><div><span id="platform" class="platform"></span></div></aside>
+<article><div aria-live="polite"><h1 id="title"></h1><p id="copy"></p></div><progress id="progress" aria-label="Tiến độ tải công cụ" max="100"></progress><ul id="tools"></ul><div class="actions"><button id="act"></button></div></article></section>
+<div class="base"><span>Các nút trong bản mẫu mô phỏng quá trình cài đặt trên máy.</span><button class="link" id="reset">Xem lại từ đầu</button></div></main>
+<script>
+const os=document.querySelector('#os'),step=document.querySelector('#step'),act=document.querySelector('#act');
+const scenarios=[
+ ['Cài đặt Tube2Pod','Tạo podcast từ âm thanh của video YouTube trên máy của bạn. Hãy kết nối Internet để tải ba công cụ cho lần cài đầu tiên.','Cài đặt'],
+ ['Đang tải công cụ','Tube2Pod đã tải xong công cụ lấy âm thanh và đang tải bộ chuyển đổi MP3.',''],
+ ['Tải xuống bị gián đoạn','Kiểm tra kết nối Internet rồi bấm Thử lại. Công cụ đã tải xong sẽ được giữ lại.','Thử lại'],
+ ['Máy thiếu chỗ trống','Giải phóng dung lượng trên ổ cài đặt rồi bấm Thử lại.','Thử lại'],
+ ['Tube2Pod đã sẵn sàng','Bấm Mở Tube2Pod để vào trang quản trị trong trình duyệt.','Mở Tube2Pod'],
+ ['Tube2Pod đang chạy','Trong bản cài thật, trang quản trị mở trong trình duyệt. Đóng tab vẫn cho phép máy tiếp tục phục vụ podcast.','Dừng Tube2Pod']
+];
+const names=['Lấy âm thanh từ video','Chuyển âm thanh sang MP3','Đọc thời lượng tập'];
+const binaries=['yt-dlp','ffmpeg','ffprobe'];
+let timer;
+function show(n,advance=false){
+ clearTimeout(timer);step.selectedIndex=n;
+ const [title,copy,button]=scenarios[n];
+ document.querySelector('#title').textContent=title;
+ document.querySelector('#copy').textContent=copy;
+ document.querySelector('#title').classList.toggle('error',n===2||n===3);
+ document.querySelector('#platform').textContent=os.value;
+ const progress=document.querySelector('#progress');progress.hidden=n!==1;progress.value=45;
+ const tools=document.querySelector('#tools');tools.replaceChildren();
+ const statuses=n===0?binaries:n===4||n===5?['Sẵn sàng','Sẵn sàng','Sẵn sàng']:['Đã tải',n===1?'Đang tải':'Tạm dừng','Đang chờ'];
+ names.forEach((name,i)=>{const li=document.createElement('li');li.className='row';li.append(name);const status=document.createElement('small');status.textContent=statuses[i];li.append(status);tools.append(li)});
+ act.hidden=!button;act.textContent=button;
+ if(advance&&n===1)timer=setTimeout(()=>show(4),3500);
+}
+act.onclick=()=>{const n=step.selectedIndex;show(n===4?5:n===5?4:1,true)};
+step.onchange=()=>show(step.selectedIndex);os.onchange=()=>show(0);document.querySelector('#reset').onclick=()=>show(0);
+const wave=document.querySelector('.wave');
+[8,15,10,23,35,21,32,54,69,48,35,64,86,55,38,58,44,29,18,32,22,14,25,12,7].forEach(h=>{const bar=document.createElement('i');bar.style.height=h+'%';wave.append(bar)});
+show(0);
+</script></body></html>
